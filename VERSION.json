@@ -1,0 +1,20 @@
+{
+  "app": "ERP Planificación NextGen",
+  "version": "V1.0.2.7-LOGIN-INICIAL",
+  "channel": "firebase-integration",
+  "database": "ERP_PLANIFICACION_NEXTGEN_CLEAN",
+  "databaseVersion": 7,
+  "firebaseProject": "inventario-psi",
+  "deployment": "GitHub -> Netlify -> PWA",
+  "notes": "Baseline congelada para integración controlada. No modificar DB_NAME.",
+  "features": [
+    "Firebase Authentication",
+    "Controlled Initial Migration",
+    "Live Sync",
+    "Outbox",
+    "Automatic Analyst Link"
+  ],
+  "architecture": "Firebase Auth UID -> Firestore profile -> Cloud-first bootstrap -> IndexedDB cache -> Live Sync",
+  "sync": "Outbox retries + Firestore write verification + truthful sync state",
+  "loginFlow": "Initial Firebase Auth Gate -> users/{UID} -> Role -> Cloud Sync -> ERP"
+}

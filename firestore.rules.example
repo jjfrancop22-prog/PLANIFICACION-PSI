@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function userDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function role() { return signedIn() ? userDoc().data.role : null; }
+    function analystId() { return signedIn() ? userDoc().data.analystId : null; }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || role() == 'JEFE');
+      allow write: if signedIn() && role() == 'JEFE';
+    }
+    match /planning/{id} {
+      allow read: if signedIn() && (role() == 'JEFE' || resource.data.analystId == analystId());
+      allow create, update, delete: if signedIn() && role() == 'JEFE';
+    }
+    match /planComments/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if signedIn() && role() == 'JEFE';
+    }
+    match /{collection}/{id} {
+      allow read: if signedIn();
+      allow write: if signedIn() && role() == 'JEFE';
+    }
+  }
+}
