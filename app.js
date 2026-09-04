@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.5-SYNC-ELIMINACION-MULTIPC';
+const APP_VERSION='V1.0.5.6.6-HORARIO-SECUENCIAL-INTELIGENTE';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -682,22 +682,17 @@ function analystBusySegments(plans,analystId){
 }
 function findBestWorkSlot(plans,analystId,duration){
   const busy=analystBusySegments(plans,analystId);
-  const windows=[[WORK_START,LUNCH_START],[LUNCH_END,WORK_END]];
-  for(const [ws,we] of windows){
-    let cursor=ws;
-    for(const [bs,be] of busy){
-      if(be<=ws||bs>=we)continue;
-      const s=Math.max(bs,ws),e=Math.min(be,we);
-      if(s-cursor>=duration)return {start:cursor,end:cursor+duration};
-      cursor=Math.max(cursor,e);
-    }
-    if(we-cursor>=duration)return {start:cursor,end:cursor+duration};
-  }
-  // Allow a block spanning lunch: test every 5 min, addWorkingMinutes handles lunch.
-  for(let start=WORK_START;start<LUNCH_START;start+=5){
+
+  // Regla V1.0.5.6.6: priorizar el primer minuto laboral libre en orden cronológico.
+  // Una actividad puede continuar después del almuerzo sin "saltar" a las 13:00
+  // solo porque no cabe completa antes de las 12:00. Ejemplo: si ya existe 08:00–11:00
+  // y la siguiente dura 3 h, se propone 11:00–15:00 (trabaja 11–12 y 13–15).
+  for(let start=WORK_START;start<WORK_END;start+=5){
+    if(start>=LUNCH_START&&start<LUNCH_END)continue;
     const end=addWorkingMinutes(start,duration);
     if(end>WORK_END)break;
-    if(!busy.some(([bs,be])=>workingSegments(start,duration).some(([ss,se])=>ss<be&&bs<se)))
+    const candidate=workingSegments(start,duration);
+    if(!busy.some(([bs,be])=>candidate.some(([ss,se])=>ss<be&&bs<se)))
       return {start,end};
   }
   return null;
@@ -738,7 +733,7 @@ async function suggestAnalyst(){
   }
   box.className=`recommendation-box ${best.slot&&!best.overload?'good':'warning'}`;
   box.innerHTML=best.slot
-   ?`<b>Horario inteligente: ${escapeHtml(best.a.name)} · ${minutesToTime(best.slot.start)}–${minutesToTime(best.slot.end)}</b><span>Primer hueco continuo disponible para ${minutesText(r.dur)} · carga actual ${minutesText(best.load)} / ${best.a.dailyHours||8} h · ${best.experience?`${best.experience} ejecución(es) históricas de este parámetro · `:''}carga final ${minutesText(best.load+r.dur)}.</span><div class="smart-rank">${r.ranked.slice(0,3).map((x,i)=>`<small>${i+1}. ${escapeHtml(x.a.name)} · ${x.slot?`${minutesToTime(x.slot.start)}–${minutesToTime(x.slot.end)}`:'sin espacio suficiente hoy'} · ${minutesText(x.load)} cargadas${x.experience?` · ${x.experience} experiencia(s)`:''}</small>`).join('')}</div>`
+   ?`<b>Horario inteligente: ${escapeHtml(best.a.name)} · ${minutesToTime(best.slot.start)}–${minutesToTime(best.slot.end)}</b><span>Primer horario laboral disponible para ${minutesText(r.dur)} · carga actual ${minutesText(best.load)} / ${best.a.dailyHours||8} h · ${best.experience?`${best.experience} ejecución(es) históricas de este parámetro · `:''}carga final ${minutesText(best.load+r.dur)}.</span><div class="smart-rank">${r.ranked.slice(0,3).map((x,i)=>`<small>${i+1}. ${escapeHtml(x.a.name)} · ${x.slot?`${minutesToTime(x.slot.start)}–${minutesToTime(x.slot.end)}`:'sin espacio suficiente hoy'} · ${minutesText(x.load)} cargadas${x.experience?` · ${x.experience} experiencia(s)`:''}</small>`).join('')}</div>`
    :`<b>No hay espacio suficiente hoy</b><span>${escapeHtml(best.a.name)} no dispone de un bloque laboral de ${minutesText(r.dur)} entre 08:00–17:00. Seleccione otro analista o fecha.</span>`;
   await updatePlanPreview();
 }
@@ -775,7 +770,7 @@ async function autoScheduleSelectedAnalyst(){
     $('#planStart').value=minutesToTime(slot.start);
     $('#planEnd').value=minutesToTime(slot.end);
     box.className='recommendation-box good';
-    box.innerHTML=`<b>Continuación inteligente: ${escapeHtml(a.name)} · ${minutesToTime(slot.start)}–${minutesToTime(slot.end)}</b><span>Se encontró automáticamente el primer espacio disponible de su jornada, respetando 12:00–13:00 como almuerzo.</span>`;
+    box.innerHTML=`<b>Continuación inteligente: ${escapeHtml(a.name)} · ${minutesToTime(slot.start)}–${minutesToTime(slot.end)}</b><span>Se tomó el primer horario laboral libre en orden cronológico. Si el bloque cruza 12:00–13:00, continúa después del almuerzo sin dejar horas laborables vacías.</span>`;
     await updatePlanPreview();
   }else{
     // Nunca conservar la hora de otro analista.
