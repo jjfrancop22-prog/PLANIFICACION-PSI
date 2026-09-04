@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.11-ANTIDUPLICADOS-REGLAS';
+const APP_VERSION='V1.0.5.6.13-MULTILOTE-CONSUMO-SELECCIONABLE';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1123,11 +1123,13 @@ async function renderFinishReagents(p){
       parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${r.physicalState==='LIQUID'?`LÍQUIDO · densidad ${Number(r.density).toFixed(4)} g/mL`:'SÓLIDO'} · ${containers.length} envase(s)${(lotCounts.get(normalizeIdentityText(r.name||''))||0)>1?' · El analista puede usar este lote o cualquiera de los otros lotes activos del mismo reactivo.':''}</small></div><span class="badge">R${i+1}</span></div><div class="multi-container-list">${envCards.join('')}</div></div>`);
     }else{
       const latest=await latestConfirmedReagentRecord(r,p.id),stock=Number.isFinite(Number(old.stockBefore))?Number(old.stockBefore):(Number.isFinite(Number(latest?.item?.stockRemaining))?Number(latest.item.stockRemaining):Number(r.stockQuantity||0));
-      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${reagentModeLabel(r.mode)} · ${escapeHtml(r.unit||'unidad')}${(lotCounts.get(normalizeIdentityText(r.name||''))||0)>1?' · Lote seleccionable por el analista':''}</small></div><span class="badge">Stock ${stock} ${escapeHtml(r.unit||'unidad')}</span></div><div class="reagent-inputs"><label>Stock disponible<input readonly data-reag-stock-before="${r.id}" value="${stock}"></label><label>Cantidad utilizada (${escapeHtml(r.unit||'unidad')})<input type="number" step="any" min="0" max="${stock}" data-reag-count="${r.id}" value="${old.used??''}"></label></div><div class="reagent-used-result" data-reag-result="${r.id}">Consumo: <strong>${old.used??'—'} ${escapeHtml(r.unit||'unidad')}</strong></div></div>`);
+      const checked=old.usedInActivity===true||Number(old.used)>0;
+      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${reagentModeLabel(r.mode)} · ${escapeHtml(r.unit||'unidad')}${(lotCounts.get(normalizeIdentityText(r.name||''))||0)>1?' · Lote seleccionable por el analista':''}</small></div><span class="badge">Stock ${stock} ${escapeHtml(r.unit||'unidad')}</span></div><div class="reagent-container-use"><div class="container-use-head"><label class="container-use-check"><input type="checkbox" data-use-countable="${r.id}" ${checked?'checked':''}> Usar en esta actividad</label><span class="badge">Lote ${escapeHtml(r.lot||'—')}</span></div><div class="reagent-inputs"><label>Stock disponible<input readonly data-reag-stock-before="${r.id}" value="${stock}"></label><label>Cantidad utilizada (${escapeHtml(r.unit||'unidad')})<input type="number" step="any" min="0" max="${stock}" data-reag-count="${r.id}" value="${checked?(old.used??''):''}" ${checked?'':'disabled'}></label></div><div class="reagent-used-result" data-reag-result="${r.id}">${checked?`Consumo: <strong>${old.used??'—'} ${escapeHtml(r.unit||'unidad')}</strong>`:'<strong>NO UTILIZADO</strong> en esta actividad.'}</div></div></div>`);
     }
   }
   $('#finishReagentRows').innerHTML=parts.join('');
   $$('[data-use-container]').forEach(ch=>ch.onchange=()=>{const f=$(`[data-env-final="${ch.dataset.useContainer}"]`);if(f)f.disabled=!ch.checked;updateReagentCalculations(p)});
+  $$('[data-use-countable]').forEach(ch=>ch.onchange=()=>{const f=$(`[data-reag-count="${ch.dataset.useCountable}"]`);if(f){f.disabled=!ch.checked;if(!ch.checked)f.value='';}updateReagentCalculations(p)});
   $$('[data-env-new-initial]').forEach(el=>el.oninput=()=>{const x=$(`[data-env-initial="${el.dataset.envNewInitial}"]`);if(x)x.value=el.value;updateReagentCalculations(p)});
   $$('[data-correct-env-initial]').forEach(btn=>btn.onclick=()=>{const input=$(`[data-env-initial="${btn.dataset.correctEnvInitial}"]`);if(!input)return;if(input.readOnly){input.readOnly=false;input.dataset.envSource='CORREGIDO_MANUAL';input.classList.add('manual-correction');btn.textContent='Aplicar';input.focus();input.select()}else{input.readOnly=true;btn.textContent='Corregir';updateReagentCalculations(p)}});
   $$('[data-env-final], [data-reag-count]').forEach(el=>el.addEventListener('input',()=>updateReagentCalculations(p)));
@@ -1149,12 +1151,13 @@ function updateReagentCalculations(p){
         if(result)result.innerHTML=used<0?'<strong>ERROR: peso final mayor al inicial</strong>':r.physicalState==='LIQUID'?`Consumo: <strong>${used.toFixed(3)} g / ${volumeMl.toFixed(3)} mL</strong>`:`Consumo: <strong>${used.toFixed(3)} g</strong>`;
       }
     }else{
-      const result=$(`[data-reag-result="${r.id}"]`),raw=$(`[data-reag-count="${r.id}"]`)?.value,n=raw===''?null:Number(raw);
+      const selected=$(`[data-use-countable="${r.id}"]`)?.checked,result=$(`[data-reag-result="${r.id}"]`),raw=$(`[data-reag-count="${r.id}"]`)?.value,n=raw===''?null:Number(raw);
+      if(!selected){if(result)result.innerHTML='<strong>NO UTILIZADO</strong> en esta actividad.';continue}
       const stock=Number($(`[data-reag-stock-before="${r.id}"]`)?.value);if(result)result.innerHTML=n===null||!Number.isFinite(n)?'Consumo: <strong>—</strong>':n>stock?'<strong>ERROR: consumo mayor al stock</strong>':`Consumo: <strong>${n} ${escapeHtml(r.unit||'unidad')}</strong> · Stock final: <strong>${(stock-n).toFixed(2)} ${escapeHtml(r.unit||'unidad')}</strong>`;
     }
   }
   const check=collectReagentResult(p,false),v=$('#finishReagentValidation');if(!v)return;
-  if(check.complete){v.textContent='Registro listo. Los reactivos sin envase marcado quedarán como NO UTILIZADOS.';v.className='inline-alert ok'}else{v.textContent='Complete únicamente los pesos finales de los envases que haya marcado como utilizados.';v.className='inline-alert info'}
+  if(check.complete){v.textContent='Registro listo. Solo se exigirá consumo para los reactivos o envases que marque como utilizados; los demás quedarán como NO UTILIZADOS.';v.className='inline-alert ok'}else{v.textContent='Complete únicamente los datos de los reactivos o envases que haya marcado como utilizados.';v.className='inline-alert info'}
 }
 
 function collectReagentResult(p,requireComplete=true){
@@ -1179,13 +1182,13 @@ function collectReagentResult(p,requireComplete=true){
       const totalMass=usedContainers.reduce((a,e)=>a+(e.used||0),0),totalMl=r.physicalState==='LIQUID'?usedContainers.reduce((a,e)=>a+(e.volumeUsedMl||0),0):null;
       items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density:r.physicalState==='LIQUID'?Number(r.density):null,containers:usedContainers,used:totalMass,volumeUsedMl:totalMl,consumptionValue:r.physicalState==='LIQUID'?totalMl:totalMass,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',usedInActivity:true,notUsed:false,depleted:usedContainers.every(e=>e.depleted)});
     }else{
+      const selected=$(`[data-use-countable="${r.id}"]`)?.checked;
+      const stockBefore=Number($(`[data-reag-stock-before="${r.id}"]`)?.value||r.stockQuantity||0);
+      if(!selected){items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used:0,stockRemaining:stockBefore,usedInActivity:false,notUsed:true});continue}
       const raw=$(`[data-reag-count="${r.id}"]`)?.value;
-      if(raw===''){
-        {const stockBefore=Number($(`[data-reag-stock-before="${r.id}"]`)?.value||r.stockQuantity||0);items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used:0,stockRemaining:stockBefore,usedInActivity:false,notUsed:true});}
-        continue;
-      }
-      const used=Number(raw),stockBefore=Number($(`[data-reag-stock-before="${r.id}"]`)?.value);if(!Number.isFinite(used)||used<0||!Number.isFinite(stockBefore)||used>stockBefore)return {ok:false,text:`Revise la cantidad utilizada de ${r.name}; no puede superar el stock disponible.`};
-      items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used,stockRemaining:stockBefore-used,usedInActivity:used>0,notUsed:used===0});
+      if(raw===''){complete=false;if(requireComplete)return {ok:false,text:`Ingrese la cantidad utilizada de ${r.name} · lote ${r.lot||'—'}, o desmarque “Usar en esta actividad”.`};continue}
+      const used=Number(raw);if(!Number.isFinite(used)||used<=0||!Number.isFinite(stockBefore)||used>stockBefore)return {ok:false,text:`Revise la cantidad utilizada de ${r.name}; debe ser mayor que 0 y no puede superar el stock disponible.`};
+      items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used,stockRemaining:stockBefore-used,usedInActivity:true,notUsed:false});
     }
   }
   return {ok:true,complete,result:{items,completed:complete,capturedAt:nowISO()}};
@@ -2015,30 +2018,34 @@ function cloneReagentProfile(r){return JSON.parse(JSON.stringify(r||{}))}
 async function buildReagentMasterProfiles(){
   const cats=await getAll('catalog');
   const plans=await getAll('planning');
-  const byName=new Map();
-  // La ficha más recientemente actualizada en cualquier ensayo sirve como catálogo maestro implícito.
+  const byIdentity=new Map();
+  // Catálogo maestro por identidad real: NOMBRE + LOTE. Así un mismo reactivo puede
+  // conservar varios lotes activos sin que el más reciente oculte a los demás.
   for(const cat of cats){
     const stamp=Date.parse(cat.updatedAt||cat.createdAt||0)||0;
     for(const r of cat.reagentConfig||[]){
-      const key=normalizeIdentityText(r.name||'');if(!key)continue;
-      const prev=byName.get(key);
-      if(!prev||stamp>prev.stamp)byName.set(key,{profile:cloneReagentProfile(r),stamp,source:`${cat.name||cat.code||'Catálogo'}`});
+      const nameKey=normalizeIdentityText(r.name||''),lotKey=normalizeIdentityText(r.lot||'');
+      if(!nameKey)continue;
+      const key=`${nameKey}|${lotKey}`;
+      const prev=byIdentity.get(key);
+      if(!prev||stamp>prev.stamp)byIdentity.set(key,{profile:cloneReagentProfile(r),stamp,source:`${cat.name||cat.code||'Catálogo'}`});
     }
   }
-  // Si ya hubo ejecución, la última ejecución confirma lote/stock/peso vigente sin obligar a reingresarlo.
+  // El último uso actualiza solamente SU MISMO lote; nunca reemplaza otro lote del mismo nombre.
   const latestUse=new Map();
   for(const p of plans){
     if(p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;
     const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
     for(const item of p.reagentResult.items){
-      const key=normalizeIdentityText(item.name||'');if(!key)continue;
+      const nameKey=normalizeIdentityText(item.name||''),lotKey=normalizeIdentityText(item.lot||'');
+      if(!nameKey)continue;
+      const key=`${nameKey}|${lotKey}`;
       const prev=latestUse.get(key);if(!prev||stamp>prev.stamp)latestUse.set(key,{item,p,stamp});
     }
   }
   for(const [key,hit] of latestUse){
-    const base=byName.get(key);if(!base)continue;
-    const r=base.profile, item=hit.item;
-    if(item.lot)r.lot=item.lot;
+    const base=byIdentity.get(key);if(!base)continue;
+    const r=base.profile,item=hit.item;
     if(r.mode==='COUNT'&&Number.isFinite(Number(item.stockRemaining)))r.stockQuantity=Number(item.stockRemaining);
     if(r.mode==='WEIGHT'){
       if(item.physicalState)r.physicalState=item.physicalState;
@@ -2055,23 +2062,33 @@ async function buildReagentMasterProfiles(){
     }
     base.source=`Último uso: ${hit.p.catalogName||hit.p.code||'actividad'}`;
   }
-  reagentMasterProfiles=[...byName.entries()].map(([key,v])=>({key,...v})).sort((a,b)=>String(a.profile.name||'').localeCompare(String(b.profile.name||''),'es'));
+  reagentMasterProfiles=[...byIdentity.entries()].map(([key,v])=>{
+    const nameKey=normalizeIdentityText(v.profile.name||''),lotKey=normalizeIdentityText(v.profile.lot||'');
+    const displayValue=v.profile.lot?`${v.profile.name} · Lote ${v.profile.lot}`:(v.profile.name||'');
+    return {key,nameKey,lotKey,displayKey:normalizeIdentityText(displayValue),displayValue,...v};
+  }).sort((a,b)=>`${a.profile.name||''} ${a.profile.lot||''}`.localeCompare(`${b.profile.name||''} ${b.profile.lot||''}`,'es'));
   return reagentMasterProfiles;
 }
 function reagentMasterDatalistHtml(){
-  return `<datalist id="reagentMasterList">${reagentMasterProfiles.map(x=>`<option value="${escapeHtml(x.profile.name||'')}">${escapeHtml(x.profile.lot?`Lote ${x.profile.lot} · ${reagentModeLabel(x.profile.mode)}`:reagentModeLabel(x.profile.mode))}</option>`).join('')}</datalist>`;
+  return `<datalist id="reagentMasterList">${reagentMasterProfiles.map(x=>`<option value="${escapeHtml(x.displayValue)}">${escapeHtml(reagentModeLabel(x.profile.mode))}${x.profile.stockQuantity!==null&&x.profile.stockQuantity!==undefined&&x.profile.mode!=='WEIGHT'?` · Stock ${escapeHtml(x.profile.stockQuantity)}`:''}</option>`).join('')}</datalist>`;
 }
 async function autofillReagentFromMaster(index,typed){
   const key=normalizeIdentityText(typed||'');if(!key)return false;
   if(!reagentMasterProfiles.length)await buildReagentMasterProfiles();
-  let hit=reagentMasterProfiles.find(x=>x.key===key);
+  // Selección exacta del datalist (Nombre · Lote X).
+  let hit=reagentMasterProfiles.find(x=>x.displayKey===key||x.key===key);
   if(!hit){
-    const starts=reagentMasterProfiles.filter(x=>x.key.startsWith(key)||key.startsWith(x.key));
+    const sameName=reagentMasterProfiles.filter(x=>x.nameKey===key);
+    // Si existe un solo lote se puede completar por nombre. Con varios lotes se deja
+    // la elección abierta al usuario para evitar seleccionar uno incorrecto.
+    if(sameName.length===1)hit=sameName[0];
+  }
+  if(!hit){
+    const starts=reagentMasterProfiles.filter(x=>x.displayKey.startsWith(key)||x.nameKey.startsWith(key));
     if(starts.length===1)hit=starts[0];
   }
   if(!hit)return false;
-  const current=editingReagents[index]||{}, src=cloneReagentProfile(hit.profile);
-  // Conservar el id de la línea actual; para envases conservar ids físicos de la ficha maestra.
+  const current=editingReagents[index]||{},src=cloneReagentProfile(hit.profile);
   src.id=current.id||uid('REA');src.order=current.order||index+1;
   if(src.mode==='WEIGHT')dedupeReagentContainers(src);
   editingReagents[index]={...src,_masterSource:hit.source,_autofilled:true};
