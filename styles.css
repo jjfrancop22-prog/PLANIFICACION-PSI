@@ -228,3 +228,16 @@
 #myDayRecent.hidden{display:none!important}
 
 .reagent-depleted-card{border:2px solid #e1ad4e!important;background:#fffaf0!important}.reagent-replacement-alert{display:grid;gap:3px;padding:10px;margin-bottom:10px;border-radius:10px;background:#fff0cf;color:#7d560a}.badge.danger{background:#ffe0d8!important;color:#9a351d!important}
+
+/* V1.0.5.3 · corrección de peso inicial en actividad iniciada */
+.reag-initial-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:center}
+.reag-initial-control .mini-btn{padding:7px 9px;font-size:10px;white-space:nowrap}
+.reag-initial-control input.manual-correction{background:#fff8dd!important;border-color:#deb34b!important;box-shadow:0 0 0 2px rgba(222,179,75,.13)}
+
+/* V1.0.5.4 · múltiples frascos / sobres */
+.reagent-containers-box{grid-column:1/-1;border:1px dashed #cddbe7;border-radius:11px;padding:10px;background:#f8fbfd}
+.reagent-containers-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}.reagent-containers-head b{font-size:11px;color:#35556f}
+.container-config-row{display:grid;grid-template-columns:1.2fr .8fr .8fr .9fr 42px;gap:8px;align-items:end;padding:8px 0;border-top:1px solid #e7edf3}.container-config-row:first-child{border-top:none}
+.multi-container-list{display:grid;gap:10px}.reagent-container-use{border:1px solid #dce7ef;border-radius:11px;padding:10px;background:#fff}.reagent-container-use.depleted{border-color:#e5b34f;background:#fffaf0}
+.container-use-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px}.container-use-check{display:flex!important;align-items:center;gap:7px;font-weight:900!important}.container-use-check input{width:auto!important}
+@media(max-width:850px){.container-config-row{grid-template-columns:1fr 1fr}.container-config-row button{grid-column:2;justify-self:end}}
