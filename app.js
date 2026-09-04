@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.8-LOTES-STOCK-ENVASES-CLAROS';
+const APP_VERSION='V1.0.5.6.11-ANTIDUPLICADOS-REGLAS';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -2007,12 +2007,106 @@ function openCatalogFromPlanner(){
 const REAGENT_ALLOWED_SECTIONS=['ACTIVIDADES_LABORATORIO','ENSAYOS_ANALITICOS','RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS'];
 function sectionAllowsReagents(section){return REAGENT_ALLOWED_SECTIONS.includes(section)}
 let editingReagents=[];
+let reagentMasterProfiles=[];
 function reagentModeLabel(mode){return mode==='WEIGHT'?'PESO DE FRASCO':'CONTABLE'}
+function cloneReagentProfile(r){return JSON.parse(JSON.stringify(r||{}))}
+async function buildReagentMasterProfiles(){
+  const cats=await getAll('catalog');
+  const plans=await getAll('planning');
+  const byName=new Map();
+  // La ficha más recientemente actualizada en cualquier ensayo sirve como catálogo maestro implícito.
+  for(const cat of cats){
+    const stamp=Date.parse(cat.updatedAt||cat.createdAt||0)||0;
+    for(const r of cat.reagentConfig||[]){
+      const key=normalizeIdentityText(r.name||'');if(!key)continue;
+      const prev=byName.get(key);
+      if(!prev||stamp>prev.stamp)byName.set(key,{profile:cloneReagentProfile(r),stamp,source:`${cat.name||cat.code||'Catálogo'}`});
+    }
+  }
+  // Si ya hubo ejecución, la última ejecución confirma lote/stock/peso vigente sin obligar a reingresarlo.
+  const latestUse=new Map();
+  for(const p of plans){
+    if(p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;
+    const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
+    for(const item of p.reagentResult.items){
+      const key=normalizeIdentityText(item.name||'');if(!key)continue;
+      const prev=latestUse.get(key);if(!prev||stamp>prev.stamp)latestUse.set(key,{item,p,stamp});
+    }
+  }
+  for(const [key,hit] of latestUse){
+    const base=byName.get(key);if(!base)continue;
+    const r=base.profile, item=hit.item;
+    if(item.lot)r.lot=item.lot;
+    if(r.mode==='COUNT'&&Number.isFinite(Number(item.stockRemaining)))r.stockQuantity=Number(item.stockRemaining);
+    if(r.mode==='WEIGHT'){
+      if(item.physicalState)r.physicalState=item.physicalState;
+      if(Number.isFinite(Number(item.density)))r.density=Number(item.density);
+      const resultContainers=Array.isArray(item.containers)?item.containers:[];
+      if(resultContainers.length&&Array.isArray(r.containers)){
+        r.containers=r.containers.map(env=>{
+          const used=resultContainers.find(x=>(x.containerId||x.id)===env.id);
+          if(!used)return env;
+          const final=Number(used.finalWeight);
+          return {...env,lot:used.lot||env.lot||r.lot||'',initialWeight:Number.isFinite(final)?final:env.initialWeight};
+        });
+      }else if(Number.isFinite(Number(item.finalWeight))){r.initialWeight=Number(item.finalWeight);}
+    }
+    base.source=`Último uso: ${hit.p.catalogName||hit.p.code||'actividad'}`;
+  }
+  reagentMasterProfiles=[...byName.entries()].map(([key,v])=>({key,...v})).sort((a,b)=>String(a.profile.name||'').localeCompare(String(b.profile.name||''),'es'));
+  return reagentMasterProfiles;
+}
+function reagentMasterDatalistHtml(){
+  return `<datalist id="reagentMasterList">${reagentMasterProfiles.map(x=>`<option value="${escapeHtml(x.profile.name||'')}">${escapeHtml(x.profile.lot?`Lote ${x.profile.lot} · ${reagentModeLabel(x.profile.mode)}`:reagentModeLabel(x.profile.mode))}</option>`).join('')}</datalist>`;
+}
+async function autofillReagentFromMaster(index,typed){
+  const key=normalizeIdentityText(typed||'');if(!key)return false;
+  if(!reagentMasterProfiles.length)await buildReagentMasterProfiles();
+  let hit=reagentMasterProfiles.find(x=>x.key===key);
+  if(!hit){
+    const starts=reagentMasterProfiles.filter(x=>x.key.startsWith(key)||key.startsWith(x.key));
+    if(starts.length===1)hit=starts[0];
+  }
+  if(!hit)return false;
+  const current=editingReagents[index]||{}, src=cloneReagentProfile(hit.profile);
+  // Conservar el id de la línea actual; para envases conservar ids físicos de la ficha maestra.
+  src.id=current.id||uid('REA');src.order=current.order||index+1;
+  if(src.mode==='WEIGHT')dedupeReagentContainers(src);
+  editingReagents[index]={...src,_masterSource:hit.source,_autofilled:true};
+  renderReagentRows();
+  toast(`Ficha autocompletada: ${src.name}${src.lot?` · lote ${src.lot}`:''}`);
+  return true;
+}
+
 function reagentDefaultUnit(mode){return mode==='WEIGHT'?'g':'unidad'}
 
+function containerIdentityKey(e,r){
+  const lot=normalizeIdentityText(e?.lot||r?.lot||'');
+  const label=normalizeIdentityText(e?.label||'');
+  const type=String(e?.containerType||'FRASCO').toUpperCase();
+  // El ID manda cuando existe. Para registros antiguos/sin ID usamos lote + nombre + tipo.
+  return e?.id?`ID:${e.id}`:`LEGACY:${lot}|${label}|${type}`;
+}
+function dedupeReagentContainers(r){
+  if(!r||r.mode!=='WEIGHT')return [];
+  const src=Array.isArray(r.containers)?r.containers:[];
+  const out=[],seen=new Set();
+  for(const raw of src){
+    if(!raw)continue;
+    const e={...raw};
+    const key=containerIdentityKey(e,r);
+    if(seen.has(key))continue;
+    seen.add(key);out.push(e);
+  }
+  r.containers=out;
+  return out;
+}
 function ensureReagentContainers(r){
   if(r.mode!=='WEIGHT')return [];
-  if(Array.isArray(r.containers)&&r.containers.length)return r.containers;
+  if(Array.isArray(r.containers)&&r.containers.length){
+    dedupeReagentContainers(r);
+    if(r.containers.length)return r.containers;
+  }
   r.containers=[{
     id:uid('ENV'),
     label:'Frasco principal',
@@ -2047,8 +2141,8 @@ function renderContainerLists(){
 }
 function renderReagentRows(){
   const box=$('#reagentRows');if(!box)return;
-  box.innerHTML=editingReagents.map((r,i)=>`<div class="reagent-row">
-    <label>Reactivo / material<input data-reagent-name="${i}" value="${escapeHtml(r.name||'')}" placeholder="Ej. Estándar de fósforo"></label>
+  box.innerHTML=reagentMasterDatalistHtml()+editingReagents.map((r,i)=>`<div class="reagent-row">
+    <label>Reactivo / material<input list="reagentMasterList" data-reagent-name="${i}" value="${escapeHtml(r.name||'')}" placeholder="Escriba o seleccione un reactivo ya registrado"><small>${r._autofilled?`✓ Autocompletado · ${escapeHtml(r._masterSource||'última ficha disponible')}`:'Si ya existe, se completan automáticamente lote, control, stock, tara, peso y densidad.'}</small></label>
     <label>Lote<input data-reagent-lot="${i}" value="${escapeHtml(r.lot||'')}" placeholder="Ej. A12345"></label>
     <label>Forma de control<select data-reagent-mode="${i}"><option value="COUNT" ${r.mode!=='WEIGHT'?'selected':''}>CONTABLE · stock por unidades</option><option value="WEIGHT" ${r.mode==='WEIGHT'?'selected':''}>PESO DE FRASCO · antes/después</option></select></label>
     <label>Unidad<input data-reagent-unit="${i}" value="${escapeHtml(r.unit||reagentDefaultUnit(r.mode))}" placeholder="unidad / sobre / tableta"></label>
@@ -2065,7 +2159,7 @@ function renderReagentRows(){
       </div>`:''}
     <button type="button" class="icon-btn reagent-remove" data-remove-reagent="${i}">×</button>
   </div>`).join('');
-  $$('[data-reagent-name]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentName)].name=el.value;validateReagents()});
+  $$('[data-reagent-name]').forEach(el=>{el.oninput=()=>{const i=Number(el.dataset.reagentName);editingReagents[i].name=el.value;editingReagents[i]._autofilled=false;validateReagents()};el.onchange=()=>autofillReagentFromMaster(Number(el.dataset.reagentName),el.value);el.onblur=()=>autofillReagentFromMaster(Number(el.dataset.reagentName),el.value)});
   $$('[data-reagent-lot]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentLot)].lot=el.value;validateReagents()});
   $$('[data-reagent-stock]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentStock)].stockQuantity=el.value;validateReagents()});
   $$('[data-reagent-mode]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.reagentMode);editingReagents[i].mode=el.value;editingReagents[i].unit=reagentDefaultUnit(el.value);if(el.value!=='WEIGHT'){editingReagents[i].initialWeight=null;editingReagents[i].physicalState=null;editingReagents[i].density=null;editingReagents[i].tareWeight=null;editingReagents[i].containers=[]}else{editingReagents[i].physicalState=editingReagents[i].physicalState||'SOLID'}renderReagentRows()});
@@ -2076,7 +2170,17 @@ function renderReagentRows(){
   $$('[data-reagent-tare]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentTare)].tareWeight=el.value;validateReagents()});
   $$('[data-remove-reagent]').forEach(el=>el.onclick=()=>{editingReagents.splice(Number(el.dataset.removeReagent),1);renderReagentRows()});
   renderContainerLists();
-  $$('[data-add-container]').forEach(btn=>btn.onclick=()=>{const i=Number(btn.dataset.addContainer),arr=ensureReagentContainers(editingReagents[i]);arr.push({id:uid('ENV'),label:`Frasco ${arr.length+1}`,lot:editingReagents[i].lot||'',containerType:'FRASCO',tareWeight:'',initialWeight:'',status:'ACTIVO'});renderReagentRows()});
+  $$('[data-add-container]').forEach(btn=>btn.onclick=()=>{
+    const i=Number(btn.dataset.addContainer),r=editingReagents[i],arr=ensureReagentContainers(r);
+    dedupeReagentContainers(r);
+    const last=arr[arr.length-1];
+    // Evita crear varias filas vacías por doble clic o por pulsaciones repetidas.
+    if(last && !(String(last.tareWeight??'').trim()) && !(String(last.initialWeight??'').trim()) && arr.length>1){toast('Complete el frasco/sobre pendiente antes de agregar otro');return;}
+    const used=new Set(arr.map(e=>normalizeIdentityText(e.label||'')));let n=1,label='Frasco principal';
+    if(used.has(normalizeIdentityText(label))){do{n++;label=`Frasco ${n}`}while(used.has(normalizeIdentityText(label)));}
+    arr.push({id:uid('ENV'),label,lot:r.lot||'',containerType:'FRASCO',tareWeight:'',initialWeight:'',status:'ACTIVO'});
+    renderReagentRows();
+  });
   validateReagents();
 }
 function addReagent(){editingReagents.push({id:uid('REA'),name:'',lot:'',mode:'COUNT',unit:'unidad',stockQuantity:'',initialWeight:null,physicalState:'SOLID',density:null,tareWeight:null,containers:[]});renderReagentRows()}
@@ -2093,7 +2197,7 @@ function updateReagentEditor(){
   }
   const enabled=$('#catalogUsesReagents').checked;
   $('#reagentConfigBody').classList.toggle('hidden',!enabled);
-  if(enabled)renderReagentRows();
+  if(enabled){buildReagentMasterProfiles().then(()=>renderReagentRows());}
 }
 function validateReagents(){
   const el=$('#reagentValidation');if(!el)return {level:'OK',text:''};
@@ -2117,7 +2221,7 @@ function validateReagents(){
 function reagentConfigFromForm(){
   const section=$('#catalogSection')?.value||'';
   if(!sectionAllowsReagents(section)||!$('#catalogUsesReagents')?.checked)return [];
-  return editingReagents.map((r,i)=>{const containers=r.mode==='WEIGHT'?ensureReagentContainers(r).map((e,j)=>({id:e.id||uid('ENV'),order:j+1,label:(e.label||`Frasco ${j+1}`).trim(),lot:(e.lot||r.lot||'').trim(),containerType:e.containerType==='SOBRE'?'SOBRE':'FRASCO',tareWeight:Number(e.tareWeight),initialWeight:Number(e.initialWeight),status:e.status||'ACTIVO'})):[];const first=containers[0]||{};return {id:r.id||uid('REA'),order:i+1,name:(r.name||'').trim(),lot:(r.lot||'').trim(),mode:r.mode==='WEIGHT'?'WEIGHT':'COUNT',unit:(r.unit||reagentDefaultUnit(r.mode)).trim(),stockQuantity:r.mode==='WEIGHT'?null:Number(r.stockQuantity),initialWeight:r.mode==='WEIGHT'?Number(first.initialWeight??r.initialWeight):null,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.mode==='WEIGHT'&&r.physicalState==='LIQUID'?Number(r.density):null,tareWeight:r.mode==='WEIGHT'?Number(first.tareWeight??r.tareWeight):null,containers};});
+  return editingReagents.map((r,i)=>{if(r.mode==='WEIGHT')dedupeReagentContainers(r);const containers=r.mode==='WEIGHT'?ensureReagentContainers(r).map((e,j)=>({id:e.id||uid('ENV'),order:j+1,label:(e.label||`Frasco ${j+1}`).trim(),lot:(e.lot||r.lot||'').trim(),containerType:e.containerType==='SOBRE'?'SOBRE':'FRASCO',tareWeight:Number(e.tareWeight),initialWeight:Number(e.initialWeight),status:e.status||'ACTIVO'})):[];const first=containers[0]||{};return {id:r.id||uid('REA'),order:i+1,name:(r.name||'').trim(),lot:(r.lot||'').trim(),mode:r.mode==='WEIGHT'?'WEIGHT':'COUNT',unit:(r.unit||reagentDefaultUnit(r.mode)).trim(),stockQuantity:r.mode==='WEIGHT'?null:Number(r.stockQuantity),initialWeight:r.mode==='WEIGHT'?Number(first.initialWeight??r.initialWeight):null,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.mode==='WEIGHT'&&r.physicalState==='LIQUID'?Number(r.density):null,tareWeight:r.mode==='WEIGHT'?Number(first.tareWeight??r.tareWeight):null,containers};});
 }
 
 const DELETED_PLANNING_CONFIG_KEY='deletedPlanningIdsV1';
@@ -2231,7 +2335,16 @@ function calibrationConfigFromForm(){
   };
 }
 function openCatalog(){setCatalogSectionOptions();$('#catalogForm').reset();$('#catalogId').value='';$('#catalogSection').value=currentSection;$('#catalogStatus').value='ACTIVO';$('#catalogTimeMode').value=['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS'].includes(currentSection)?'COMPOSITE':currentSection==='ENSAYOS_ANALITICOS'?'BY_SAMPLES':'FIXED';editingRules=[];editingSteps=[];editingCalibrationPoints=[];editingReagents=[];$('#catalogUsesReagents').checked=false;$('#catalogRequiresCalibration').checked=false;$('#calibrationUnit').value='';if(currentSection==='RECEPCION_MUESTRAS')setDurationPicker(300);else if(['MICROBIOLOGIA','AASS'].includes(currentSection))setDurationPicker(0);$('#catalogDialogTitle').textContent='Nuevo elemento';updateCatalogForm();updateCalibrationEditor();updateReagentEditor();$('#catalogDialog').showModal()}
-async function editCatalog(id){const all=await getAll('catalog'),x=all.find(r=>r.id===id);if(!x)return;setCatalogSectionOptions();$('#catalogId').value=x.id;$('#catalogSection').value=x.section;$('#catalogName').value=x.name;$('#catalogFamily').value=x.family||'';$('#catalogTimeMode').value=x.timeMode||'FIXED';setDurationPicker(x.section==='RECEPCION_MUESTRAS'?300:(x.baseMinutes||0));$('#catalogStatus').value=x.status;$('#catalogDescription').value=x.description||'';editingRules=(await getAll('timeRules')).filter(r=>r.catalogId===id).sort((a,b)=>a.minSamples-b.minSamples).map(r=>({...r}));editingSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===id).sort((a,b)=>a.order-b.order).map(r=>({...r}));const cc=x.calibrationConfig||{};$('#catalogRequiresCalibration').checked=!!cc.enabled;$('#calibrationUnit').value=cc.unit||'';editingCalibrationPoints=(cc.points||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(p=>({concentration:p.concentration}));editingReagents=(x.reagentConfig||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(r=>({...r,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.density??null,tareWeight:r.tareWeight??null,containers:Array.isArray(r.containers)&&r.containers.length?r.containers.map(e=>({...e})):r.mode==='WEIGHT'?[{id:uid('ENV'),label:'Frasco principal',lot:r.lot||'',containerType:'FRASCO',tareWeight:r.tareWeight??'',initialWeight:r.initialWeight??'',status:'ACTIVO'}]:[]}));$('#catalogUsesReagents').checked=sectionAllowsReagents(x.section)&&editingReagents.length>0;if(x.section==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration(x.name)&&!cc.enabled){$('#catalogRequiresCalibration').checked=true;if(!editingCalibrationPoints.length)editingCalibrationPoints=[{concentration:''},{concentration:''},{concentration:''}];}$('#catalogDialogTitle').textContent='Editar elemento';updateCatalogForm();updateCalibrationEditor();updateReagentEditor();$('#catalogDialog').showModal()}
+function timeRuleKey(r){return `${Number(r.minSamples)}|${Number(r.maxSamples)}|${Number(r.minutes)}`}
+async function loadCleanTimeRules(catalogId){
+  const all=(await getAll('timeRules')).filter(r=>r.catalogId===catalogId).sort((a,b)=>Number(a.minSamples)-Number(b.minSamples)||Number(a.maxSamples)-Number(b.maxSamples));
+  const seen=new Set(),clean=[],dups=[];
+  for(const r of all){const k=timeRuleKey(r);if(seen.has(k))dups.push(r);else{seen.add(k);clean.push(r)}}
+  // V1.0.5.6.11: elimina duplicados exactos heredados también de Firestore.
+  for(const r of dups){await del('timeRules',r.id);await queue('DELETE','timeRules',{id:r.id})}
+  return clean;
+}
+async function editCatalog(id){const all=await getAll('catalog'),x=all.find(r=>r.id===id);if(!x)return;setCatalogSectionOptions();$('#catalogId').value=x.id;$('#catalogSection').value=x.section;$('#catalogName').value=x.name;$('#catalogFamily').value=x.family||'';$('#catalogTimeMode').value=x.timeMode||'FIXED';setDurationPicker(x.section==='RECEPCION_MUESTRAS'?300:(x.baseMinutes||0));$('#catalogStatus').value=x.status;$('#catalogDescription').value=x.description||'';editingRules=(await loadCleanTimeRules(id)).map(r=>({...r}));editingSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===id).sort((a,b)=>a.order-b.order).map(r=>({...r}));const cc=x.calibrationConfig||{};$('#catalogRequiresCalibration').checked=!!cc.enabled;$('#calibrationUnit').value=cc.unit||'';editingCalibrationPoints=(cc.points||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(p=>({concentration:p.concentration}));editingReagents=(x.reagentConfig||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(r=>({...r,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.density??null,tareWeight:r.tareWeight??null,containers:Array.isArray(r.containers)&&r.containers.length?r.containers.map(e=>({...e})):r.mode==='WEIGHT'?[{id:uid('ENV'),label:'Frasco principal',lot:r.lot||'',containerType:'FRASCO',tareWeight:r.tareWeight??'',initialWeight:r.initialWeight??'',status:'ACTIVO'}]:[]}));editingReagents.forEach(r=>{if(r.mode==='WEIGHT')dedupeReagentContainers(r)});$('#catalogUsesReagents').checked=sectionAllowsReagents(x.section)&&editingReagents.length>0;if(x.section==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration(x.name)&&!cc.enabled){$('#catalogRequiresCalibration').checked=true;if(!editingCalibrationPoints.length)editingCalibrationPoints=[{concentration:''},{concentration:''},{concentration:''}];}$('#catalogDialogTitle').textContent='Editar elemento';updateCatalogForm();updateCalibrationEditor();updateReagentEditor();$('#catalogDialog').showModal()}
 function addRule(){editingRules.push({id:uid('TMP'),minSamples:'',maxSamples:'',minutes:''});renderRuleRows();updateCalibrationEditor()}
 function splitMinutes(total){const n=Math.max(0,Number(total||0));return {hours:Math.floor(n/60),minutes:n%60}}
 function setDurationPicker(total){const d=splitMinutes(total);$('#catalogBaseHours').value=d.hours;$('#catalogBaseMinutePart').value=String(d.minutes)}
@@ -2243,7 +2356,7 @@ function compositeTarget(){return $('#catalogSection').value==='RECEPCION_MUESTR
 function renderStepRows(){const box=$('#stepRows');if(!box)return;box.innerHTML=editingSteps.map((s,i)=>{const d=splitMinutes(s.minutes);return `<div class="step-row"><div class="step-order">${i+1}</div><label>Detalle / subactividad<input value="${escapeHtml(s.name||'')}" data-step="${i}" data-step-field="name" placeholder="Ej. Revisión de condiciones"></label><label>Horas<input type="number" min="0" max="8" step="1" value="${d.hours}" data-step-hours="${i}"></label><label>Minutos<select data-step-minutes="${i}">${[0,5,10,15,20,25,30,35,40,45,50,55].map(m=>`<option value="${m}" ${m===d.minutes?'selected':''}>${String(m).padStart(2,'0')} min</option>`).join('')}</select></label><button type="button" class="icon-btn" data-remove-step="${i}">×</button></div>`}).join('');$$('[data-step-field]').forEach(el=>el.oninput=()=>{editingSteps[Number(el.dataset.step)][el.dataset.stepField]=el.value;validateSteps()});$$('[data-step-hours]').forEach(el=>el.oninput=()=>{const i=Number(el.dataset.stepHours),mins=Number($(`[data-step-minutes="${i}"]`).value||0);editingSteps[i].minutes=Number(el.value||0)*60+mins;validateSteps()});$$('[data-step-minutes]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.stepMinutes),hrs=Number($(`[data-step-hours="${i}"]`).value||0);editingSteps[i].minutes=hrs*60+Number(el.value||0);validateSteps()});$$('[data-remove-step]').forEach(el=>el.onclick=()=>{editingSteps.splice(Number(el.dataset.removeStep),1);renderStepRows()});validateSteps()}
 function validateSteps(){const el=$('#stepValidation');if(!el||$('#catalogTimeMode').value!=='COMPOSITE'){if(el)el.textContent='';return {level:'OK',text:''}}const target=compositeTarget(),sum=editingSteps.reduce((a,s)=>a+Number(s.minutes||0),0),missing=editingSteps.some(s=>!String(s.name||'').trim()||!Number(s.minutes));$('#compositeTotalLabel').textContent=minutesText(target);const diff=target-sum;$('#compositeProgress').textContent=diff===0?'Desglose completo':diff>0?`Faltan ${minutesText(diff)} por distribuir`:`Excede por ${minutesText(Math.abs(diff))}`;let out;if(!editingSteps.length)out={level:'ERROR',text:'Agregue al menos un detalle para esta actividad compuesta.'};else if(missing)out={level:'ERROR',text:'Cada detalle debe tener nombre y duración.'};else if(sum!==target)out={level:'ERROR',text:`El desglose suma ${minutesText(sum)} y debe sumar exactamente ${minutesText(target)}.`};else out={level:'OK',text:`Desglose válido: ${editingSteps.length} detalle(s), total ${minutesText(target)}.`};el.textContent=out.text;el.className='inline-alert '+out.level.toLowerCase();return out}
 function validateRuleDraft(){const el=$('#ruleValidation');if($('#catalogTimeMode').value!=='BY_SAMPLES'){el.textContent='';return}const v=validateRules(editingRules);el.textContent=v.text;el.className='inline-alert '+v.level.toLowerCase()}
-async function saveCatalog(ev){ev.preventDefault();const id=$('#catalogId').value,section=$('#catalogSection').value,name=$('#catalogName').value.trim(),family=$('#catalogFamily').value.trim(),timeMode=$('#catalogTimeMode').value,baseMinutes=section==='RECEPCION_MUESTRAS'&&timeMode==='COMPOSITE'?300:getDurationPicker();if(!section||!name)return toast('Complete sección y nombre');if(['FIXED','COMPOSITE'].includes(timeMode)&&!baseMinutes)return toast('Ingrese la duración estándar');if(timeMode==='BY_SAMPLES'){const v=validateRules(editingRules);if(v.level==='ERROR')return toast(v.text)}if(timeMode==='COMPOSITE'){const v=validateSteps();if(v.level==='ERROR')return toast(v.text)}if($('#catalogRequiresCalibration')?.checked){const v=validateCalibrationConfig();if(v.level==='ERROR')return toast(v.text)}if(sectionAllowsReagents(section)&&$('#catalogUsesReagents')?.checked){const v=validateReagents();if(v.level==='ERROR')return toast(v.text)}const all=await getAll('catalog');const duplicate=all.find(x=>x.id!==id&&x.section===section&&x.name.trim().toLowerCase()===name.toLowerCase()&&(x.family||'').trim().toLowerCase()===family.toLowerCase());if(duplicate)return toast('Ya existe el mismo elemento en esta sección y clasificación');const existing=id?all.find(x=>x.id===id):null;const rec={id:id||uid('CAT'),code:existing?.code||nextCode(section,all),section,name,family,timeMode,baseMinutes:['FIXED','COMPOSITE'].includes(timeMode)?baseMinutes:null,description:$('#catalogDescription').value.trim(),calibrationConfig:calibrationConfigFromForm(),reagentConfig:reagentConfigFromForm(),status:$('#catalogStatus').value,createdAt:existing?.createdAt||nowISO(),updatedAt:nowISO()};await put('catalog',rec);const oldRules=(await getAll('timeRules')).filter(r=>r.catalogId===rec.id);for(const r of oldRules)await del('timeRules',r.id);if(timeMode==='BY_SAMPLES'){for(const r of editingRules){await put('timeRules',{id:uid('TR'),catalogId:rec.id,minSamples:Number(r.minSamples),maxSamples:Number(r.maxSamples),minutes:Number(r.minutes),createdAt:nowISO()})}}const oldSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===rec.id);for(const s of oldSteps)await del('compositeSteps',s.id);if(timeMode==='COMPOSITE'){for(let i=0;i<editingSteps.length;i++){const s=editingSteps[i];await put('compositeSteps',{id:uid('STEP'),catalogId:rec.id,order:i+1,name:String(s.name).trim(),minutes:Number(s.minutes),createdAt:nowISO()})}}await queue(id?'UPDATE':'CREATE','catalog',rec);await audit(id?'EDITAR':'CREAR','CATALOGO_MAESTRO',rec.code,`${sectionMeta(section).label}: ${name}${family?` · ${family}`:''}${timeMode==='COMPOSITE'?` · bloque ${minutesText(baseMinutes)} con ${editingSteps.length} detalles`:''}`);currentSection=section;$('#catalogDialog').close();toast(id?'Elemento actualizado':'Elemento creado');await refreshAll();renderSectionTabs();
+async function saveCatalog(ev){ev.preventDefault();const id=$('#catalogId').value,section=$('#catalogSection').value,name=$('#catalogName').value.trim(),family=$('#catalogFamily').value.trim(),timeMode=$('#catalogTimeMode').value,baseMinutes=section==='RECEPCION_MUESTRAS'&&timeMode==='COMPOSITE'?300:getDurationPicker();if(!section||!name)return toast('Complete sección y nombre');if(['FIXED','COMPOSITE'].includes(timeMode)&&!baseMinutes)return toast('Ingrese la duración estándar');if(timeMode==='BY_SAMPLES'){const v=validateRules(editingRules);if(v.level==='ERROR')return toast(v.text)}if(timeMode==='COMPOSITE'){const v=validateSteps();if(v.level==='ERROR')return toast(v.text)}if($('#catalogRequiresCalibration')?.checked){const v=validateCalibrationConfig();if(v.level==='ERROR')return toast(v.text)}if(sectionAllowsReagents(section)&&$('#catalogUsesReagents')?.checked){const v=validateReagents();if(v.level==='ERROR')return toast(v.text)}const all=await getAll('catalog');const duplicate=all.find(x=>x.id!==id&&x.section===section&&x.name.trim().toLowerCase()===name.toLowerCase()&&(x.family||'').trim().toLowerCase()===family.toLowerCase());if(duplicate)return toast('Ya existe el mismo elemento en esta sección y clasificación');const existing=id?all.find(x=>x.id===id):null;const rec={id:id||uid('CAT'),code:existing?.code||nextCode(section,all),section,name,family,timeMode,baseMinutes:['FIXED','COMPOSITE'].includes(timeMode)?baseMinutes:null,description:$('#catalogDescription').value.trim(),calibrationConfig:calibrationConfigFromForm(),reagentConfig:reagentConfigFromForm(),status:$('#catalogStatus').value,createdAt:existing?.createdAt||nowISO(),updatedAt:nowISO()};await put('catalog',rec);const oldRules=(await getAll('timeRules')).filter(r=>r.catalogId===rec.id);for(const r of oldRules){await del('timeRules',r.id);await queue('DELETE','timeRules',{id:r.id})}if(timeMode==='BY_SAMPLES'){const seenRuleKeys=new Set();for(const r of editingRules){const key=timeRuleKey(r);if(seenRuleKeys.has(key))continue;seenRuleKeys.add(key);const ruleRec={id:uid('TR'),catalogId:rec.id,minSamples:Number(r.minSamples),maxSamples:Number(r.maxSamples),minutes:Number(r.minutes),createdAt:nowISO(),updatedAt:nowISO()};await put('timeRules',ruleRec);await queue('CREATE','timeRules',ruleRec)}}const oldSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===rec.id);for(const st of oldSteps){await del('compositeSteps',st.id);await queue('DELETE','compositeSteps',{id:st.id})}if(timeMode==='COMPOSITE'){for(let i=0;i<editingSteps.length;i++){const st=editingSteps[i];const stepRec={id:uid('STEP'),catalogId:rec.id,order:i+1,name:String(st.name).trim(),minutes:Number(st.minutes),createdAt:nowISO(),updatedAt:nowISO()};await put('compositeSteps',stepRec);await queue('CREATE','compositeSteps',stepRec)}}await queue(id?'UPDATE':'CREATE','catalog',rec);await audit(id?'EDITAR':'CREAR','CATALOGO_MAESTRO',rec.code,`${sectionMeta(section).label}: ${name}${family?` · ${family}`:''}${timeMode==='COMPOSITE'?` · bloque ${minutesText(baseMinutes)} con ${editingSteps.length} detalles`:''}`);currentSection=section;$('#catalogDialog').close();toast(id?'Elemento actualizado':'Elemento creado');await refreshAll();renderSectionTabs();
 if(plannerCatalogReturn&&!id){
   const keep=plannerCatalogReturn;plannerCatalogReturn=null;
   switchView('planificador');

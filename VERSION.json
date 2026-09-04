@@ -1,18 +1,20 @@
 {
   "app": "ERP Planificación NextGen",
-  "version": "V1.0.5.6.8",
+  "version": "V1.0.5.6.11",
   "channel": "firebase-integration",
   "database": "ERP_PLANIFICACION_NEXTGEN_CLEAN",
   "databaseVersion": 7,
   "firebaseProject": "inventario-psi",
   "deployment": "GitHub -> Netlify -> PWA",
-  "notes": "Inicio de sesión manual en cada apertura: no se restaura automáticamente una sesión Firebase previa. Tras ingresar credenciales, el acceso queda bloqueado mostrando SINCRONIZANDO en rojo hasta completar perfil, descarga cloud, Outbox y live sync.",
+  "notes": "Catálogo inteligente de reactivos/materiales: al escribir un nombre previamente usado, reutiliza la última ficha disponible y completa lote, control, unidad, stock, densidad y envases; incorpora último stock/peso confirmado cuando existe.",
   "features": [
     "Firebase Authentication",
     "Controlled Initial Migration",
     "Live Sync",
     "Outbox",
-    "Automatic Analyst Link"
+    "Automatic Analyst Link",
+    "Smart Reagent Master Catalog",
+    "Automatic Last Profile Reuse"
   ],
   "architecture": "Firebase Auth UID -> Firestore profile -> Cloud-first bootstrap -> IndexedDB cache -> Live Sync",
   "sync": "Outbox retries + Firestore write verification + realtime snapshot reconciliation of deleted planning + truthful sync state",

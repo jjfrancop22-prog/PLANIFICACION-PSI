@@ -1,10 +1,8 @@
-## V1.0.5.6.8 · Inicio manual + sincronización visible
+## V1.0.5.6.11 · Catálogo inteligente de reactivos
 
-Cambio puntual sobre V1.0.5.6.6:
-
-- Firebase Auth usa persistencia en memoria: cada apertura/recarga solicita nuevamente correo y contraseña.
-- Cerrar sesión siempre vuelve a la pantalla de acceso.
-- El ERP no se abre inmediatamente después de autenticar: primero muestra **SINCRONIZANDO…** en rojo.
-- Durante ese estado se valida `users/{UID}`, se descarga Firestore, se procesa Outbox y se activa Live Sync.
-- Solo después de completar el proceso se oculta el acceso y se abre el ERP según el rol.
-- Se conserva horario secuencial inteligente, peso final/consumo y sincronización de eliminaciones multi-PC.
+- Reutiliza automáticamente la última ficha conocida de cada reactivo/material entre ensayos.
+- Al escribir o seleccionar un nombre ya registrado completa lote, tipo de control, unidad, stock, estado físico, densidad y envases.
+- Para contables toma el último stock restante confirmado cuando existe.
+- Para reactivos por peso toma como peso inicial vigente el último peso final confirmado del mismo envase cuando existe.
+- Mantiene la posibilidad de editar cualquier dato si cambió lote, frasco, tara, peso o densidad.
+- Conserva sincronización multi-PC, login manual y horarios secuenciales de versiones anteriores.
