@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.4-FIX-ELIMINACION-DEFINITIVA';
+const APP_VERSION='V1.0.5.6.5-SYNC-ELIMINACION-MULTIPC';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -169,6 +169,29 @@ async function resolveAnalystLink(profile){
   }
   return profile;
 }
+async function reconcilePlanningAgainstCloud(cloudIds){
+  // Firestore es la fuente compartida de verdad para la planificación.
+  // Un equipo que estuvo cerrado durante una eliminación no recibe necesariamente
+  // un evento `removed` al volver: su primer snapshot solo contiene los documentos
+  // que aún existen. Por eso reconciliamos también las AUSENCIAS del snapshot.
+  const ids=cloudIds instanceof Set?cloudIds:new Set(cloudIds||[]);
+  const outbox=await getAll('outbox');
+  const protectedIds=new Set(outbox.filter(x=>
+    x.entity==='planning' &&
+    (x.status==='PENDIENTE'||x.status==='ERROR') &&
+    x.type!=='DELETE'
+  ).map(x=>x.payload?.id||x.recordId).filter(Boolean));
+
+  const local=await getAll('planning');
+  let removed=0;
+  for(const plan of local){
+    if(!plan?.id||ids.has(plan.id)||protectedIds.has(plan.id))continue;
+    await markPlanningDeleted(plan.id);
+    await del('planning',plan.id);
+    removed++;
+  }
+  return removed;
+}
 async function pullFirebaseStore(storeName){
   if(!firebaseBridge.ready||!FIREBASE_SYNC_STORES.includes(storeName))return 0;
   const {collection,getDocs}=firebaseBridge.mods;
@@ -177,6 +200,9 @@ async function pullFirebaseStore(storeName){
   for(const d of snap.docs){
     await applyCloudRecord(storeName,d.id,d.data());
     count++;
+  }
+  if(storeName==='planning'){
+    await reconcilePlanningAgainstCloud(new Set(snap.docs.map(d=>d.id)));
   }
   return count;
 }
@@ -475,6 +501,15 @@ function startRealtimeSync(){
           continue;
         }
         await applyCloudRecord(storeName,ch.doc.id,ch.doc.data());changed=true;
+      }
+      // En planning no basta con procesar docChanges(): si este equipo estuvo
+      // desconectado cuando otro eliminó una actividad, el snapshot inicial no trae
+      // un `removed` para ese registro viejo local. Comparamos la lista completa de
+      // IDs que existen AHORA en Firestore y retiramos cualquier planificación local
+      // huérfana (salvo cambios locales todavía pendientes de subir).
+      if(storeName==='planning'){
+        const pruned=await reconcilePlanningAgainstCloud(new Set(snap.docs.map(d=>d.id)));
+        if(pruned)changed=true;
       }
       if(changed){
         firebaseBridge.lastSyncAt=nowISO();
