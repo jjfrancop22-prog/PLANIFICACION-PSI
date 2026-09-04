@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.2-FIX-ARRANQUE-COMPLETO';
+const APP_VERSION='V1.0.5.6.3-PESO-FINAL-CONSUMO';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1652,7 +1652,20 @@ function dailyTechnicalSummary(p){
   else if(planRequiresCalibration(p))parts.push('Curva pendiente');
   if(p.reagentResult?.items?.length){
     const usedItems=p.reagentResult.items.filter(r=>!r.notUsed&&r.usedInActivity!==false);
-    const x=usedItems.slice(0,3).map(r=>r.mode==='COUNT'?`${r.name}: ${r.used??'—'} ${r.unit||'u'}`:r.physicalState==='LIQUID'?`${r.name}: ${Number(r.volumeUsedMl||0).toFixed(2)} mL`:`${r.name}: ${Number(r.used||0).toFixed(2)} g`);
+    const x=usedItems.slice(0,3).map(r=>{
+      if(r.mode==='COUNT')return `${r.name}: ${r.used??'—'} ${r.unit||'u'}`;
+      const envs=Array.isArray(r.containers)?r.containers.filter(e=>e.usedInActivity!==false):[];
+      if(!envs.length){
+        const consumption=r.physicalState==='LIQUID'?`${Number(r.volumeUsedMl||0).toFixed(2)} mL`:`${Number(r.used||0).toFixed(2)} g`;
+        return `${r.name}: — (${consumption} consumo)`;
+      }
+      return envs.map((e,i)=>{
+        const finalWeight=Number(e.finalWeight);
+        const consumption=r.physicalState==='LIQUID'?`${Number(e.volumeUsedMl||0).toFixed(2)} mL`:`${Number(e.used||0).toFixed(2)} g`;
+        const label=envs.length>1?` ${e.label||`Envase ${i+1}`}`:'';
+        return `${r.name}${label}: ${Number.isFinite(finalWeight)?finalWeight.toFixed(2):'—'} g (${consumption} consumo)`;
+      }).join(' · ');
+    });
     parts.push(x.length?`Reactivos · ${x.join(' · ')}${usedItems.length>3?' · …':''}`:'Reactivos · sin consumo');
   }else if(planHasReagents(p))parts.push('Reactivos pendientes');
   return parts.join(' | ');
