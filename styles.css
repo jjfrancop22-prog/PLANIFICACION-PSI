@@ -162,3 +162,23 @@
 
 .auth-gate{position:fixed;inset:0;z-index:5000;display:grid;place-items:center;padding:24px;background:linear-gradient(135deg,#0b1d31 0%,#102b49 50%,#eef4fa 50%,#f6f9fc 100%)}
 .auth-gate.hidden{display:none!important}.auth-gate-card{width:min(470px,94vw);background:#fff;border-radius:22px;box-shadow:0 30px 90px rgba(0,0,0,.26);padding:30px}.auth-gate-card form{padding:0}.auth-gate-heading{display:flex;align-items:flex-start;gap:16px;margin-bottom:20px}.auth-gate-heading h2{margin:3px 0 6px;font-size:30px;line-height:1.05}.auth-gate-heading p{margin:0;color:#66758c;line-height:1.45;font-size:14px}.auth-kicker{display:block;font-size:10px;letter-spacing:.16em;font-weight:900;color:#0f4c81}.auth-mark-large{width:54px;height:54px;border-radius:15px;font-size:14px;flex:0 0 auto}.auth-login-grid{grid-template-columns:1fr;margin:18px 0 8px}.auth-login-grid .full{grid-column:auto}.auth-login-grid input{font-size:16px;padding:13px 14px}.auth-submit{width:100%;padding:13px 16px;font-size:15px;margin-top:12px}.auth-security-note{display:grid;gap:3px;margin-top:18px;padding:12px 14px;border-radius:12px;background:#f4f8fb;color:#55667d;font-size:11px;line-height:1.4}.auth-security-note b{color:#27394f}.auth-connection{text-align:center;margin-top:14px;color:#728198;font-size:11px;font-weight:700}@media(max-width:620px){.auth-gate{padding:14px;background:#eef4fa}.auth-gate-card{padding:22px}.auth-gate-heading h2{font-size:26px}}
+
+/* V1.0.2.9 · aviso de actualización PWA */
+.pwa-update-bar{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:6000;width:min(680px,calc(100vw - 28px));display:flex;align-items:center;justify-content:space-between;gap:18px;padding:13px 14px 13px 17px;border-radius:15px;background:#102b49;color:#fff;box-shadow:0 18px 55px rgba(7,24,43,.30);border:1px solid rgba(255,255,255,.16)}
+.pwa-update-bar.hidden{display:none!important}.pwa-update-copy{display:grid;gap:2px;min-width:0}.pwa-update-copy b{font-size:13px}.pwa-update-copy span{font-size:11px;color:#d7e2ee;line-height:1.35}.pwa-update-bar .btn{flex:0 0 auto;background:#fff;color:#123b62;border-color:#fff;min-width:108px}.pwa-update-bar .btn:hover{background:#eef5fb}
+@media(max-width:560px){.pwa-update-bar{align-items:stretch;flex-direction:column;gap:10px}.pwa-update-bar .btn{width:100%}}
+
+/* V1.0.3.0 · Curvas de calibración */
+.switch-line{display:flex!important;align-items:center;gap:8px;font-weight:800!important;white-space:nowrap}
+.switch-line input{width:auto!important}.curve-config-grid{margin:12px 0}.rules-title.compact{margin-top:8px}
+.calibration-point-row{display:grid;grid-template-columns:54px minmax(150px,1fr) 44px;gap:8px;align-items:end;margin:8px 0}
+.calibration-point-row .point-index{display:grid;place-items:center;height:40px;border-radius:9px;background:#eef4fa;font-weight:900;color:#30506f}
+.calibration-point-row button{height:40px}
+.calibration-finish{border:1px solid #d8e3ed;border-radius:14px;padding:14px;background:#f8fbfd}
+.calibration-finish-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px}.calibration-finish-head div{display:grid;gap:2px}.calibration-finish-head small{color:#6a7a8d}
+.curve-table-wrap{overflow:auto;border:1px solid #dfe7ef;border-radius:10px;background:#fff}.curve-table{width:100%;border-collapse:collapse;min-width:720px}.curve-table th,.curve-table td{padding:8px;border-bottom:1px solid #e8eef4;text-align:center;font-size:12px}.curve-table th{background:#eef4f9;color:#36516b;font-size:10px;text-transform:uppercase;letter-spacing:.04em}.curve-table input{width:92px;padding:8px;text-align:right}.curve-table td:first-child{font-weight:900}.curve-summary{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.curve-summary span{padding:6px 9px;border-radius:9px;background:#edf4fa;font-size:11px;color:#40576c}.curve-summary strong{color:#173b5f}
+.catalog-curve-badge{display:inline-flex;margin-top:5px;padding:3px 7px;border-radius:999px;background:#eaf4ff;color:#15518a;font-size:10px;font-weight:900}
+@media(max-width:650px){.calibration-point-row{grid-template-columns:42px 1fr 42px}}
+
+/* V1.0.3.1 · configuración de curva en ensayos existentes */
+[data-curve-cat]{border-color:#bcd2e6!important;background:#eef6fd!important;color:#174e7b!important;font-weight:800!important}

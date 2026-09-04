@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.2.7-LOGIN-INICIAL';
+const APP_VERSION='V1.0.3.1-CURVA-EXISTENTES';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -440,8 +440,12 @@ async function pullFirebaseData(showToast=true){
     if(showToast)toast('No se pudo actualizar desde Firebase');
   }
 }
+function stopRealtimeSync(){
+  firebaseBridge.unsubs.forEach(fn=>{try{fn()}catch{}});
+  firebaseBridge.unsubs=[];
+}
 function startRealtimeSync(){
-  firebaseBridge.unsubs.forEach(fn=>{try{fn()}catch{}});firebaseBridge.unsubs=[];
+  stopRealtimeSync();
   if(!firebaseBridge.ready)return;
   const {collection,onSnapshot}=firebaseBridge.mods;
   FIREBASE_SYNC_STORES.forEach(storeName=>{
@@ -765,7 +769,7 @@ async function savePlan(){
   const end=minutesToTime(addWorkingMinutes(startMin,dur));
   const load=plans.filter(p=>p.analystId===analyst.id).reduce((t,p)=>t+Number(p.durationMinutes||0),0),capacity=Number(analyst.dailyHours||8)*60;
   if(load+dur>capacity&&!confirm(`La asignación supera la jornada de ${analyst.dailyHours||8} h. ¿Guardar de todas formas?`))return;
-  const rec={id:uid('PLAN'),code:`PLA-${date.replaceAll('-','')}-${String((await getAll('planning')).length+1).padStart(4,'0')}`,date,catalogId:item.id,catalogCode:item.code,catalogName:item.name,section:item.section,family:item.family||'',timeMode:item.timeMode,samples:item.timeMode==='BY_SAMPLES'?Number($('#planSamples').value||0):null,actualSamples:null,durationMinutes:dur,startTime:start,endTime:end,analystId:analyst.id,analystCode:analyst.code,analystName:analyst.name,status:'PROGRAMADO',notes:$('#planNotes').value.trim(),createdAt:nowISO(),updatedAt:nowISO()};
+  const rec={id:uid('PLAN'),code:`PLA-${date.replaceAll('-','')}-${String((await getAll('planning')).length+1).padStart(4,'0')}`,date,catalogId:item.id,catalogCode:item.code,catalogName:item.name,section:item.section,family:item.family||'',timeMode:item.timeMode,samples:item.timeMode==='BY_SAMPLES'?Number($('#planSamples').value||0):null,actualSamples:null,durationMinutes:dur,startTime:start,endTime:end,analystId:analyst.id,analystCode:analyst.code,analystName:analyst.name,status:'PROGRAMADO',calibrationConfig:item.calibrationConfig?.enabled?JSON.parse(JSON.stringify(item.calibrationConfig)):null,calibrationResult:null,notes:$('#planNotes').value.trim(),createdAt:nowISO(),updatedAt:nowISO()};
   await put('planning',rec);
   await queue('CREATE','planning',rec);
   await audit('PLANIFICAR','PLANIFICADOR',rec.code,`${rec.catalogName} · ${rec.analystName} · ${rec.date} ${rec.startTime}-${rec.endTime}`);
@@ -919,36 +923,136 @@ async function startMyActivity(planId){
   toast(`Actividad iniciada · ${formatActualStamp(p.actualStartedAt)}`);
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
 }
+
+function planRequiresCalibration(p){
+  return !!(p?.calibrationConfig?.enabled && Array.isArray(p.calibrationConfig.points) && p.calibrationConfig.points.length);
+}
+function mean(values){return values.reduce((a,b)=>a+b,0)/values.length}
+function sampleSd(values){
+  if(values.length<2)return 0;
+  const m=mean(values);
+  return Math.sqrt(values.reduce((a,v)=>a+(v-m)**2,0)/(values.length-1));
+}
+function linearRegression(points){
+  if(points.length<2)return null;
+  const n=points.length,sx=points.reduce((a,p)=>a+p.x,0),sy=points.reduce((a,p)=>a+p.y,0);
+  const sxx=points.reduce((a,p)=>a+p.x*p.x,0),sxy=points.reduce((a,p)=>a+p.x*p.y,0);
+  const den=n*sxx-sx*sx;if(Math.abs(den)<1e-15)return null;
+  const slope=(n*sxy-sx*sy)/den,intercept=(sy-slope*sx)/n;
+  const ym=sy/n,ssTot=points.reduce((a,p)=>a+(p.y-ym)**2,0),ssRes=points.reduce((a,p)=>a+(p.y-(slope*p.x+intercept))**2,0);
+  return {slope,intercept,r2:ssTot===0?1:1-ssRes/ssTot};
+}
+function existingCalibrationReadings(p){
+  const result=p?.calibrationResult;
+  if(!result?.points)return [];
+  return result.points.map(x=>({readings:Array.isArray(x.readings)?x.readings:[]}));
+}
+function renderFinishCalibration(p){
+  const block=$('#finishCalibrationBlock');if(!block)return;
+  if(!planRequiresCalibration(p)){block.classList.add('hidden');$('#finishCalibrationRows').innerHTML='';return}
+  block.classList.remove('hidden');
+  const unit=p.calibrationConfig.unit||'';
+  $('#finishCalibrationUnit').textContent=`Concentración en ${unit||'unidad configurada'} · ingrese 3 absorbancias por punto.`;
+  const old=existingCalibrationReadings(p);
+  $('#finishCalibrationRows').innerHTML=p.calibrationConfig.points.map((pt,i)=>{
+    const rr=old[i]?.readings||[];
+    return `<tr>
+      <td>P${i+1}</td><td><b>${pt.concentration}</b> ${escapeHtml(unit)}</td>
+      ${[0,1,2].map(j=>`<td><input type="number" step="any" inputmode="decimal" data-cal-reading="${i}-${j}" value="${rr[j]??''}" placeholder="0.000"></td>`).join('')}
+      <td data-cal-mean="${i}">—</td><td data-cal-cv="${i}">—</td>
+    </tr>`;
+  }).join('');
+  $$('[data-cal-reading]').forEach(el=>el.addEventListener('input',updateCalibrationCalculations));
+  updateCalibrationCalculations();
+}
+function collectCalibrationResult(p,requireComplete=true){
+  if(!planRequiresCalibration(p))return {ok:true,result:null};
+  const points=[];
+  for(let i=0;i<p.calibrationConfig.points.length;i++){
+    const readings=[];
+    for(let j=0;j<3;j++){
+      const raw=$(`[data-cal-reading="${i}-${j}"]`)?.value;
+      if(raw===''||raw===undefined){if(requireComplete)return {ok:false,text:`Complete las 3 absorbancias del punto P${i+1}.`};else continue}
+      const n=Number(String(raw).replace(',','.'));
+      if(!Number.isFinite(n))return {ok:false,text:`La absorbancia P${i+1}.${j+1} no es válida.`};
+      readings.push(n);
+    }
+    if(readings.length===3){
+      const avg=mean(readings),sd=sampleSd(readings),cv=avg===0?null:Math.abs(sd/avg*100);
+      points.push({order:i+1,concentration:Number(p.calibrationConfig.points[i].concentration),readings,mean:avg,sd,cv});
+    }else{
+      points.push({order:i+1,concentration:Number(p.calibrationConfig.points[i].concentration),readings});
+    }
+  }
+  const complete=points.every(x=>x.readings.length===3);
+  const reg=complete?linearRegression(points.map(x=>({x:x.concentration,y:x.mean}))):null;
+  return {ok:true,result:{unit:p.calibrationConfig.unit||'',replicates:3,points,regression:reg,completed:complete,capturedAt:nowISO()}};
+}
+function updateCalibrationCalculations(){
+  const planId=$('#finishActivityPlanId')?.value;if(!planId)return;
+  getOne('planning',planId).then(p=>{
+    if(!p||!planRequiresCalibration(p))return;
+    for(let i=0;i<p.calibrationConfig.points.length;i++){
+      const vals=[0,1,2].map(j=>Number($(`[data-cal-reading="${i}-${j}"]`)?.value)).filter(Number.isFinite);
+      const m=$(`[data-cal-mean="${i}"]`),cv=$(`[data-cal-cv="${i}"]`);
+      if(vals.length===3){
+        const avg=mean(vals),sd=sampleSd(vals),cvv=avg===0?null:Math.abs(sd/avg*100);
+        if(m)m.textContent=avg.toFixed(4);
+        if(cv)cv.textContent=cvv===null?'—':cvv.toFixed(2);
+      }else{if(m)m.textContent='—';if(cv)cv.textContent='—'}
+    }
+    const collected=collectCalibrationResult(p,false),res=collected.result,box=$('#finishCalibrationSummary'),val=$('#finishCalibrationValidation');
+    if(res?.completed&&res.regression){
+      box.innerHTML=`<span>Pendiente <strong>${res.regression.slope.toFixed(6)}</strong></span><span>Intercepto <strong>${res.regression.intercept.toFixed(6)}</strong></span><span>R² <strong>${res.regression.r2.toFixed(6)}</strong></span>`;
+      val.textContent='Curva completa: todas las lecturas están registradas.';
+      val.className='inline-alert ok';
+    }else{
+      box.innerHTML='';
+      val.textContent='Complete las tres absorbancias de todos los puntos antes de finalizar.';
+      val.className='inline-alert info';
+    }
+  });
+}
+async function saveCalibrationDraft(){
+  const p=await getOne('planning',$('#finishActivityPlanId').value);if(!p||!planRequiresCalibration(p))return;
+  const c=collectCalibrationResult(p,false);if(!c.ok)return toast(c.text);
+  p.calibrationResult=c.result;p.updatedAt=nowISO();
+  await put('planning',p);await queue('UPDATE','planning',p);
+  await audit('GUARDAR_CURVA_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó avance de curva de ${p.catalogName}`);
+  toast('Lecturas de curva guardadas');
+}
 async function finishMyActivity(planId){
   const _guardPlan=await getOne('planning',planId);if(!_guardPlan||!assertOwnPlan(_guardPlan))return toast('No puede modificar actividades de otro analista');
   const p=await getOne('planning',planId);if(!p)return;
   if(p.status==='REALIZADO')return toast('La actividad ya está finalizada');
   if(!p.actualStartedAt)return toast('Primero debe iniciar la actividad');
 
-  if(requiresActualSamples(p.section)){
+  const needsSamples=requiresActualSamples(p.section),needsCurve=planRequiresCalibration(p);
+  if(needsSamples||needsCurve){
     $('#finishActivityPlanId').value=p.id;
     $('#finishActivitySummary').innerHTML=`<b>${escapeHtml(p.catalogName)}</b><span>${escapeHtml(sectionMeta(p.section).label)} · ${p.startTime}–${p.endTime} · ${minutesText(p.durationMinutes)}</span>`;
-    $('#finishSamplesLabel').classList.remove('hidden');
-    $('#finishActualSamples').required=true;
-    $('#finishActualSamples').value=p.actualSamples??'';
+    $('#finishSamplesLabel').classList.toggle('hidden',!needsSamples);
+    $('#finishActualSamples').required=needsSamples;
+    $('#finishActualSamples').value=needsSamples?(p.actualSamples??''):'';
     $('#finishActivityComment').value='';
-    $('#finishActivityHelp').textContent='Para cerrar esta actividad registre cuántas muestras procesó realmente.';
+    $('#finishActivityHelp').textContent=needsCurve?'Complete las lecturas requeridas de la curva antes de finalizar.': 'Para cerrar esta actividad registre cuántas muestras procesó realmente.';
+    renderFinishCalibration(p);
     $('#finishActivityDialog').showModal();
-    setTimeout(()=>$('#finishActualSamples').focus(),50);
+    setTimeout(()=>needsCurve?document.querySelector('[data-cal-reading]')?.focus():$('#finishActualSamples').focus(),50);
     return;
   }
   await completeActivityRecord(p,null,'');
 }
-async function completeActivityRecord(p,actualSamples=null,finalComment=''){
+async function completeActivityRecord(p,actualSamples=null,finalComment='',calibrationResult=undefined){
   p.status='REALIZADO';p.actualFinishedAt=nowISO();p.updatedAt=nowISO();
-  if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));
+  if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;
   await put('planning',p);await queue('UPDATE','planning',p);
   if(finalComment){
     const comment={id:uid('COM'),planId:p.id,analystId:p.analystId,authorName:p.analystName,text:finalComment,createdAt:nowISO()};
     await put('planComments',comment);await queue('CREATE','planComments',comment);
   }
-  const sampleDetail=p.actualSamples!==null&&p.actualSamples!==undefined?` · ${p.actualSamples} muestras analizadas`:'';
-  await audit('FINALIZAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} finalizó ${p.catalogName} a las ${formatActualStamp(p.actualFinishedAt)}${sampleDetail}`);
+  const sampleDetail=p.actualSamples!==null&&p.actualSamples!==undefined?` · ${p.actualSamples} muestras analizadas`:'';const curveDetail=p.calibrationResult?.completed?` · curva ${p.calibrationResult.points.length} puntos × 3 · R² ${p.calibrationResult.regression?.r2?.toFixed(6)??'—'}`:'';
+  await audit('FINALIZAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} finalizó ${p.catalogName} a las ${formatActualStamp(p.actualFinishedAt)}${sampleDetail}${curveDetail}`);
   toast(`Actividad finalizada${sampleDetail}`);
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();await renderManagementDashboard();
 }
@@ -958,9 +1062,16 @@ async function submitFinishActivity(e){
   if(p.status==='REALIZADO'){ $('#finishActivityDialog').close(); return toast('La actividad ya está finalizada') }
   const samples=Number($('#finishActualSamples').value);
   if(requiresActualSamples(p.section)&&(!Number.isFinite(samples)||samples<0))return toast('Ingrese el número de muestras analizadas');
+  let calibrationResult=undefined;
+  if(planRequiresCalibration(p)){
+    const curve=collectCalibrationResult(p,true);
+    if(!curve.ok)return toast(curve.text);
+    if(!curve.result?.completed)return toast('Complete todos los puntos de la curva');
+    calibrationResult=curve.result;
+  }
   const comment=$('#finishActivityComment').value.trim();
   $('#finishActivityDialog').close();
-  await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment);
+  await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment,calibrationResult);
 }
 
 async function renderRecentMyActivities(analystId){
@@ -1430,7 +1541,7 @@ async function savePlanningEdit(e){
 
 async function renderDashboard(){const [cat,ana,rules]=await Promise.all([getAll('catalog'),getAll('analysts'),getAll('timeRules')]);const findings=await analyzeData(false);$('#statCatalog').textContent=cat.filter(x=>x.status==='ACTIVO').length;$('#statAnalysts').textContent=ana.filter(x=>x.status==='ACTIVO').length;$('#statRules').textContent=rules.length;$('#statAlerts').textContent=findings.filter(x=>x.level!=='OK').length}
 function renderSectionTabs(){const el=$('#sectionTabs');el.innerHTML=SECTIONS.map(s=>`<button class="section-tab ${s.id===currentSection?'active':''}" data-section="${s.id}">${s.label}</button>`).join('');$$('[data-section]').forEach(b=>b.onclick=()=>{currentSection=b.dataset.section;renderSectionTabs();renderCatalog()})}
-async function renderCatalog(){const meta=sectionMeta(currentSection);$('#catalogHeading').textContent=meta.label;$('#catalogHelp').textContent=meta.hint;let data=(await getAll('catalog')).filter(x=>x.section===currentSection);const q=$('#catalogSearch').value.trim().toLowerCase(),st=$('#catalogStatusFilter').value;data=data.filter(x=>(!q||`${x.code} ${x.name} ${x.family||''}`.toLowerCase().includes(q))&&(!st||x.status===st));data.sort((a,b)=>a.name.localeCompare(b.name,'es'));const [rules,steps]=await Promise.all([getAll('timeRules'),getAll('compositeSteps')]);$('#catalogEmpty').classList.toggle('hidden',data.length>0);$('#catalogTableWrap').classList.toggle('hidden',data.length===0);$('#catalogBody').innerHTML=data.map(x=>{const n=rules.filter(r=>r.catalogId===x.id).length,ss=steps.filter(s=>s.catalogId===x.id).sort((a,b)=>a.order-b.order);const time=x.timeMode==='FIXED'?minutesText(x.baseMinutes):x.timeMode==='BY_SAMPLES'?`${n} rango${n===1?'':'s'}`:x.timeMode==='COMPOSITE'?`${minutesText(x.baseMinutes)} · ${ss.length} detalle${ss.length===1?'':'s'}`:'Sin tiempo';const breakdown=ss.length?`<div class="catalog-breakdown">${ss.map(s=>`<span>${escapeHtml(s.name)} · ${minutesText(s.minutes)}</span>`).join('')}</div>`:'';return `<tr><td><b>${x.code}</b></td><td>${sectionMeta(x.section).label}</td><td>${escapeHtml(x.family||'—')}</td><td><b>${escapeHtml(x.name)}</b><br><small>${escapeHtml(x.description||'')}</small>${breakdown}</td><td>${time}</td><td><span class="badge ${x.status==='ACTIVO'?'good':'off'}">${x.status}</span></td><td class="row-actions"><button data-edit-cat="${x.id}">Editar</button><button data-toggle-cat="${x.id}">${x.status==='ACTIVO'?'Desactivar':'Activar'}</button></td></tr>`}).join('');$$('[data-edit-cat]').forEach(b=>b.onclick=()=>editCatalog(b.dataset.editCat));$$('[data-toggle-cat]').forEach(b=>b.onclick=()=>toggleCatalog(b.dataset.toggleCat))}
+async function renderCatalog(){const meta=sectionMeta(currentSection);$('#catalogHeading').textContent=meta.label;$('#catalogHelp').textContent=meta.hint;let data=(await getAll('catalog')).filter(x=>x.section===currentSection);const q=$('#catalogSearch').value.trim().toLowerCase(),st=$('#catalogStatusFilter').value;data=data.filter(x=>(!q||`${x.code} ${x.name} ${x.family||''}`.toLowerCase().includes(q))&&(!st||x.status===st));data.sort((a,b)=>a.name.localeCompare(b.name,'es'));const [rules,steps]=await Promise.all([getAll('timeRules'),getAll('compositeSteps')]);$('#catalogEmpty').classList.toggle('hidden',data.length>0);$('#catalogTableWrap').classList.toggle('hidden',data.length===0);$('#catalogBody').innerHTML=data.map(x=>{const n=rules.filter(r=>r.catalogId===x.id).length,ss=steps.filter(s=>s.catalogId===x.id).sort((a,b)=>a.order-b.order);const time=x.timeMode==='FIXED'?minutesText(x.baseMinutes):x.timeMode==='BY_SAMPLES'?`${n} rango${n===1?'':'s'}`:x.timeMode==='COMPOSITE'?`${minutesText(x.baseMinutes)} · ${ss.length} detalle${ss.length===1?'':'s'}`:'Sin tiempo';const breakdown=ss.length?`<div class="catalog-breakdown">${ss.map(s=>`<span>${escapeHtml(s.name)} · ${minutesText(s.minutes)}</span>`).join('')}</div>`:'';const curve=x.calibrationConfig?.enabled?`<div class="catalog-curve-badge">CURVA · ${x.calibrationConfig.points?.length||0} puntos · triplicado · ${escapeHtml(x.calibrationConfig.unit||'')}</div>`:'';return `<tr><td><b>${x.code}</b></td><td>${sectionMeta(x.section).label}</td><td>${escapeHtml(x.family||'—')}</td><td><b>${escapeHtml(x.name)}</b><br><small>${escapeHtml(x.description||'')}</small>${breakdown}${curve}</td><td>${time}</td><td><span class="badge ${x.status==='ACTIVO'?'good':'off'}">${x.status}</span></td><td class="row-actions"><button data-edit-cat="${x.id}">Editar</button>${x.section==='ENSAYOS_ANALITICOS'?`<button data-curve-cat="${x.id}">${x.calibrationConfig?.enabled?'Editar curva':'Agregar curva'}</button>`:''}<button data-toggle-cat="${x.id}">${x.status==='ACTIVO'?'Desactivar':'Activar'}</button></td></tr>`}).join('');$$('[data-edit-cat]').forEach(b=>b.onclick=()=>editCatalog(b.dataset.editCat));$$('[data-curve-cat]').forEach(b=>b.onclick=()=>configureExistingCalibration(b.dataset.curveCat));$$('[data-toggle-cat]').forEach(b=>b.onclick=()=>toggleCatalog(b.dataset.toggleCat))}
 function setCatalogSectionOptions(){const sel=$('#catalogSection');sel.innerHTML=SECTIONS.map(s=>`<option value="${s.id}">${s.label}</option>`).join('')}
 function updateCatalogForm(){const section=$('#catalogSection').value,meta=sectionMeta(section),timeSel=$('#catalogTimeMode'),forcedComposite=['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS'].includes(section);$('#familyLabel').childNodes[0].nodeValue=meta.family;if(forcedComposite){timeSel.value='COMPOSITE';timeSel.disabled=true;if(section==='RECEPCION_MUESTRAS')setDurationPicker(300)}else{timeSel.disabled=false}const mode=timeSel.value;$('#baseMinutesLabel').classList.toggle('hidden',!['FIXED','COMPOSITE'].includes(mode));$('#catalogBaseHours').disabled=mode==='COMPOSITE'&&section==='RECEPCION_MUESTRAS';$('#catalogBaseMinutePart').disabled=mode==='COMPOSITE'&&section==='RECEPCION_MUESTRAS';$('#rulesEditor').classList.toggle('hidden',mode!=='BY_SAMPLES');$('#compositeEditor').classList.toggle('hidden',mode!=='COMPOSITE');const help=$('#compositeHelp');if(help)help.textContent=section==='RECEPCION_MUESTRAS'?'El jefe seleccionará una sola actividad y el futuro Planificador reservará el bloque completo. En Recepción de Muestras el total queda fijado en 5 h.':section==='MICROBIOLOGIA'?'Defina la duración total de la actividad microbiológica y distribúyala entre sus subactividades. El futuro Planificador reservará el bloque completo con un solo clic.':section==='AASS'?'Defina la duración total del bloque de Absorción Atómica y distribúyala entre sus subactividades. El futuro Planificador reservará todo el bloque con un solo clic.':'Divida la duración total entre las subactividades que componen este bloque.';renderRuleRows();renderStepRows()}
 
@@ -1453,9 +1564,84 @@ function openCatalogFromPlanner(){
   $('#catalogDialogHelp').textContent='Complete el parámetro, clasificación/técnica y tiempo. Al guardar volverá al Planificador con la nueva actividad seleccionada.';
   updateCatalogForm();
 }
-function openCatalog(){setCatalogSectionOptions();$('#catalogForm').reset();$('#catalogId').value='';$('#catalogSection').value=currentSection;$('#catalogStatus').value='ACTIVO';$('#catalogTimeMode').value=['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS'].includes(currentSection)?'COMPOSITE':currentSection==='ENSAYOS_ANALITICOS'?'BY_SAMPLES':'FIXED';editingRules=[];editingSteps=[];if(currentSection==='RECEPCION_MUESTRAS')setDurationPicker(300);else if(['MICROBIOLOGIA','AASS'].includes(currentSection))setDurationPicker(0);$('#catalogDialogTitle').textContent='Nuevo elemento';updateCatalogForm();$('#catalogDialog').showModal()}
-async function editCatalog(id){const all=await getAll('catalog'),x=all.find(r=>r.id===id);if(!x)return;setCatalogSectionOptions();$('#catalogId').value=x.id;$('#catalogSection').value=x.section;$('#catalogName').value=x.name;$('#catalogFamily').value=x.family||'';$('#catalogTimeMode').value=x.timeMode||'FIXED';setDurationPicker(x.section==='RECEPCION_MUESTRAS'?300:(x.baseMinutes||0));$('#catalogStatus').value=x.status;$('#catalogDescription').value=x.description||'';editingRules=(await getAll('timeRules')).filter(r=>r.catalogId===id).sort((a,b)=>a.minSamples-b.minSamples).map(r=>({...r}));editingSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===id).sort((a,b)=>a.order-b.order).map(r=>({...r}));$('#catalogDialogTitle').textContent='Editar elemento';updateCatalogForm();$('#catalogDialog').showModal()}
-function addRule(){editingRules.push({id:uid('TMP'),minSamples:'',maxSamples:'',minutes:''});renderRuleRows()}
+
+let editingCalibrationPoints=[];
+
+function normalizeCalibrationPoint(v){
+  const n=Number(String(v).replace(',','.'));
+  return Number.isFinite(n)?n:null;
+}
+function activityLooksLikeCalibration(name=''){
+  const t=normalizeIdentityText(name);
+  return t.includes('curva')&&t.includes('calibracion');
+}
+function renderCalibrationPointRows(){
+  const box=$('#calibrationPointRows');if(!box)return;
+  box.innerHTML=editingCalibrationPoints.map((p,i)=>`
+    <div class="calibration-point-row">
+      <div class="point-index">P${i+1}</div>
+      <label>Concentración<input type="number" step="any" value="${p.concentration??''}" data-cal-point="${i}" placeholder="Ej. 0.50"></label>
+      <button type="button" class="icon-btn" data-remove-cal-point="${i}">×</button>
+    </div>`).join('');
+  $$('[data-cal-point]').forEach(el=>el.oninput=()=>{editingCalibrationPoints[Number(el.dataset.calPoint)].concentration=el.value;validateCalibrationConfig()});
+  $$('[data-remove-cal-point]').forEach(el=>el.onclick=()=>{editingCalibrationPoints.splice(Number(el.dataset.removeCalPoint),1);renderCalibrationPointRows()});
+  validateCalibrationConfig();
+}
+function addCalibrationPoint(){
+  editingCalibrationPoints.push({concentration:''});
+  renderCalibrationPointRows();
+}
+function updateCalibrationEditor(){
+  const section=$('#catalogSection')?.value||'';
+  const editor=$('#calibrationEditor');
+  if(!editor)return;
+  // Se ofrece especialmente en ensayos analíticos, pero puede usarse en otra sección si hace falta.
+  editor.classList.toggle('hidden',section!=='ENSAYOS_ANALITICOS');
+  if(section!=='ENSAYOS_ANALITICOS')return;
+  const enabled=$('#catalogRequiresCalibration').checked;
+  $('#calibrationConfigBody').classList.toggle('hidden',!enabled);
+  if(enabled)renderCalibrationPointRows();
+}
+function validateCalibrationConfig(){
+  const el=$('#calibrationValidation');if(!el)return {level:'OK',text:''};
+  if(!$('#catalogRequiresCalibration')?.checked){el.textContent='';el.className='inline-alert';return {level:'OK',text:''}}
+  const unit=$('#calibrationUnit').value.trim();
+  const nums=editingCalibrationPoints.map(p=>normalizeCalibrationPoint(p.concentration));
+  let out;
+  if(!unit)out={level:'ERROR',text:'Ingrese la unidad de concentración de la curva.'};
+  else if(nums.length<2)out={level:'ERROR',text:'La curva debe tener al menos 2 puntos.'};
+  else if(nums.some(v=>v===null))out={level:'ERROR',text:'Todos los puntos deben tener una concentración numérica.'};
+  else if(new Set(nums.map(String)).size!==nums.length)out={level:'ERROR',text:'No repita concentraciones dentro de la misma curva.'};
+  else out={level:'OK',text:`Curva configurada: ${nums.length} puntos · triplicado · ${unit}.`};
+  el.textContent=out.text;el.className='inline-alert '+out.level.toLowerCase();return out;
+}
+function calibrationConfigFromForm(){
+  return {
+    enabled:!!$('#catalogRequiresCalibration')?.checked,
+    unit:$('#calibrationUnit')?.value.trim()||'',
+    replicates:3,
+    points:editingCalibrationPoints.map((p,i)=>({order:i+1,concentration:normalizeCalibrationPoint(p.concentration)}))
+  };
+}
+function openCatalog(){setCatalogSectionOptions();$('#catalogForm').reset();$('#catalogId').value='';$('#catalogSection').value=currentSection;$('#catalogStatus').value='ACTIVO';$('#catalogTimeMode').value=['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS'].includes(currentSection)?'COMPOSITE':currentSection==='ENSAYOS_ANALITICOS'?'BY_SAMPLES':'FIXED';editingRules=[];editingSteps=[];editingCalibrationPoints=[];$('#catalogRequiresCalibration').checked=false;$('#calibrationUnit').value='';if(currentSection==='RECEPCION_MUESTRAS')setDurationPicker(300);else if(['MICROBIOLOGIA','AASS'].includes(currentSection))setDurationPicker(0);$('#catalogDialogTitle').textContent='Nuevo elemento';updateCatalogForm();updateCalibrationEditor();$('#catalogDialog').showModal()}
+async function configureExistingCalibration(id){
+  const all=await getAll('catalog');
+  const x=all.find(r=>r.id===id);
+  if(!x)return;
+  if(x.section!=='ENSAYOS_ANALITICOS')return toast('La configuración de curva aplica a Ensayos Analíticos');
+  await editCatalog(id);
+  if(!$('#catalogRequiresCalibration').checked){
+    $('#catalogRequiresCalibration').checked=true;
+    if(!editingCalibrationPoints.length){
+      editingCalibrationPoints=[{concentration:''},{concentration:''},{concentration:''}];
+    }
+  }
+  updateCalibrationEditor();
+  renderCalibrationPointRows();
+  setTimeout(()=>$('#calibrationUnit')?.focus(),80);
+}
+async function editCatalog(id){const all=await getAll('catalog'),x=all.find(r=>r.id===id);if(!x)return;setCatalogSectionOptions();$('#catalogId').value=x.id;$('#catalogSection').value=x.section;$('#catalogName').value=x.name;$('#catalogFamily').value=x.family||'';$('#catalogTimeMode').value=x.timeMode||'FIXED';setDurationPicker(x.section==='RECEPCION_MUESTRAS'?300:(x.baseMinutes||0));$('#catalogStatus').value=x.status;$('#catalogDescription').value=x.description||'';editingRules=(await getAll('timeRules')).filter(r=>r.catalogId===id).sort((a,b)=>a.minSamples-b.minSamples).map(r=>({...r}));editingSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===id).sort((a,b)=>a.order-b.order).map(r=>({...r}));const cc=x.calibrationConfig||{};$('#catalogRequiresCalibration').checked=!!cc.enabled;$('#calibrationUnit').value=cc.unit||'';editingCalibrationPoints=(cc.points||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(p=>({concentration:p.concentration}));$('#catalogDialogTitle').textContent='Editar elemento';updateCatalogForm();updateCalibrationEditor();$('#catalogDialog').showModal()}
+function addRule(){editingRules.push({id:uid('TMP'),minSamples:'',maxSamples:'',minutes:''});renderRuleRows();updateCalibrationEditor()}
 function splitMinutes(total){const n=Math.max(0,Number(total||0));return {hours:Math.floor(n/60),minutes:n%60}}
 function setDurationPicker(total){const d=splitMinutes(total);$('#catalogBaseHours').value=d.hours;$('#catalogBaseMinutePart').value=String(d.minutes)}
 function getDurationPicker(){return Number($('#catalogBaseHours').value||0)*60+Number($('#catalogBaseMinutePart').value||0)}
@@ -1466,7 +1652,7 @@ function compositeTarget(){return $('#catalogSection').value==='RECEPCION_MUESTR
 function renderStepRows(){const box=$('#stepRows');if(!box)return;box.innerHTML=editingSteps.map((s,i)=>{const d=splitMinutes(s.minutes);return `<div class="step-row"><div class="step-order">${i+1}</div><label>Detalle / subactividad<input value="${escapeHtml(s.name||'')}" data-step="${i}" data-step-field="name" placeholder="Ej. Revisión de condiciones"></label><label>Horas<input type="number" min="0" max="8" step="1" value="${d.hours}" data-step-hours="${i}"></label><label>Minutos<select data-step-minutes="${i}">${[0,5,10,15,20,25,30,35,40,45,50,55].map(m=>`<option value="${m}" ${m===d.minutes?'selected':''}>${String(m).padStart(2,'0')} min</option>`).join('')}</select></label><button type="button" class="icon-btn" data-remove-step="${i}">×</button></div>`}).join('');$$('[data-step-field]').forEach(el=>el.oninput=()=>{editingSteps[Number(el.dataset.step)][el.dataset.stepField]=el.value;validateSteps()});$$('[data-step-hours]').forEach(el=>el.oninput=()=>{const i=Number(el.dataset.stepHours),mins=Number($(`[data-step-minutes="${i}"]`).value||0);editingSteps[i].minutes=Number(el.value||0)*60+mins;validateSteps()});$$('[data-step-minutes]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.stepMinutes),hrs=Number($(`[data-step-hours="${i}"]`).value||0);editingSteps[i].minutes=hrs*60+Number(el.value||0);validateSteps()});$$('[data-remove-step]').forEach(el=>el.onclick=()=>{editingSteps.splice(Number(el.dataset.removeStep),1);renderStepRows()});validateSteps()}
 function validateSteps(){const el=$('#stepValidation');if(!el||$('#catalogTimeMode').value!=='COMPOSITE'){if(el)el.textContent='';return {level:'OK',text:''}}const target=compositeTarget(),sum=editingSteps.reduce((a,s)=>a+Number(s.minutes||0),0),missing=editingSteps.some(s=>!String(s.name||'').trim()||!Number(s.minutes));$('#compositeTotalLabel').textContent=minutesText(target);const diff=target-sum;$('#compositeProgress').textContent=diff===0?'Desglose completo':diff>0?`Faltan ${minutesText(diff)} por distribuir`:`Excede por ${minutesText(Math.abs(diff))}`;let out;if(!editingSteps.length)out={level:'ERROR',text:'Agregue al menos un detalle para esta actividad compuesta.'};else if(missing)out={level:'ERROR',text:'Cada detalle debe tener nombre y duración.'};else if(sum!==target)out={level:'ERROR',text:`El desglose suma ${minutesText(sum)} y debe sumar exactamente ${minutesText(target)}.`};else out={level:'OK',text:`Desglose válido: ${editingSteps.length} detalle(s), total ${minutesText(target)}.`};el.textContent=out.text;el.className='inline-alert '+out.level.toLowerCase();return out}
 function validateRuleDraft(){const el=$('#ruleValidation');if($('#catalogTimeMode').value!=='BY_SAMPLES'){el.textContent='';return}const v=validateRules(editingRules);el.textContent=v.text;el.className='inline-alert '+v.level.toLowerCase()}
-async function saveCatalog(ev){ev.preventDefault();const id=$('#catalogId').value,section=$('#catalogSection').value,name=$('#catalogName').value.trim(),family=$('#catalogFamily').value.trim(),timeMode=$('#catalogTimeMode').value,baseMinutes=section==='RECEPCION_MUESTRAS'&&timeMode==='COMPOSITE'?300:getDurationPicker();if(!section||!name)return toast('Complete sección y nombre');if(['FIXED','COMPOSITE'].includes(timeMode)&&!baseMinutes)return toast('Ingrese la duración estándar');if(timeMode==='BY_SAMPLES'){const v=validateRules(editingRules);if(v.level==='ERROR')return toast(v.text)}if(timeMode==='COMPOSITE'){const v=validateSteps();if(v.level==='ERROR')return toast(v.text)}const all=await getAll('catalog');const duplicate=all.find(x=>x.id!==id&&x.section===section&&x.name.trim().toLowerCase()===name.toLowerCase()&&(x.family||'').trim().toLowerCase()===family.toLowerCase());if(duplicate)return toast('Ya existe el mismo elemento en esta sección y clasificación');const existing=id?all.find(x=>x.id===id):null;const rec={id:id||uid('CAT'),code:existing?.code||nextCode(section,all),section,name,family,timeMode,baseMinutes:['FIXED','COMPOSITE'].includes(timeMode)?baseMinutes:null,description:$('#catalogDescription').value.trim(),status:$('#catalogStatus').value,createdAt:existing?.createdAt||nowISO(),updatedAt:nowISO()};await put('catalog',rec);const oldRules=(await getAll('timeRules')).filter(r=>r.catalogId===rec.id);for(const r of oldRules)await del('timeRules',r.id);if(timeMode==='BY_SAMPLES'){for(const r of editingRules){await put('timeRules',{id:uid('TR'),catalogId:rec.id,minSamples:Number(r.minSamples),maxSamples:Number(r.maxSamples),minutes:Number(r.minutes),createdAt:nowISO()})}}const oldSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===rec.id);for(const s of oldSteps)await del('compositeSteps',s.id);if(timeMode==='COMPOSITE'){for(let i=0;i<editingSteps.length;i++){const s=editingSteps[i];await put('compositeSteps',{id:uid('STEP'),catalogId:rec.id,order:i+1,name:String(s.name).trim(),minutes:Number(s.minutes),createdAt:nowISO()})}}await queue(id?'UPDATE':'CREATE','catalog',rec);await audit(id?'EDITAR':'CREAR','CATALOGO_MAESTRO',rec.code,`${sectionMeta(section).label}: ${name}${family?` · ${family}`:''}${timeMode==='COMPOSITE'?` · bloque ${minutesText(baseMinutes)} con ${editingSteps.length} detalles`:''}`);currentSection=section;$('#catalogDialog').close();toast(id?'Elemento actualizado':'Elemento creado');await refreshAll();renderSectionTabs();
+async function saveCatalog(ev){ev.preventDefault();const id=$('#catalogId').value,section=$('#catalogSection').value,name=$('#catalogName').value.trim(),family=$('#catalogFamily').value.trim(),timeMode=$('#catalogTimeMode').value,baseMinutes=section==='RECEPCION_MUESTRAS'&&timeMode==='COMPOSITE'?300:getDurationPicker();if(!section||!name)return toast('Complete sección y nombre');if(['FIXED','COMPOSITE'].includes(timeMode)&&!baseMinutes)return toast('Ingrese la duración estándar');if(timeMode==='BY_SAMPLES'){const v=validateRules(editingRules);if(v.level==='ERROR')return toast(v.text)}if(timeMode==='COMPOSITE'){const v=validateSteps();if(v.level==='ERROR')return toast(v.text)}if($('#catalogRequiresCalibration')?.checked){const v=validateCalibrationConfig();if(v.level==='ERROR')return toast(v.text)}const all=await getAll('catalog');const duplicate=all.find(x=>x.id!==id&&x.section===section&&x.name.trim().toLowerCase()===name.toLowerCase()&&(x.family||'').trim().toLowerCase()===family.toLowerCase());if(duplicate)return toast('Ya existe el mismo elemento en esta sección y clasificación');const existing=id?all.find(x=>x.id===id):null;const rec={id:id||uid('CAT'),code:existing?.code||nextCode(section,all),section,name,family,timeMode,baseMinutes:['FIXED','COMPOSITE'].includes(timeMode)?baseMinutes:null,description:$('#catalogDescription').value.trim(),calibrationConfig:calibrationConfigFromForm(),status:$('#catalogStatus').value,createdAt:existing?.createdAt||nowISO(),updatedAt:nowISO()};await put('catalog',rec);const oldRules=(await getAll('timeRules')).filter(r=>r.catalogId===rec.id);for(const r of oldRules)await del('timeRules',r.id);if(timeMode==='BY_SAMPLES'){for(const r of editingRules){await put('timeRules',{id:uid('TR'),catalogId:rec.id,minSamples:Number(r.minSamples),maxSamples:Number(r.maxSamples),minutes:Number(r.minutes),createdAt:nowISO()})}}const oldSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===rec.id);for(const s of oldSteps)await del('compositeSteps',s.id);if(timeMode==='COMPOSITE'){for(let i=0;i<editingSteps.length;i++){const s=editingSteps[i];await put('compositeSteps',{id:uid('STEP'),catalogId:rec.id,order:i+1,name:String(s.name).trim(),minutes:Number(s.minutes),createdAt:nowISO()})}}await queue(id?'UPDATE':'CREATE','catalog',rec);await audit(id?'EDITAR':'CREAR','CATALOGO_MAESTRO',rec.code,`${sectionMeta(section).label}: ${name}${family?` · ${family}`:''}${timeMode==='COMPOSITE'?` · bloque ${minutesText(baseMinutes)} con ${editingSteps.length} detalles`:''}`);currentSection=section;$('#catalogDialog').close();toast(id?'Elemento actualizado':'Elemento creado');await refreshAll();renderSectionTabs();
 if(plannerCatalogReturn&&!id){
   const keep=plannerCatalogReturn;plannerCatalogReturn=null;
   switchView('planificador');
@@ -1639,6 +1825,12 @@ async function submitFirebaseLogin(e){
 async function firebaseLogout(){
   if(!firebaseBridge.authReady)return;
   try{
+    // Antes de cerrar, intentar confirmar cualquier cambio local pendiente.
+    // Si no hay Internet, el Outbox queda intacto y se reintentará al próximo inicio.
+    if(firebaseBridge.ready&&firebaseBridge.authUser){
+      try{await flushOutbox(false)}catch(e){console.warn('Cierre con Outbox pendiente',e)}
+    }
+    stopRealtimeSync();
     await firebaseBridge.authMods.signOut(firebaseBridge.auth);
     showAuthGate('Sesión cerrada · ingrese nuevamente');
     toast('Sesión cerrada');
@@ -1674,6 +1866,7 @@ async function handleFirebaseAuthState(authUser){
   refreshAuthUI();
 
   if(!authUser){
+    stopRealtimeSync();
     currentSessionUser=null;
     applyRoleUI();
     refreshAuthUI();
@@ -1763,8 +1956,10 @@ async function handleFirebaseAuthState(authUser){
       switchView('inicio');
     }
 
-    // 7. Después activar live sync.
-    try{await flushOutbox(false)}catch(e){console.warn('Outbox pendiente',e)}
+    // 7. Confirmar pendientes, volver a contrastar con nube y recién después activar live sync.
+    // Esto protege el caso: cerrar sesión / cerrar APP / volver horas después.
+    try{await flushOutbox(false)}catch(e){console.warn('Outbox pendiente al reanudar sesión',e)}
+    try{await pullFirebaseData(false)}catch(e){console.warn('Revisión cloud pendiente al reanudar sesión',e)}
     startRealtimeSync();
     await refreshMigrationUI();
 
@@ -1842,7 +2037,7 @@ function switchView(view){
     view=currentSessionUser?.role==='ANALISTA'?'mi-jornada':'inicio';
   }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador')refreshPlanner();if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='gestion')renderManagementDashboard()}
 async function init(){db=await openDB();
-  firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
+  firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogName').addEventListener('input',()=>{if($('#catalogSection').value==='ENSAYOS_ANALITICOS'&&activityLooksLikeCalibration($('#catalogName').value)&&!$('#catalogId').value){$('#catalogRequiresCalibration').checked=true;updateCalibrationEditor()}});$('#catalogRequiresCalibration').addEventListener('change',updateCalibrationEditor);$('#calibrationUnit').addEventListener('input',validateCalibrationConfig);if($('#btnAddCalibrationPoint'))$('#btnAddCalibrationPoint').onclick=addCalibrationPoint;$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
 $('#planActivitySearch').addEventListener('input',renderPlanSelectors);
 if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openCatalogFromPlanner;$('#planSamples').addEventListener('input',smartPlannerRecalculate);$('#planStart').addEventListener('input',updatePlanPreview);$('#planDate').addEventListener('change',async()=>{await smartPlannerRecalculate();await renderExecutivePlanner();if($('#bossAIResults')){$('#bossAIResults').classList.add('hidden');$('#bossAIEmpty').classList.remove('hidden')}});$('#agendaStatus').addEventListener('change',renderAgenda);if($('#btnSuggestAnalyst'))$('#btnSuggestAnalyst').onclick=suggestAnalyst;if($('#btnOptimizeDay'))$('#btnOptimizeDay').onclick=analyzeBossDay;if($('#btnSavePlan'))$('#btnSavePlan').onclick=savePlan;$('#planAnalyst').addEventListener('change',autoScheduleSelectedAnalyst);}if($('#myDayDate')){$('#myDayDate').addEventListener('change',renderMyDay);if($('#btnMyDayToday'))$('#btnMyDayToday').onclick=()=>{$('#myDayDate').value=dateToday();renderMyDay()};$('#myDayAnalyst').addEventListener('change',renderMyDay);if($('#btnRestoreBossPlan'))$('#btnRestoreBossPlan').onclick=()=>restoreBossSchedule($('#myDayDate').value,$('#myDayAnalyst').value);}if($('#mgmtFrom')){
   $('#mgmtFrom').value=monthStartISO();
@@ -1857,7 +2052,7 @@ if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openC
   $('#planningEditForm').addEventListener('submit',savePlanningEdit);
   $('#editPlanStart').addEventListener('input',previewPlanningEdit);
 }
-if($('#finishActivityForm'))$('#finishActivityForm').addEventListener('submit',submitFinishActivity);
+if($('#finishActivityForm'))$('#finishActivityForm').addEventListener('submit',submitFinishActivity);if($('#btnSaveCalibrationDraft'))$('#btnSaveCalibrationDraft').onclick=saveCalibrationDraft;
 if($('#btnSaveConfig'))$('#btnSaveConfig').onclick=saveConfig;if($('#btnBackup'))$('#btnBackup').onclick=backup;if($('#btnReset'))$('#btnReset').onclick=resetDB;if($('#localSessionSelect'))$('#localSessionSelect').addEventListener('change',changeLocalSession);if($('#btnFirebaseLogin'))$('#btnFirebaseLogin').onclick=openFirebaseLogin;
 if($('#btnFirebaseLogout'))$('#btnFirebaseLogout').onclick=firebaseLogout;
 if($('#firebaseLoginForm')){
@@ -1880,22 +2075,31 @@ await loadConfig();await refreshAll();
   }
 if($('#myDayDate'))$('#myDayDate').value=dateToday();
 if($('#planDate')&&!$('#planDate').value)$('#planDate').value=dateToday();
-if(!firebaseBridge.configured)switchView(currentSessionUser?.role==='ANALISTA'?'mi-jornada':'inicio');if('serviceWorker' in navigator){
-
-  try{
-    const regs=await navigator.serviceWorker.getRegistrations();
-    await Promise.all(regs.map(r=>r.unregister()));
-  }catch(e){console.warn('SW cleanup',e)}
+if(!firebaseBridge.configured)switchView(currentSessionUser?.role==='ANALISTA'?'mi-jornada':'inicio');
 }
-if('caches' in window){
-  try{
-    const keys=await caches.keys();
-    await Promise.all(keys.filter(k=>k.startsWith('erp-planificacion-')).map(k=>caches.delete(k)));
-  }catch(e){console.warn('Cache cleanup',e)}
-}}
 init().catch(e=>{console.error(e);alert('No se pudo iniciar la base local: '+e.message)});
 
-window.addEventListener('online',()=>{if(firebaseBridge.ready){scheduleOutboxFlush(50)}else initFirebaseBridge()});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)scheduleOutboxFlush(120)});
+let cloudResumeBusy=false;
+let lastCloudResumeAt=0;
+async function resumeCloudSession(force=false){
+  if(cloudResumeBusy||!firebaseBridge.ready||!firebaseBridge.authUser)return;
+  const now=Date.now();
+  if(!force&&now-lastCloudResumeAt<60000){scheduleOutboxFlush(80);return}
+  cloudResumeBusy=true;
+  lastCloudResumeAt=now;
+  try{
+    await flushOutbox(false);
+    await pullFirebaseData(false);
+    startRealtimeSync();
+  }catch(e){
+    console.warn('Reanudación de sincronización',e);
+  }finally{
+    cloudResumeBusy=false;
+    await refreshSyncUI();
+  }
+}
+window.addEventListener('online',()=>{if(firebaseBridge.ready)resumeCloudSession(true);else initFirebaseBridge()});
+window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)resumeCloudSession(false)});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)resumeCloudSession(false)});
 setInterval(()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)scheduleOutboxFlush(200)},10000);
 window.addEventListener('offline',()=>setSyncState('LOCAL','Sin conexión · cambios protegidos localmente'));

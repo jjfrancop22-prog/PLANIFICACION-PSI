@@ -1,3 +1,12 @@
-# ERP Planificación NextGen V1.0.2.7 — Login Inicial Firebase
+# ERP Planificación NextGen V1.0.3.1
 
-Al abrir el ERP se muestra primero la pantalla de acceso. Después de autenticar, JEFE abre Inicio y ANALISTA abre Mi Jornada. Si Firebase conserva una sesión válida, la aplicación verifica la sesión y entra automáticamente. Cerrar sesión vuelve a la pantalla de acceso. No se modifica IndexedDB ni Firestore.
+Mejora puntual para curvas existentes:
+
+- En **Ensayos Analíticos**, cada actividad ya creada muestra **Agregar curva**.
+- Si ya fue configurada, muestra **Editar curva**.
+- Se modifica el mismo registro del catálogo; no se duplica ni se crea uno nuevo.
+- La configuración se guarda solo al pulsar Guardar.
+- Las planificaciones históricas mantienen su configuración anterior.
+- Las planificaciones nuevas tomarán la nueva configuración de curva.
+
+No se cambió IndexedDB, DB_VERSION, Firestore, roles ni sincronización.
