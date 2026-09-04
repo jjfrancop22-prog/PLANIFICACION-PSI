@@ -241,3 +241,9 @@
 .multi-container-list{display:grid;gap:10px}.reagent-container-use{border:1px solid #dce7ef;border-radius:11px;padding:10px;background:#fff}.reagent-container-use.depleted{border-color:#e5b34f;background:#fffaf0}
 .container-use-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px}.container-use-check{display:flex!important;align-items:center;gap:7px;font-weight:900!important}.container-use-check input{width:auto!important}
 @media(max-width:850px){.container-config-row{grid-template-columns:1fr 1fr}.container-config-row button{grid-column:2;justify-self:end}}
+
+/* V1.0.5.5 · reactivos no utilizados */
+.reagent-used-result strong{font-weight:900}
+
+/* V1.0.5.6 · eliminación definitiva */
+.deleted-sync-note{font-size:10px;color:#7f8d9b}

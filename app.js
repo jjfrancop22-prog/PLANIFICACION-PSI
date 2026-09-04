@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.4-MULTIPLES-ENVASES';
+const APP_VERSION='V1.0.5.6-ELIMINACION-DEFINITIVA';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1094,7 +1094,7 @@ function updateReagentCalculations(p){
       const containers=Array.isArray(r.containers)&&r.containers.length?r.containers:[{id:'LEGACY',label:'Envase 1',tareWeight:r.tareWeight,initialWeight:r.initialWeight}];
       for(const env of containers){
         const key=`${r.id}|${env.id}`,selected=$(`[data-use-container="${key}"]`)?.checked,result=$(`[data-env-result="${key}"]`),target=$(`[data-env-used="${key}"]`);
-        if(!selected){if(result)result.innerHTML='No utilizado en esta actividad.';if(target)target.value='';continue}
+        if(!selected){if(result)result.innerHTML='<strong>NO UTILIZADO</strong> en esta actividad.';if(target)target.value='';continue}
         const initial=Number($(`[data-env-initial="${key}"]`)?.value),finalWeight=Number($(`[data-env-final="${key}"]`)?.value);
         if(!Number.isFinite(initial)||!Number.isFinite(finalWeight)){if(result)result.innerHTML='Consumo: <strong>—</strong>';continue}
         const used=initial-finalWeight,density=Number(r.density),volumeMl=r.physicalState==='LIQUID'&&density>0?used/density:null;
@@ -1107,7 +1107,7 @@ function updateReagentCalculations(p){
     }
   }
   const check=collectReagentResult(p,false),v=$('#finishReagentValidation');if(!v)return;
-  if(check.complete){v.textContent='Todos los consumos están completos.';v.className='inline-alert ok'}else{v.textContent='Seleccione el/los envases utilizados y complete sus pesos finales.';v.className='inline-alert info'}
+  if(check.complete){v.textContent='Registro listo. Los reactivos sin envase marcado quedarán como NO UTILIZADOS.';v.className='inline-alert ok'}else{v.textContent='Complete únicamente los pesos finales de los envases que haya marcado como utilizados.';v.className='inline-alert info'}
 }
 
 function collectReagentResult(p,requireComplete=true){
@@ -1125,13 +1125,20 @@ function collectReagentResult(p,requireComplete=true){
         const used=initialWeight-finalWeight,density=r.physicalState==='LIQUID'?Number(r.density):null,volumeUsedMl=r.physicalState==='LIQUID'&&density>0?used/density:null,netRemainingG=Math.max(0,finalWeight-tareWeight),netRemainingMl=r.physicalState==='LIQUID'&&density>0?netRemainingG/density:null,depleted=netRemainingG<=0.000001,source=$(`[data-env-initial="${key}"]`)?.dataset?.envSource||'HISTORICO';
         usedContainers.push({containerId:env.id,label:env.label,containerType:env.containerType||'FRASCO',usedInActivity:true,tareWeight,initialWeight,finalWeight,used,volumeUsedMl,netRemainingG,netRemainingMl,depleted,initialSource:source,initialWeightCorrected:source==='CORREGIDO_MANUAL'});
       }
-      if(!usedContainers.length){complete=false;if(requireComplete)return {ok:false,text:`Seleccione al menos un frasco o sobre utilizado de ${r.name}.`}}
+      if(!usedContainers.length){
+        items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density:r.physicalState==='LIQUID'?Number(r.density):null,containers:[],used:0,volumeUsedMl:r.physicalState==='LIQUID'?0:null,consumptionValue:0,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',usedInActivity:false,notUsed:true,depleted:false});
+        continue;
+      }
       const totalMass=usedContainers.reduce((a,e)=>a+(e.used||0),0),totalMl=r.physicalState==='LIQUID'?usedContainers.reduce((a,e)=>a+(e.volumeUsedMl||0),0):null;
-      items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density:r.physicalState==='LIQUID'?Number(r.density):null,containers:usedContainers,used:totalMass,volumeUsedMl:totalMl,consumptionValue:r.physicalState==='LIQUID'?totalMl:totalMass,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',depleted:usedContainers.every(e=>e.depleted)});
+      items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density:r.physicalState==='LIQUID'?Number(r.density):null,containers:usedContainers,used:totalMass,volumeUsedMl:totalMl,consumptionValue:r.physicalState==='LIQUID'?totalMl:totalMass,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',usedInActivity:true,notUsed:false,depleted:usedContainers.every(e=>e.depleted)});
     }else{
-      const raw=$(`[data-reag-count="${r.id}"]`)?.value;if(raw===''){complete=false;if(requireComplete)return {ok:false,text:`Ingrese la cantidad utilizada de ${r.name}.`};continue}
+      const raw=$(`[data-reag-count="${r.id}"]`)?.value;
+      if(raw===''){
+        items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:r.unit||'unidad',used:0,usedInActivity:false,notUsed:true});
+        continue;
+      }
       const used=Number(raw);if(!Number.isFinite(used)||used<0)return {ok:false,text:`Revise la cantidad utilizada de ${r.name}.`};
-      items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:r.unit||'unidad',used});
+      items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:r.unit||'unidad',used,usedInActivity:used>0,notUsed:used===0});
     }
   }
   return {ok:true,complete,result:{items,completed:complete,capturedAt:nowISO()}};
@@ -1174,7 +1181,7 @@ function technicalRequirementMenuHtml(p,req){
 
 function mergeReagentConfigFromCatalog(oldCfg=[],newCfg=[]){const m=new Map((oldCfg||[]).map(x=>[x.id,x]));return (newCfg||[]).map((x,i)=>({...m.get(x.id),...JSON.parse(JSON.stringify(x)),order:x.order??i+1}))}
 function reagentIsDepleted(item){if(!item||item.mode!=='WEIGHT')return false;if(item.depleted===true)return true;const f=Number(item.finalWeight??item.after),t=Number(item.tareWeight);return Number.isFinite(f)&&Number.isFinite(t)&&f<=t+0.000001}
-async function latestConfirmedReagentRecord(reagent,excludePlanId=null){const key=reagentCycleKey(reagent),plans=await getAll('planning');let best=null;for(const p of plans){if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;for(const item of p.reagentResult.items){if(reagentCycleKey(item)!==key)continue;const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;if(!best||stamp>best.stamp)best={plan:p,item,stamp}}}return best}
+async function latestConfirmedReagentRecord(reagent,excludePlanId=null){const key=reagentCycleKey(reagent),plans=await visiblePlanningRows();let best=null;for(const p of plans){if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;for(const item of p.reagentResult.items){if(reagentCycleKey(item)!==key)continue;const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;if(!best||stamp>best.stamp)best={plan:p,item,stamp}}}return best}
 async function hydratePlanTechnicalRequirements(p){
   if(!p)return p;let changed=false;
   const catalog=await getAll('catalog');let item=catalog.find(x=>x.id===p.catalogId);
@@ -1369,7 +1376,7 @@ async function restoreBossSchedule(date,analystId){
 async function renderMyDay(){
   if(!$('#myDayCards'))return;
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
-  const plans=(await getAll('planning')).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
+  const plans=(await visiblePlanningRows()).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
   $('#myDayEmpty').classList.toggle('hidden',plans.length>0);
   const a=(await getAll('analysts')).find(x=>x.id===analystId);
   const total=plans.reduce((t,p)=>t+Number(p.durationMinutes||0),0);
@@ -1572,13 +1579,33 @@ async function applyBossRecommendation(recId){
 
 async function renderAgenda(){if(!$('#agendaBody'))return;const date=$('#planDate').value,st=$('#agendaStatus').value;let data=(await getAll('planning')).filter(p=>p.date===date&&(!st||p.status===st));data.sort((a,b)=>a.startTime.localeCompare(b.startTime)||a.analystName.localeCompare(b.analystName,'es'));$('#agendaEmpty').classList.toggle('hidden',data.length>0);$('#agendaTableWrap').classList.toggle('hidden',data.length===0);const steps=await getAll('compositeSteps'),comments=await getAll('planComments');$('#agendaBody').innerHTML=data.map(p=>{const ss=steps.filter(s=>s.catalogId===p.catalogId).sort((a,b)=>a.order-b.order),cc=comments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));const detail=ss.length?`<div class="agenda-detail">${ss.map(s=>`${escapeHtml(s.name)} (${minutesText(s.minutes)})`).join(' · ')}</div>`:'';const note=p.notes?`<div class="agenda-note"><b>Jefe:</b> ${escapeHtml(p.notes)}</div>`:'';const comm=cc.length?`<div class="agenda-comments"><b>Analista (${cc.length}):</b> ${cc.map(c=>escapeHtml(c.text)).join(' · ')}</div>`:'';return `<tr><td><b>${p.startTime}-${p.endTime}</b></td><td>${escapeHtml(p.analystName)}</td><td>${escapeHtml(sectionMeta(p.section).label)}</td><td><b>${escapeHtml(p.catalogName)}</b>${p.samples?`<div class="agenda-detail">${p.samples} muestras</div>`:''}${detail}${note}${comm}</td><td>${minutesText(p.durationMinutes)}</td><td><select class="status-select" data-plan-status="${p.id}"><option ${p.status==='PROGRAMADO'?'selected':''}>PROGRAMADO</option><option ${p.status==='EN PROCESO'?'selected':''}>EN PROCESO</option><option ${p.status==='REALIZADO'?'selected':''}>REALIZADO</option><option ${p.status==='CANCELADO'?'selected':''}>CANCELADO</option></select></td><td class="row-actions"><button data-plan-delete="${p.id}">Eliminar</button></td></tr>`}).join('');$$('[data-plan-status]').forEach(el=>el.onchange=()=>changePlanStatus(el.dataset.planStatus,el.value));$$('[data-plan-delete]').forEach(el=>el.onclick=()=>deletePlan(el.dataset.planDelete))}
 async function changePlanStatus(id,status){const p=await getOne('planning',id);if(!p)return;p.status=status;p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p);await audit('CAMBIAR_ESTADO','PLANIFICADOR',p.code,`${p.catalogName}: ${status}`);toast('Estado actualizado');await refreshPlanner();await renderAudit()}
-async function deletePlan(id){const p=await getOne('planning',id);if(!p||!confirm(`¿Eliminar la planificación ${p.code}? El evento quedará en trazabilidad.`))return;await del('planning',id);await queue('DELETE','planning',{id,code:p.code});await audit('ELIMINAR','PLANIFICADOR',p.code,`${p.catalogName} · ${p.analystName}`);toast('Planificación eliminada');await refreshPlanner();await renderAudit()}
-async function refreshPlanner(){await renderPlanSelectors();await renderDailyLoad();await renderAgenda();await renderExecutivePlanner()}
+async function deletePlan(id){
+  const p=await getOne('planning',id);if(!p)return;
+  if(currentSessionUser?.role!=='JEFE')return toast('Solo JEFE puede eliminar planificación');
+  if(!confirm(`¿Eliminar definitivamente "${p.catalogName}" de ${p.analystName}?`))return;
 
+  // 1) Tombstone first: prevents realtime/cloud replay from resurrecting this record.
+  await markPlanningDeleted(id);
 
-function monthStartISO(dateStr=dateToday()){
-  const d=new Date(`${dateStr}T12:00:00`);
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`;
+  // 2) Delete locally immediately.
+  await del('planning',id);
+
+  // 3) Remove related comments locally and queue cloud deletes.
+  const comments=(await getAll('planComments')).filter(x=>x.planId===id);
+  for(const cm of comments){
+    await del('planComments',cm.id);
+    await queue('DELETE','planComments',{id:cm.id});
+  }
+
+  // 4) Queue and force Firestore deletion.
+  await queue('DELETE','planning',{id});
+  try{await flushOutbox(false)}catch(e){console.warn('delete flush',e)}
+
+  await audit('ELIMINAR_PLANIFICACION_DEFINITIVA','PLANIFICADOR',p.code||id,`${p.analystName} · ${p.catalogName} · ${p.date}`);
+  toast('Actividad eliminada definitivamente');
+  await renderPlanning();
+  if(typeof renderMyDay==='function')await renderMyDay();
+  if(typeof renderDailyMonitor==='function'&&currentSessionUser?.role==='JEFE')await renderDailyMonitor();
 }
 function mgmtRealMinutes(p){
   return p.actualStartedAt&&p.actualFinishedAt?realWorkMinutesBetween(p.actualStartedAt,p.actualFinishedAt):0;
@@ -1618,15 +1645,16 @@ function dailyTechnicalSummary(p){
   if(p.calibrationResult?.completed){const r2=p.calibrationResult.regression?.r2;parts.push(`Curva ${p.calibrationResult.points?.length||0} puntos${Number.isFinite(r2)?` · R² ${r2.toFixed(4)}`:''}`)}
   else if(planRequiresCalibration(p))parts.push('Curva pendiente');
   if(p.reagentResult?.items?.length){
-    const x=p.reagentResult.items.slice(0,3).map(r=>r.mode==='COUNT'?`${r.name}: ${r.used??'—'} ${r.unit||'u'}`:r.physicalState==='LIQUID'?`${r.name}: ${Number(r.volumeUsedMl||0).toFixed(2)} mL`:`${r.name}: ${Number(r.used||0).toFixed(2)} g`);
-    parts.push(`Reactivos · ${x.join(' · ')}${p.reagentResult.items.length>3?' · …':''}`);
+    const usedItems=p.reagentResult.items.filter(r=>!r.notUsed&&r.usedInActivity!==false);
+    const x=usedItems.slice(0,3).map(r=>r.mode==='COUNT'?`${r.name}: ${r.used??'—'} ${r.unit||'u'}`:r.physicalState==='LIQUID'?`${r.name}: ${Number(r.volumeUsedMl||0).toFixed(2)} mL`:`${r.name}: ${Number(r.used||0).toFixed(2)} g`);
+    parts.push(x.length?`Reactivos · ${x.join(' · ')}${usedItems.length>3?' · …':''}`:'Reactivos · sin consumo');
   }else if(planHasReagents(p))parts.push('Reactivos pendientes');
   return parts.join(' | ');
 }
 async function renderDailyMonitor(){
   if(currentSessionUser?.role!=='JEFE')return;
   const date=$('#dailyMonitorDate')?.value||dateToday();
-  const plans=(await getAll('planning')).filter(p=>p.date===date).sort((a,b)=>(a.startTime||'').localeCompare(b.startTime||''));
+  const plans=(await visiblePlanningRows()).filter(p=>p.date===date).sort((a,b)=>(a.startTime||'').localeCompare(b.startTime||''));
   const analysts=(await getAll('analysts')).filter(a=>a.status==='ACTIVO'&&isOperationalAnalyst(a)).sort((a,b)=>a.name.localeCompare(b.name,'es'));
   const comments=await getAll('planComments');
   const total=plans.length,done=plans.filter(p=>p.status==='REALIZADO').length,inProgress=plans.filter(p=>p.actualStartedAt&&p.status!=='REALIZADO').length,pending=plans.filter(p=>!p.actualStartedAt&&p.status!=='REALIZADO').length;
@@ -1772,11 +1800,11 @@ async function exportReagentConsumptionExcel(){
   const catalog=await getAll('catalog');
   if(!filtered.length&&!allPlans.length)return toast('No hay registros de reactivos para exportar');
 
-  const consumptionHeaders=['Fecha','Código planificación','Analista','Sección','Parámetro / actividad','Técnica / clasificación','Reactivo / material','Tipo de control','Estado físico','Densidad g/mL','Tara envase g','Peso inicial vigente g','Origen peso inicial','Corregido por','Peso final registrado g','Consumo masa g','Consumo volumen mL','Cantidad contable utilizada','Unidad de consumo','Inventario neto final g','Inventario neto final mL','Hora inicio real','Hora fin real'];
+  const consumptionHeaders=['Fecha','Código planificación','Analista','Sección','Parámetro / actividad','Técnica / clasificación','Reactivo / material','Estado de uso','Tipo de control','Estado físico','Densidad g/mL','Tara envase g','Peso inicial vigente g','Origen peso inicial','Corregido por','Peso final registrado g','Consumo masa g','Consumo volumen mL','Cantidad contable utilizada','Unidad de consumo','Inventario neto final g','Inventario neto final mL','Hora inicio real','Hora fin real'];
   const consumptionRows=[];
   filtered.forEach(p=>{
     (p.reagentResult.items||[]).forEach(r=>consumptionRows.push([
-      p.date,p.code,p.analystName,sectionMeta(p.section).label,p.catalogName,p.family||'',r.name||'',reagentModeLabel(r.mode),
+      p.date,p.code,p.analystName,sectionMeta(p.section).label,p.catalogName,p.family||'',r.name||'',r.notUsed?'NO UTILIZADO':'UTILIZADO',reagentModeLabel(r.mode),
       r.mode==='WEIGHT'?(r.physicalState==='LIQUID'?'LÍQUIDO':'SÓLIDO'):'',r.mode==='WEIGHT'?(r.density??''):'',r.mode==='WEIGHT'?(r.tareWeight??''):'',
       r.mode==='WEIGHT'?(r.initialWeight??r.before??''):'',r.mode==='WEIGHT'?(r.initialSource||''):'',r.mode==='WEIGHT'?(r.initialWeightCorrectedBy||''):'',r.mode==='WEIGHT'?(r.finalWeight??r.after??''):'',r.mode==='WEIGHT'?(r.used??''):'',r.mode==='WEIGHT'?(r.volumeUsedMl??''):'',
       r.mode==='COUNT'?(r.used??''):'',r.mode==='WEIGHT'?(r.physicalState==='LIQUID'?'mL':'g'):(r.unit||'unidad'),r.mode==='WEIGHT'?(r.netRemainingG??''):'',r.mode==='WEIGHT'?(r.netRemainingMl??''):'',
@@ -1825,7 +1853,7 @@ async function exportReagentConsumptionExcel(){
   }
   inventoryRows.sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es'));
 
-  const numericConsumption=new Set([9,10,11,14,15,16,17,19,20]);
+  const numericConsumption=new Set([10,11,12,15,16,17,18,20,21]);
   const numericInventory=new Set([3,4,5,6,7,9]);
   const rowXml=(row,numSet)=>`<Row>${row.map((x,i)=>xmlCell(x,(numSet.has(i)&&x!==''&&Number.isFinite(Number(x)))?'Number':'String',(numSet.has(i)&&x!==''?'Num':''))).join('')}</Row>`;
   const xml=`<?xml version="1.0"?>
@@ -2014,6 +2042,53 @@ function reagentConfigFromForm(){
   if(!sectionAllowsReagents(section)||!$('#catalogUsesReagents')?.checked)return [];
   return editingReagents.map((r,i)=>{const containers=r.mode==='WEIGHT'?ensureReagentContainers(r).map((e,j)=>({id:e.id||uid('ENV'),order:j+1,label:(e.label||`Envase ${j+1}`).trim(),containerType:e.containerType==='SOBRE'?'SOBRE':'FRASCO',tareWeight:Number(e.tareWeight),initialWeight:Number(e.initialWeight),status:e.status||'ACTIVO'})):[];const first=containers[0]||{};return {id:r.id||uid('REA'),order:i+1,name:(r.name||'').trim(),mode:r.mode==='WEIGHT'?'WEIGHT':'COUNT',unit:(r.unit||reagentDefaultUnit(r.mode)).trim(),initialWeight:r.mode==='WEIGHT'?Number(first.initialWeight??r.initialWeight):null,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.mode==='WEIGHT'&&r.physicalState==='LIQUID'?Number(r.density):null,tareWeight:r.mode==='WEIGHT'?Number(first.tareWeight??r.tareWeight):null,containers};});
 }
+
+const DELETED_PLANNING_CONFIG_KEY='deletedPlanningIdsV1';
+
+async function getDeletedPlanningIds(){
+  const rec=await getOne('config',DELETED_PLANNING_CONFIG_KEY);
+  return new Set(Array.isArray(rec?.ids)?rec.ids:[]);
+}
+async function saveDeletedPlanningIds(ids){
+  const rec={id:DELETED_PLANNING_CONFIG_KEY,ids:[...ids],updatedAt:nowISO()};
+  await put('config',rec);
+  // config is JEFE-only in Firestore and this operation is JEFE-only from planning admin.
+  try{await queue('UPDATE','config',rec)}catch(e){console.warn('tombstone sync',e)}
+}
+async function markPlanningDeleted(id){
+  const ids=await getDeletedPlanningIds();
+  ids.add(id);
+  await saveDeletedPlanningIds(ids);
+}
+async function unmarkPlanningDeleted(id){
+  const ids=await getDeletedPlanningIds();
+  if(ids.delete(id))await saveDeletedPlanningIds(ids);
+}
+async function purgeDeletedPlanningLocally(){
+  const ids=await getDeletedPlanningIds();
+  if(!ids.size)return;
+  const plans=await getAll('planning');
+  for(const p of plans){
+    if(ids.has(p.id))await del('planning',p.id);
+  }
+}
+async function isPlanningDeleted(id){
+  const ids=await getDeletedPlanningIds();
+  return ids.has(id);
+}
+async function visiblePlanningRows(rows=null){
+  const plans=rows||await getAll('planning');
+  const deleted=await getDeletedPlanningIds();
+  const byId=new Map();
+  for(const p of plans){
+    if(!p?.id||deleted.has(p.id))continue;
+    const prev=byId.get(p.id);
+    const pt=Date.parse(p.updatedAt||p.createdAt||0)||0,qt=prev?(Date.parse(prev.updatedAt||prev.createdAt||0)||0):-1;
+    if(!prev||pt>=qt)byId.set(p.id,p);
+  }
+  return [...byId.values()];
+}
+
 function planHasReagents(p){return Array.isArray(p?.reagentConfig)&&p.reagentConfig.length>0}
 
 let editingCalibrationPoints=[];
@@ -2475,7 +2550,7 @@ function switchView(view){
     toast('Este módulo no está habilitado para su rol');
     view=currentSessionUser?.role==='ANALISTA'?'mi-jornada':'inicio';
   }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],'seguimiento-diario':['Seguimiento Diario','Vista ejecutiva del trabajo diario por analista'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador')refreshPlanner();if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='seguimiento-diario')renderDailyMonitor();if(view==='gestion')renderManagementDashboard()}
-async function init(){db=await openDB();
+async function init(){db=await openDB();await purgeDeletedPlanningLocally();await purgeDeletedPlanningLocally();
   firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogName').addEventListener('input',()=>{if($('#catalogSection').value==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration($('#catalogName').value)&&!$('#catalogId').value){$('#catalogRequiresCalibration').checked=true;updateCalibrationEditor()}});$('#catalogRequiresCalibration').addEventListener('change',updateCalibrationEditor);$('#calibrationUnit').addEventListener('input',validateCalibrationConfig);if($('#btnAddCalibrationPoint'))$('#btnAddCalibrationPoint').onclick=addCalibrationPoint;if($('#catalogUsesReagents'))$('#catalogUsesReagents').addEventListener('change',updateReagentEditor);if($('#btnAddReagent'))$('#btnAddReagent').onclick=addReagent;$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
 $('#planActivitySearch').addEventListener('input',renderPlanSelectors);
 if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openCatalogFromPlanner;$('#planSamples').addEventListener('input',smartPlannerRecalculate);$('#planStart').addEventListener('input',updatePlanPreview);$('#planDate').addEventListener('change',async()=>{await smartPlannerRecalculate();await renderExecutivePlanner();if($('#bossAIResults')){$('#bossAIResults').classList.add('hidden');$('#bossAIEmpty').classList.remove('hidden')}});$('#agendaStatus').addEventListener('change',renderAgenda);if($('#btnSuggestAnalyst'))$('#btnSuggestAnalyst').onclick=suggestAnalyst;if($('#btnOptimizeDay'))$('#btnOptimizeDay').onclick=analyzeBossDay;if($('#btnSavePlan'))$('#btnSavePlan').onclick=savePlan;$('#planAnalyst').addEventListener('change',autoScheduleSelectedAnalyst);}if($('#myDayDate')){$('#myDayDate').addEventListener('change',renderMyDay);if($('#btnMyDayToday'))$('#btnMyDayToday').onclick=()=>{$('#myDayDate').value=dateToday();renderMyDay()};$('#myDayAnalyst').addEventListener('change',renderMyDay);if($('#btnRestoreBossPlan'))$('#btnRestoreBossPlan').onclick=()=>restoreBossSchedule($('#myDayDate').value,$('#myDayAnalyst').value);}if($('#dailyMonitorDate')){
