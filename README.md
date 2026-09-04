@@ -1,7 +1,17 @@
-# ERP Planificación NextGen V1.0.5.0 — Seguimiento Diario
+# ERP Planificación NextGen V1.0.5.1 — Menú de requisitos técnicos
 
-Nuevo módulo exclusivo para JEFE llamado **Seguimiento Diario**.
+En Mi Jornada, cada actividad que requiere datos técnicos muestra un bloque visible:
 
-Muestra por fecha: KPIs del día, resumen por analista, carga por hora, actividades Programadas / En proceso / Realizadas, tiempo planificado y real, inicio/fin real, muestras, curvas (incluye R²), reactivos/materiales registrados, comentarios y notas.
+**Requisitos para finalizar**
+- Curva de calibración.
+- Reactivos / materiales.
 
-Es una vista de lectura ejecutiva sobre los datos existentes. No modifica planificación, IndexedDB, Firestore, usuarios, roles ni sincronización.
+El analista puede entrar en **Registrar datos técnicos** antes del cierre, guardar la curva/reactivos y luego finalizar la actividad. Al pulsar Finalizar, el ERP vuelve a validar todo y cierra en conjunto.
+
+Para actividades ya REALIZADAS, aparece **Ver / Editar datos técnicos** aunque la planificación sea antigua, porque la tarjeta consulta también el catálogo actual.
+
+Se oculta el bloque redundante “Últimas 5 actividades realizadas”; el acceso queda directamente en cada actividad realizada.
+
+La edición post-cierre mantiene estado y horarios originales y deja trazabilidad.
+
+No se cambió DB_VERSION, IndexedDB, Firestore, usuarios ni roles.
