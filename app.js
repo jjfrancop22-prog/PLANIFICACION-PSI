@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.13-MULTILOTE-CONSUMO-SELECCIONABLE';
+const APP_VERSION='V1.0.5.6.14-CENTRO-COMUNICACIONES';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -936,9 +936,53 @@ async function planComments(planId){return (await getAll('planComments')).filter
 async function addAnalystComment(planId){
   const input=document.querySelector(`[data-comment-input="${planId}"]`),text=(input?.value||'').trim();if(!text)return toast('Escriba un comentario');
   const p=await getOne('planning',planId);if(!p)return toast('Planificación no encontrada');
-  const rec={id:uid('COM'),planId,analystId:p.analystId,analystName:p.analystName,authorType:'ANALISTA',authorName:p.analystName,text,createdAt:nowISO()};
+  const rec={id:uid('COM'),planId,analystId:p.analystId,analystName:p.analystName,authorType:'ANALISTA',authorName:p.analystName,text,createdAt:nowISO(),threadStatus:'OPEN',readBy:[]};
   await put('planComments',rec);await queue('CREATE','planComments',rec);await audit('COMENTAR','MI JORNADA',p.code,`${p.analystName}: ${text}`);input.value='';toast('Comentario registrado');await renderMyDay();await renderAgenda();await renderAudit();
 }
+function communicationUserKey(){
+  if(!currentSessionUser)return '';
+  return currentSessionUser.role==='ANALISTA'?`ANALISTA:${currentSessionUser.analystId||currentSessionUser.id||currentSessionUser.name}`:`JEFE:${currentSessionUser.id||currentSessionUser.email||currentSessionUser.name}`;
+}
+function communicationVisibleComment(c){
+  if(!currentSessionUser)return false;
+  return currentSessionUser.role==='JEFE'||(currentSessionUser.role==='ANALISTA'&&c.analystId===currentSessionUser.analystId);
+}
+async function communicationThreads(){
+  const comments=(await getAll('planComments')).filter(communicationVisibleComment);
+  const plans=await getAll('planning'), map=new Map();
+  comments.forEach(c=>{if(!map.has(c.planId))map.set(c.planId,[]);map.get(c.planId).push(c)});
+  return [...map.entries()].map(([planId,items])=>{items.sort((a,b)=>a.createdAt.localeCompare(b.createdAt));const p=plans.find(x=>x.id===planId);return {planId,p,items,last:items[items.length-1],closed:items.some(x=>x.threadStatus==='CLOSED')&&items[items.length-1]?.threadStatus==='CLOSED'}}).sort((a,b)=>(b.last?.createdAt||'').localeCompare(a.last?.createdAt||''));
+}
+async function refreshNotificationBadge(){
+  if(!$('#notificationBadge'))return;
+  const key=communicationUserKey();if(!key){$('#notificationBadge').classList.add('hidden');return}
+  const threads=await communicationThreads();let n=0;
+  threads.forEach(t=>t.items.forEach(c=>{const own=(currentSessionUser.role==='JEFE'&&c.authorType==='JEFE')||(currentSessionUser.role==='ANALISTA'&&c.authorType==='ANALISTA');if(!own&&!(c.readBy||[]).includes(key))n++}));
+  $('#notificationBadge').textContent=String(n);$('#notificationBadge').classList.toggle('hidden',n===0);$('#btnNotifications')?.classList.toggle('has-unread',n>0);
+}
+async function markThreadRead(planId){
+  const key=communicationUserKey();if(!key)return;const cs=(await getAll('planComments')).filter(c=>c.planId===planId&&communicationVisibleComment(c));
+  for(const c of cs){if(!(c.readBy||[]).includes(key)){c.readBy=[...(c.readBy||[]),key];await put('planComments',c);await queue('UPDATE','planComments',c)}}
+  await refreshNotificationBadge();
+}
+async function renderCommunications(){
+  if(!$('#communicationsList'))return;const filter=$('#commStatusFilter')?.value||'OPEN';let ts=await communicationThreads();
+  if(filter==='OPEN')ts=ts.filter(t=>!t.closed);if(filter==='CLOSED')ts=ts.filter(t=>t.closed);
+  if(!ts.length){$('#communicationsList').innerHTML='<div class="empty"><h4>Sin conversaciones</h4><p>No hay novedades para este filtro.</p></div>';return}
+  $('#communicationsList').innerHTML=ts.map(t=>{const p=t.p||{}, analyst=p.analystName||t.items[0]?.analystName||'Analista';return `<article class="comm-thread ${t.closed?'closed':''}"><div class="comm-head"><div><b>${escapeHtml(p.catalogName||'Actividad')}</b><small>${escapeHtml(analyst)} · ${escapeHtml(p.date||'')}</small></div><span class="comm-state">${t.closed?'ATENDIDO':'PENDIENTE'}</span></div><div class="comm-messages">${t.items.map(c=>`<div class="comm-message ${c.authorType==='JEFE'?'boss':'analyst'}"><b>${escapeHtml(c.authorName||c.author||'Usuario')}</b><small>${fmtDate(c.createdAt)}</small><div>${escapeHtml(c.text)}</div></div>`).join('')}</div><div class="comm-reply"><input data-comm-reply="${t.planId}" placeholder="Escribir respuesta..."/><button class="btn primary compact" data-comm-send="${t.planId}">Responder</button>${currentSessionUser.role==='JEFE'?`<button class="btn secondary compact" data-comm-close="${t.planId}">${t.closed?'Reabrir':'✓ Marcar atendido'}</button>`:''}</div></article>`}).join('');
+  $$('[data-comm-send]').forEach(b=>b.onclick=()=>replyCommunication(b.dataset.commSend));$$('[data-comm-close]').forEach(b=>b.onclick=()=>toggleCommunicationClosed(b.dataset.commClose));
+  for(const t of ts)await markThreadRead(t.planId);
+}
+async function openCommunications(){await renderCommunications();$('#notificationsDialog').showModal()}
+async function replyCommunication(planId){
+  const input=document.querySelector(`[data-comm-reply="${planId}"]`),text=(input?.value||'').trim();if(!text)return toast('Escriba una respuesta');const p=await getOne('planning',planId);if(!p)return toast('Actividad no encontrada');
+  const type=currentSessionUser.role==='JEFE'?'JEFE':'ANALISTA',name=currentSessionUser.name||p.analystName||'Usuario';const rec={id:uid('COM'),planId,analystId:p.analystId,analystName:p.analystName,authorType:type,authorName:name,text,createdAt:nowISO(),threadStatus:'OPEN',readBy:[communicationUserKey()]};
+  await put('planComments',rec);await queue('CREATE','planComments',rec);await audit('RESPONDER','COMUNICACIONES',p.code,`${name}: ${text}`);input.value='';await renderCommunications();await renderMyDay();await refreshNotificationBadge();toast('Respuesta enviada');
+}
+async function toggleCommunicationClosed(planId){
+  const ts=await communicationThreads(),t=ts.find(x=>x.planId===planId);if(!t)return;const p=t.p||await getOne('planning',planId);const rec={id:uid('COM'),planId,analystId:p?.analystId,analystName:p?.analystName,authorType:'JEFE',authorName:currentSessionUser.name||'Administración',text:t.closed?'Conversación reabierta.':'✓ Novedad marcada como atendida.',createdAt:nowISO(),threadStatus:t.closed?'OPEN':'CLOSED',readBy:[communicationUserKey()]};await put('planComments',rec);await queue('CREATE','planComments',rec);await renderCommunications();await refreshNotificationBadge();
+}
+
 async function changeAnalystPlanStatus(planId,status){
   const p=await getOne('planning',planId);if(!p)return;p.status=status;p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p);await audit('ESTADO_ANALISTA','MI JORNADA',p.code,`${p.analystName} → ${status}`);toast(`Estado: ${status}`);await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
 }
@@ -2408,7 +2452,7 @@ async function loadConfig(){$('#cfgLab').value=(await getOne('config','labName')
 async function saveConfig(){const lab=$('#cfgLab').value.trim(),user=$('#cfgUser').value.trim(),dayHours=Number($('#cfgDayHours').value||8);await put('config',{key:'labName',value:lab});await put('config',{key:'defaultUser',value:user});await put('config',{key:'dayHours',value:dayHours});await audit('CONFIGURAR','SISTEMA','CONFIG','Configuración general actualizada');toast('Configuración guardada');await refreshAll()}
 async function backup(){const data={app:'ERP_PLANIFICACION_NEXTGEN',version:APP_VERSION,exportedAt:nowISO(),catalog:await getAll('catalog'),timeRules:await getAll('timeRules'),compositeSteps:await getAll('compositeSteps'),analysts:await getAll('analysts'),audit:await getAll('audit'),outbox:await getAll('outbox'),config:await getAll('config'),planning:await getAll('planning')};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`RESPALDO_ERP_PLANIFICACION_${APP_VERSION}_${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);await audit('EXPORTAR','SISTEMA','BACKUP','Respaldo general exportado');toast('Respaldo generado');await refreshAll()}
 async function resetDB(){if(!confirm('Esto eliminará catálogo, reglas, analistas y trazabilidad locales de esta versión. ¿Continuar?'))return;await Promise.all(['catalog','timeRules','compositeSteps','analysts','audit','outbox','config','planning'].map(clearStore));toast('Base local reiniciada');await loadConfig();await refreshAll()}
-async function refreshAll(){await Promise.all([renderDashboard(),renderCatalog(),renderAnalysts(),renderAudit(),analyzeData(true),renderMyDayAnalysts(),renderManagementFilters()]);if($('#planDate'))await refreshPlanner();if($('#myDayDate'))await renderMyDay()}
+async function refreshAll(){await Promise.all([renderDashboard(),renderCatalog(),renderAnalysts(),renderAudit(),analyzeData(true),renderMyDayAnalysts(),renderManagementFilters(),refreshNotificationBadge()]);if($('#planDate'))await refreshPlanner();if($('#myDayDate'))await renderMyDay()}
 
 let currentSessionUser=null;
 
@@ -2762,7 +2806,7 @@ function applyRoleUI(){
   const allowed=ROLE_ACCESS[role]||[];
   $$('.nav-item').forEach(b=>b.classList.toggle('role-hidden',!allowed.includes(b.dataset.view)));
   if($('#sessionRoleBadge')){$('#sessionRoleBadge').textContent=role;$('#sessionRoleBadge').className=`role-badge role-${role.toLowerCase()}`}
-  if($('#btnBackup'))$('#btnBackup').classList.toggle('hidden',role!=='JEFE');
+  if($('#btnBackup'))$('#btnBackup').classList.toggle('hidden',role!=='JEFE');if($('#btnNotifications'))$('#btnNotifications').classList.toggle('hidden',!currentSessionUser);
   if($('#myDayAnalyst')){
     if(role==='ANALISTA'){ $('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true }
     else $('#myDayAnalyst').disabled=false;
@@ -2807,7 +2851,7 @@ if($('#mgmtFrom')){
 }
 if($('#finishActivityForm'))$('#finishActivityForm').addEventListener('submit',submitFinishActivity);if($('#btnSaveCalibrationDraft'))$('#btnSaveCalibrationDraft').onclick=saveCalibrationDraft;if($('#btnSaveReagentDraft'))$('#btnSaveReagentDraft').onclick=saveReagentDraft;
 if($('#btnSaveConfig'))$('#btnSaveConfig').onclick=saveConfig;if($('#btnBackup'))$('#btnBackup').onclick=backup;if($('#btnReset'))$('#btnReset').onclick=resetDB;if($('#localSessionSelect'))$('#localSessionSelect').addEventListener('change',changeLocalSession);if($('#btnFirebaseLogin'))$('#btnFirebaseLogin').onclick=openFirebaseLogin;
-if($('#btnFirebaseLogout'))$('#btnFirebaseLogout').onclick=firebaseLogout;
+if($('#btnFirebaseLogout'))$('#btnFirebaseLogout').onclick=firebaseLogout;if($('#btnNotifications'))$('#btnNotifications').onclick=openCommunications;if($('#commStatusFilter'))$('#commStatusFilter').onchange=renderCommunications;if($('#btnRefreshCommunications'))$('#btnRefreshCommunications').onclick=renderCommunications;
 if($('#firebaseLoginForm')){
   $('#firebaseLoginForm').addEventListener('submit',submitFirebaseLogin);
 }if($('#btnSyncNow'))$('#btnSyncNow').onclick=manualSync;
