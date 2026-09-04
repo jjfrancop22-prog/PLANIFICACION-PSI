@@ -1,6 +1,6 @@
 {
   "app": "ERP Planificación NextGen",
-  "version": "V1.0.5.6.7",
+  "version": "V1.0.5.6.8",
   "channel": "firebase-integration",
   "database": "ERP_PLANIFICACION_NEXTGEN_CLEAN",
   "databaseVersion": 7,

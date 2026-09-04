@@ -1,4 +1,4 @@
-## V1.0.5.6.7 · Inicio manual + sincronización visible
+## V1.0.5.6.8 · Inicio manual + sincronización visible
 
 Cambio puntual sobre V1.0.5.6.6:
 

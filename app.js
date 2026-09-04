@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.7-LOGIN-MANUAL-SYNC-VISIBLE';
+const APP_VERSION='V1.0.5.6.8-LOTES-STOCK-ENVASES-CLAROS';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1075,10 +1075,10 @@ async function saveCalibrationDraft(){
 }
 
 
-function reagentContainerCycleKey(reagent,container){return `${normalizeIdentityText(reagent?.name||'')}|${normalizeIdentityText(reagent?.unit||'')}|${container?.id||normalizeIdentityText(container?.label||'ENVASE')}`}
+function reagentContainerCycleKey(reagent,container){return `${normalizeIdentityText(reagent?.name||'')}|${normalizeIdentityText(reagent?.lot||container?.lot||'')}|${normalizeIdentityText(reagent?.unit||'')}|${container?.id||normalizeIdentityText(container?.label||'ENVASE')}`}
 async function latestConfirmedContainerRecord(reagent,container,excludePlanId=null){
   const key=reagentContainerCycleKey(reagent,container),plans=await getAll('planning');let best=null;
-  for(const p of plans){if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;for(const item of p.reagentResult.items){if(item.mode!=='WEIGHT'||!Array.isArray(item.containers))continue;for(const env of item.containers){if(reagentContainerCycleKey({name:item.name,unit:item.unit},env)!==key)continue;const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;if(!best||stamp>best.stamp)best={plan:p,item,container:env,stamp}}}}return best;
+  for(const p of plans){if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;for(const item of p.reagentResult.items){if(item.mode!=='WEIGHT'||!Array.isArray(item.containers))continue;for(const env of item.containers){if(reagentContainerCycleKey({name:item.name,lot:item.lot,unit:item.unit},env)!==key)continue;const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;if(!best||stamp>best.stamp)best={plan:p,item,container:env,stamp}}}}return best;
 }
 async function resolveContainerCurrentWeight(plan,reagent,container){
   const latest=await latestConfirmedContainerRecord(reagent,container,plan.id);
@@ -1086,7 +1086,7 @@ async function resolveContainerCurrentWeight(plan,reagent,container){
   const configured=Number(container.initialWeight);return Number.isFinite(configured)?{weight:configured,source:'CATALOGO',depleted:false}:null;
 }
 function reagentCycleKey(r){
-  return `${normalizeIdentityText(r?.name||'')}|${normalizeIdentityText(r?.unit||'')}`;
+  return `${normalizeIdentityText(r?.name||'')}|${normalizeIdentityText(r?.lot||'')}|${normalizeIdentityText(r?.unit||'')}`;
 }
 async function resolvePreviousReagentWeight(plan,reagent){
   const latest=await latestConfirmedReagentRecord(reagent,plan.id);
@@ -1109,7 +1109,7 @@ async function renderFinishReagents(p){
         const env=containers[j],oldEnv=oldContainers.get(env.id)||{},current=await resolveContainerCurrentWeight(p,r,env);
         const initial=Number.isFinite(Number(oldEnv.initialWeight))?Number(oldEnv.initialWeight):(current?.weight??null),checked=oldEnv.usedInActivity===true;
         envCards.push(`<div class="reagent-container-use ${current?.depleted?'depleted':''}">
-          <div class="container-use-head"><label class="container-use-check"><input type="checkbox" data-use-container="${r.id}|${env.id}" ${checked?'checked':''}> Usar en esta actividad</label><span class="badge">${escapeHtml(env.containerType||'FRASCO')} · ${escapeHtml(env.label||`Envase ${j+1}`)}</span></div>
+          <div class="container-use-head"><label class="container-use-check"><input type="checkbox" data-use-container="${r.id}|${env.id}" ${checked?'checked':''}> Usar en esta actividad</label><span class="badge">${escapeHtml(env.containerType||'FRASCO')} · ${escapeHtml(env.label||`Frasco ${j+1}`)} · Lote ${escapeHtml(env.lot||r.lot||'—')}</span></div>
           ${current?.depleted?`<div class="reagent-replacement-alert"><b>Envase agotado</b><span>Ingrese el peso inicial del nuevo ${env.containerType==='SOBRE'?'sobre':'frasco'}.</span></div>`:''}
           <div class="reagent-inputs">
             ${current?.depleted?`<label>Nuevo peso inicial (g)<input type="number" step="any" min="${Number(env.tareWeight||0)}" data-env-new-initial="${r.id}|${env.id}"></label><input type="hidden" data-env-initial="${r.id}|${env.id}" data-env-source="REPOSICION" value="">`:`<label>Peso inicial (g)<div class="reag-initial-control"><input readonly data-env-initial="${r.id}|${env.id}" data-env-source="${current?.source||'CATALOGO'}" value="${initial??''}"><button type="button" class="btn secondary mini-btn" data-correct-env-initial="${r.id}|${env.id}">Corregir</button></div></label>`}
@@ -1118,9 +1118,10 @@ async function renderFinishReagents(p){
           </div><div class="reagent-used-result" data-env-result="${r.id}|${env.id}">Consumo: <strong>—</strong></div>
         </div>`);
       }
-      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)}</b><small>${r.physicalState==='LIQUID'?`LÍQUIDO · densidad ${Number(r.density).toFixed(4)} g/mL`:'SÓLIDO'} · ${containers.length} envase(s)</small></div><span class="badge">R${i+1}</span></div><div class="multi-container-list">${envCards.join('')}</div></div>`);
+      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${r.physicalState==='LIQUID'?`LÍQUIDO · densidad ${Number(r.density).toFixed(4)} g/mL`:'SÓLIDO'} · ${containers.length} envase(s)</small></div><span class="badge">R${i+1}</span></div><div class="multi-container-list">${envCards.join('')}</div></div>`);
     }else{
-      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)}</b><small>${reagentModeLabel(r.mode)} · ${escapeHtml(r.unit||'unidad')}</small></div><span class="badge">R${i+1}</span></div><div class="reagent-inputs"><label>Cantidad utilizada (${escapeHtml(r.unit||'unidad')})<input type="number" step="any" min="0" data-reag-count="${r.id}" value="${old.used??''}"></label></div><div class="reagent-used-result" data-reag-result="${r.id}">Consumo: <strong>${old.used??'—'} ${escapeHtml(r.unit||'unidad')}</strong></div></div>`);
+      const latest=await latestConfirmedReagentRecord(r,p.id),stock=Number.isFinite(Number(old.stockBefore))?Number(old.stockBefore):(Number.isFinite(Number(latest?.item?.stockRemaining))?Number(latest.item.stockRemaining):Number(r.stockQuantity||0));
+      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${reagentModeLabel(r.mode)} · ${escapeHtml(r.unit||'unidad')}</small></div><span class="badge">Stock ${stock} ${escapeHtml(r.unit||'unidad')}</span></div><div class="reagent-inputs"><label>Stock disponible<input readonly data-reag-stock-before="${r.id}" value="${stock}"></label><label>Cantidad utilizada (${escapeHtml(r.unit||'unidad')})<input type="number" step="any" min="0" max="${stock}" data-reag-count="${r.id}" value="${old.used??''}"></label></div><div class="reagent-used-result" data-reag-result="${r.id}">Consumo: <strong>${old.used??'—'} ${escapeHtml(r.unit||'unidad')}</strong></div></div>`);
     }
   }
   $('#finishReagentRows').innerHTML=parts.join('');
@@ -1147,7 +1148,7 @@ function updateReagentCalculations(p){
       }
     }else{
       const result=$(`[data-reag-result="${r.id}"]`),raw=$(`[data-reag-count="${r.id}"]`)?.value,n=raw===''?null:Number(raw);
-      if(result)result.innerHTML=n===null||!Number.isFinite(n)?'Consumo: <strong>—</strong>':`Consumo: <strong>${n} ${escapeHtml(r.unit||'unidad')}</strong>`;
+      const stock=Number($(`[data-reag-stock-before="${r.id}"]`)?.value);if(result)result.innerHTML=n===null||!Number.isFinite(n)?'Consumo: <strong>—</strong>':n>stock?'<strong>ERROR: consumo mayor al stock</strong>':`Consumo: <strong>${n} ${escapeHtml(r.unit||'unidad')}</strong> · Stock final: <strong>${(stock-n).toFixed(2)} ${escapeHtml(r.unit||'unidad')}</strong>`;
     }
   }
   const check=collectReagentResult(p,false),v=$('#finishReagentValidation');if(!v)return;
@@ -1167,22 +1168,22 @@ function collectReagentResult(p,requireComplete=true){
         const initialWeight=Number(ri),finalWeight=Number(rf),tareWeight=Number(env.tareWeight||0);
         if(!Number.isFinite(initialWeight)||!Number.isFinite(finalWeight)||initialWeight<=tareWeight||finalWeight<0||finalWeight>initialWeight)return {ok:false,text:`Revise los pesos de ${r.name} · ${env.label}.`};
         const used=initialWeight-finalWeight,density=r.physicalState==='LIQUID'?Number(r.density):null,volumeUsedMl=r.physicalState==='LIQUID'&&density>0?used/density:null,netRemainingG=Math.max(0,finalWeight-tareWeight),netRemainingMl=r.physicalState==='LIQUID'&&density>0?netRemainingG/density:null,depleted=netRemainingG<=0.000001,source=$(`[data-env-initial="${key}"]`)?.dataset?.envSource||'HISTORICO';
-        usedContainers.push({containerId:env.id,label:env.label,containerType:env.containerType||'FRASCO',usedInActivity:true,tareWeight,initialWeight,finalWeight,used,volumeUsedMl,netRemainingG,netRemainingMl,depleted,initialSource:source,initialWeightCorrected:source==='CORREGIDO_MANUAL'});
+        usedContainers.push({containerId:env.id,label:env.label,lot:env.lot||r.lot||'',containerType:env.containerType||'FRASCO',usedInActivity:true,tareWeight,initialWeight,finalWeight,used,volumeUsedMl,netRemainingG,netRemainingMl,depleted,initialSource:source,initialWeightCorrected:source==='CORREGIDO_MANUAL'});
       }
       if(!usedContainers.length){
-        items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density:r.physicalState==='LIQUID'?Number(r.density):null,containers:[],used:0,volumeUsedMl:r.physicalState==='LIQUID'?0:null,consumptionValue:0,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',usedInActivity:false,notUsed:true,depleted:false});
+        items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density:r.physicalState==='LIQUID'?Number(r.density):null,containers:[],used:0,volumeUsedMl:r.physicalState==='LIQUID'?0:null,consumptionValue:0,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',usedInActivity:false,notUsed:true,depleted:false});
         continue;
       }
       const totalMass=usedContainers.reduce((a,e)=>a+(e.used||0),0),totalMl=r.physicalState==='LIQUID'?usedContainers.reduce((a,e)=>a+(e.volumeUsedMl||0),0):null;
-      items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density:r.physicalState==='LIQUID'?Number(r.density):null,containers:usedContainers,used:totalMass,volumeUsedMl:totalMl,consumptionValue:r.physicalState==='LIQUID'?totalMl:totalMass,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',usedInActivity:true,notUsed:false,depleted:usedContainers.every(e=>e.depleted)});
+      items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density:r.physicalState==='LIQUID'?Number(r.density):null,containers:usedContainers,used:totalMass,volumeUsedMl:totalMl,consumptionValue:r.physicalState==='LIQUID'?totalMl:totalMass,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',usedInActivity:true,notUsed:false,depleted:usedContainers.every(e=>e.depleted)});
     }else{
       const raw=$(`[data-reag-count="${r.id}"]`)?.value;
       if(raw===''){
-        items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:r.unit||'unidad',used:0,usedInActivity:false,notUsed:true});
+        {const stockBefore=Number($(`[data-reag-stock-before="${r.id}"]`)?.value||r.stockQuantity||0);items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used:0,stockRemaining:stockBefore,usedInActivity:false,notUsed:true});}
         continue;
       }
-      const used=Number(raw);if(!Number.isFinite(used)||used<0)return {ok:false,text:`Revise la cantidad utilizada de ${r.name}.`};
-      items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:r.unit||'unidad',used,usedInActivity:used>0,notUsed:used===0});
+      const used=Number(raw),stockBefore=Number($(`[data-reag-stock-before="${r.id}"]`)?.value);if(!Number.isFinite(used)||used<0||!Number.isFinite(stockBefore)||used>stockBefore)return {ok:false,text:`Revise la cantidad utilizada de ${r.name}; no puede superar el stock disponible.`};
+      items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used,stockRemaining:stockBefore-used,usedInActivity:used>0,notUsed:used===0});
     }
   }
   return {ok:true,complete,result:{items,completed:complete,capturedAt:nowISO()}};
@@ -2014,7 +2015,8 @@ function ensureReagentContainers(r){
   if(Array.isArray(r.containers)&&r.containers.length)return r.containers;
   r.containers=[{
     id:uid('ENV'),
-    label:'Envase 1',
+    label:'Frasco principal',
+    lot:r.lot||'',
     containerType:'FRASCO',
     tareWeight:r.tareWeight??'',
     initialWeight:r.initialWeight??'',
@@ -2028,14 +2030,16 @@ function renderContainerLists(){
     const box=$(`[data-container-list="${i}"]`);if(!box)return;
     const arr=ensureReagentContainers(r);
     box.innerHTML=arr.map((e,j)=>`<div class="container-config-row">
-      <label>Nombre<input data-container-label="${i}-${j}" value="${escapeHtml(e.label||`Envase ${j+1}`)}"></label>
+      <label>Identificación<input data-container-label="${i}-${j}" value="${escapeHtml(e.label||`Frasco ${j+1}`)}" placeholder="Ej. Frasco principal"></label>
+      <label>Lote<input data-container-lot="${i}-${j}" value="${escapeHtml(e.lot||r.lot||'')}" placeholder="Ej. A12345"></label>
       <label>Tipo<select data-container-type="${i}-${j}"><option value="FRASCO" ${e.containerType!=='SOBRE'?'selected':''}>FRASCO</option><option value="SOBRE" ${e.containerType==='SOBRE'?'selected':''}>SOBRE</option></select></label>
-      <label>Tara (g)<input type="number" min="0" step="any" data-container-tare="${i}-${j}" value="${e.tareWeight??''}"></label>
-      <label>Peso inicial (g)<input type="number" min="0" step="any" data-container-initial="${i}-${j}" value="${e.initialWeight??''}"></label>
+      <label>Tara del envase (g)<input type="number" min="0" step="any" data-container-tare="${i}-${j}" value="${e.tareWeight??''}"></label>
+      <label>Peso del envase + contenido (g)<input type="number" min="0" step="any" data-container-initial="${i}-${j}" value="${e.initialWeight??''}"></label>
       <button type="button" class="icon-btn" data-remove-container="${i}-${j}" ${arr.length===1?'disabled':''}>×</button>
     </div>`).join('');
   });
   $$('[data-container-label]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerLabel.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].label=el.value});
+  $$('[data-container-lot]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerLot.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].lot=el.value});
   $$('[data-container-type]').forEach(el=>el.onchange=()=>{const [i,j]=el.dataset.containerType.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].containerType=el.value});
   $$('[data-container-tare]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerTare.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].tareWeight=el.value;validateReagents()});
   $$('[data-container-initial]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerInitial.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].initialWeight=el.value;validateReagents()});
@@ -2044,25 +2048,27 @@ function renderContainerLists(){
 function renderReagentRows(){
   const box=$('#reagentRows');if(!box)return;
   box.innerHTML=editingReagents.map((r,i)=>`<div class="reagent-row">
-    <label>Reactivo / material<input data-reagent-name="${i}" value="${escapeHtml(r.name||'')}" placeholder="Ej. Sulfato de sodio"></label>
-    <label>Forma de control<select data-reagent-mode="${i}"><option value="COUNT" ${r.mode!=='WEIGHT'?'selected':''}>CONTABLE · cantidad usada</option><option value="WEIGHT" ${r.mode==='WEIGHT'?'selected':''}>PESO DE FRASCO · antes/después</option></select></label>
-    <label>Unidad<input data-reagent-unit="${i}" value="${escapeHtml(r.unit||reagentDefaultUnit(r.mode))}" placeholder="g / unidad"></label>
+    <label>Reactivo / material<input data-reagent-name="${i}" value="${escapeHtml(r.name||'')}" placeholder="Ej. Estándar de fósforo"></label>
+    <label>Lote<input data-reagent-lot="${i}" value="${escapeHtml(r.lot||'')}" placeholder="Ej. A12345"></label>
+    <label>Forma de control<select data-reagent-mode="${i}"><option value="COUNT" ${r.mode!=='WEIGHT'?'selected':''}>CONTABLE · stock por unidades</option><option value="WEIGHT" ${r.mode==='WEIGHT'?'selected':''}>PESO DE FRASCO · antes/después</option></select></label>
+    <label>Unidad<input data-reagent-unit="${i}" value="${escapeHtml(r.unit||reagentDefaultUnit(r.mode))}" placeholder="unidad / sobre / tableta"></label>
+    ${r.mode!=='WEIGHT'?`<label>Stock disponible<input type="number" min="0" step="any" data-reagent-stock="${i}" value="${r.stockQuantity??''}" placeholder="Ej. 100"><small>Cantidad existente antes de iniciar consumos.</small></label>`:''}
     ${r.mode==='WEIGHT'?`
       <label>Estado físico<select data-reagent-state="${i}">
         <option value="SOLID" ${(r.physicalState||'SOLID')==='SOLID'?'selected':''}>SÓLIDO</option>
         <option value="LIQUID" ${r.physicalState==='LIQUID'?'selected':''}>LÍQUIDO</option>
       </select></label>
       ${r.physicalState==='LIQUID'?`<label>Densidad (g/mL)<input type="number" min="0.000001" step="any" data-reagent-density="${i}" value="${r.density??''}" placeholder="Ej. 1.025"><small>Se usa para convertir gramos consumidos a mL.</small></label>`:''}
-      <label>Tara del envase (g)<input type="number" min="0" step="any" data-reagent-tare="${i}" value="${r.tareWeight??''}" placeholder="Ej. 120.50"><small>Peso del envase vacío. Permite calcular inventario neto real.</small></label>
-      <label class="reagent-initial-weight">Peso inicial del envase principal (g)<input type="number" min="0" step="any" data-reagent-initial="${i}" value="${r.initialWeight??''}" placeholder="Ej. 850.20"><small>Compatibilidad con registros anteriores.</small></label>
       <div class="reagent-containers-box">
-        <div class="reagent-containers-head"><b>Frascos / sobres disponibles</b><button type="button" class="btn secondary mini-btn" data-add-container="${i}">+ Agregar envase</button></div>
+        <div class="reagent-containers-head"><b>Frascos / sobres de este lote</b><button type="button" class="btn secondary mini-btn" data-add-container="${i}">+ Agregar frasco / sobre</button></div>
         <div data-container-list="${i}"></div>
       </div>`:''}
     <button type="button" class="icon-btn reagent-remove" data-remove-reagent="${i}">×</button>
   </div>`).join('');
   $$('[data-reagent-name]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentName)].name=el.value;validateReagents()});
-  $$('[data-reagent-mode]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.reagentMode);editingReagents[i].mode=el.value;editingReagents[i].unit=reagentDefaultUnit(el.value);if(el.value!=='WEIGHT'){editingReagents[i].initialWeight=null;editingReagents[i].physicalState=null;editingReagents[i].density=null;editingReagents[i].tareWeight=null}else{editingReagents[i].physicalState=editingReagents[i].physicalState||'SOLID'}renderReagentRows()});
+  $$('[data-reagent-lot]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentLot)].lot=el.value;validateReagents()});
+  $$('[data-reagent-stock]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentStock)].stockQuantity=el.value;validateReagents()});
+  $$('[data-reagent-mode]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.reagentMode);editingReagents[i].mode=el.value;editingReagents[i].unit=reagentDefaultUnit(el.value);if(el.value!=='WEIGHT'){editingReagents[i].initialWeight=null;editingReagents[i].physicalState=null;editingReagents[i].density=null;editingReagents[i].tareWeight=null;editingReagents[i].containers=[]}else{editingReagents[i].physicalState=editingReagents[i].physicalState||'SOLID'}renderReagentRows()});
   $$('[data-reagent-unit]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentUnit)].unit=el.value;validateReagents()});
   $$('[data-reagent-initial]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentInitial)].initialWeight=el.value;validateReagents()});
   $$('[data-reagent-state]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.reagentState);editingReagents[i].physicalState=el.value;if(el.value!=='LIQUID')editingReagents[i].density=null;renderReagentRows()});
@@ -2070,10 +2076,10 @@ function renderReagentRows(){
   $$('[data-reagent-tare]').forEach(el=>el.oninput=()=>{editingReagents[Number(el.dataset.reagentTare)].tareWeight=el.value;validateReagents()});
   $$('[data-remove-reagent]').forEach(el=>el.onclick=()=>{editingReagents.splice(Number(el.dataset.removeReagent),1);renderReagentRows()});
   renderContainerLists();
-  $$('[data-add-container]').forEach(btn=>btn.onclick=()=>{const i=Number(btn.dataset.addContainer),arr=ensureReagentContainers(editingReagents[i]);arr.push({id:uid('ENV'),label:`Envase ${arr.length+1}`,containerType:'FRASCO',tareWeight:'',initialWeight:'',status:'ACTIVO'});renderReagentRows()});
+  $$('[data-add-container]').forEach(btn=>btn.onclick=()=>{const i=Number(btn.dataset.addContainer),arr=ensureReagentContainers(editingReagents[i]);arr.push({id:uid('ENV'),label:`Frasco ${arr.length+1}`,lot:editingReagents[i].lot||'',containerType:'FRASCO',tareWeight:'',initialWeight:'',status:'ACTIVO'});renderReagentRows()});
   validateReagents();
 }
-function addReagent(){editingReagents.push({id:uid('REA'),name:'',mode:'COUNT',unit:'unidad',initialWeight:null,physicalState:'SOLID',density:null,tareWeight:null});renderReagentRows()}
+function addReagent(){editingReagents.push({id:uid('REA'),name:'',lot:'',mode:'COUNT',unit:'unidad',stockQuantity:'',initialWeight:null,physicalState:'SOLID',density:null,tareWeight:null,containers:[]});renderReagentRows()}
 function updateReagentEditor(){
   const section=$('#catalogSection')?.value||'';
   const allowed=sectionAllowsReagents(section);
@@ -2097,6 +2103,8 @@ function validateReagents(){
   const names=editingReagents.map(r=>(r.name||'').trim());
   let out;
   if(names.some(n=>!n))out={level:'ERROR',text:'Todos los reactivos/materiales deben tener nombre.'};
+  else if(editingReagents.some(r=>!(r.lot||'').trim()))out={level:'ERROR',text:'Registre el lote de cada reactivo/material.'};
+  else if(editingReagents.some(r=>r.mode!=='WEIGHT'&&(!Number.isFinite(Number(r.stockQuantity))||Number(r.stockQuantity)<0)))out={level:'ERROR',text:'Para materiales contables, registre el stock disponible.'};
   else if(editingReagents.some(r=>!(r.unit||'').trim()))out={level:'ERROR',text:'Defina la unidad de control de cada reactivo.'};
   else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>!(e.label||'').trim())))out={level:'ERROR',text:'Todos los frascos/sobres deben tener nombre.'};
   else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>!Number.isFinite(Number(e.tareWeight))||Number(e.tareWeight)<0)))out={level:'ERROR',text:'Registre una tara válida para cada frasco/sobre.'};
@@ -2109,7 +2117,7 @@ function validateReagents(){
 function reagentConfigFromForm(){
   const section=$('#catalogSection')?.value||'';
   if(!sectionAllowsReagents(section)||!$('#catalogUsesReagents')?.checked)return [];
-  return editingReagents.map((r,i)=>{const containers=r.mode==='WEIGHT'?ensureReagentContainers(r).map((e,j)=>({id:e.id||uid('ENV'),order:j+1,label:(e.label||`Envase ${j+1}`).trim(),containerType:e.containerType==='SOBRE'?'SOBRE':'FRASCO',tareWeight:Number(e.tareWeight),initialWeight:Number(e.initialWeight),status:e.status||'ACTIVO'})):[];const first=containers[0]||{};return {id:r.id||uid('REA'),order:i+1,name:(r.name||'').trim(),mode:r.mode==='WEIGHT'?'WEIGHT':'COUNT',unit:(r.unit||reagentDefaultUnit(r.mode)).trim(),initialWeight:r.mode==='WEIGHT'?Number(first.initialWeight??r.initialWeight):null,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.mode==='WEIGHT'&&r.physicalState==='LIQUID'?Number(r.density):null,tareWeight:r.mode==='WEIGHT'?Number(first.tareWeight??r.tareWeight):null,containers};});
+  return editingReagents.map((r,i)=>{const containers=r.mode==='WEIGHT'?ensureReagentContainers(r).map((e,j)=>({id:e.id||uid('ENV'),order:j+1,label:(e.label||`Frasco ${j+1}`).trim(),lot:(e.lot||r.lot||'').trim(),containerType:e.containerType==='SOBRE'?'SOBRE':'FRASCO',tareWeight:Number(e.tareWeight),initialWeight:Number(e.initialWeight),status:e.status||'ACTIVO'})):[];const first=containers[0]||{};return {id:r.id||uid('REA'),order:i+1,name:(r.name||'').trim(),lot:(r.lot||'').trim(),mode:r.mode==='WEIGHT'?'WEIGHT':'COUNT',unit:(r.unit||reagentDefaultUnit(r.mode)).trim(),stockQuantity:r.mode==='WEIGHT'?null:Number(r.stockQuantity),initialWeight:r.mode==='WEIGHT'?Number(first.initialWeight??r.initialWeight):null,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.mode==='WEIGHT'&&r.physicalState==='LIQUID'?Number(r.density):null,tareWeight:r.mode==='WEIGHT'?Number(first.tareWeight??r.tareWeight):null,containers};});
 }
 
 const DELETED_PLANNING_CONFIG_KEY='deletedPlanningIdsV1';
@@ -2223,7 +2231,7 @@ function calibrationConfigFromForm(){
   };
 }
 function openCatalog(){setCatalogSectionOptions();$('#catalogForm').reset();$('#catalogId').value='';$('#catalogSection').value=currentSection;$('#catalogStatus').value='ACTIVO';$('#catalogTimeMode').value=['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS'].includes(currentSection)?'COMPOSITE':currentSection==='ENSAYOS_ANALITICOS'?'BY_SAMPLES':'FIXED';editingRules=[];editingSteps=[];editingCalibrationPoints=[];editingReagents=[];$('#catalogUsesReagents').checked=false;$('#catalogRequiresCalibration').checked=false;$('#calibrationUnit').value='';if(currentSection==='RECEPCION_MUESTRAS')setDurationPicker(300);else if(['MICROBIOLOGIA','AASS'].includes(currentSection))setDurationPicker(0);$('#catalogDialogTitle').textContent='Nuevo elemento';updateCatalogForm();updateCalibrationEditor();updateReagentEditor();$('#catalogDialog').showModal()}
-async function editCatalog(id){const all=await getAll('catalog'),x=all.find(r=>r.id===id);if(!x)return;setCatalogSectionOptions();$('#catalogId').value=x.id;$('#catalogSection').value=x.section;$('#catalogName').value=x.name;$('#catalogFamily').value=x.family||'';$('#catalogTimeMode').value=x.timeMode||'FIXED';setDurationPicker(x.section==='RECEPCION_MUESTRAS'?300:(x.baseMinutes||0));$('#catalogStatus').value=x.status;$('#catalogDescription').value=x.description||'';editingRules=(await getAll('timeRules')).filter(r=>r.catalogId===id).sort((a,b)=>a.minSamples-b.minSamples).map(r=>({...r}));editingSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===id).sort((a,b)=>a.order-b.order).map(r=>({...r}));const cc=x.calibrationConfig||{};$('#catalogRequiresCalibration').checked=!!cc.enabled;$('#calibrationUnit').value=cc.unit||'';editingCalibrationPoints=(cc.points||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(p=>({concentration:p.concentration}));editingReagents=(x.reagentConfig||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(r=>({...r,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.density??null,tareWeight:r.tareWeight??null,containers:Array.isArray(r.containers)&&r.containers.length?r.containers.map(e=>({...e})):r.mode==='WEIGHT'?[{id:uid('ENV'),label:'Envase 1',containerType:'FRASCO',tareWeight:r.tareWeight??'',initialWeight:r.initialWeight??'',status:'ACTIVO'}]:[]}));$('#catalogUsesReagents').checked=sectionAllowsReagents(x.section)&&editingReagents.length>0;if(x.section==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration(x.name)&&!cc.enabled){$('#catalogRequiresCalibration').checked=true;if(!editingCalibrationPoints.length)editingCalibrationPoints=[{concentration:''},{concentration:''},{concentration:''}];}$('#catalogDialogTitle').textContent='Editar elemento';updateCatalogForm();updateCalibrationEditor();updateReagentEditor();$('#catalogDialog').showModal()}
+async function editCatalog(id){const all=await getAll('catalog'),x=all.find(r=>r.id===id);if(!x)return;setCatalogSectionOptions();$('#catalogId').value=x.id;$('#catalogSection').value=x.section;$('#catalogName').value=x.name;$('#catalogFamily').value=x.family||'';$('#catalogTimeMode').value=x.timeMode||'FIXED';setDurationPicker(x.section==='RECEPCION_MUESTRAS'?300:(x.baseMinutes||0));$('#catalogStatus').value=x.status;$('#catalogDescription').value=x.description||'';editingRules=(await getAll('timeRules')).filter(r=>r.catalogId===id).sort((a,b)=>a.minSamples-b.minSamples).map(r=>({...r}));editingSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===id).sort((a,b)=>a.order-b.order).map(r=>({...r}));const cc=x.calibrationConfig||{};$('#catalogRequiresCalibration').checked=!!cc.enabled;$('#calibrationUnit').value=cc.unit||'';editingCalibrationPoints=(cc.points||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(p=>({concentration:p.concentration}));editingReagents=(x.reagentConfig||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(r=>({...r,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.density??null,tareWeight:r.tareWeight??null,containers:Array.isArray(r.containers)&&r.containers.length?r.containers.map(e=>({...e})):r.mode==='WEIGHT'?[{id:uid('ENV'),label:'Frasco principal',lot:r.lot||'',containerType:'FRASCO',tareWeight:r.tareWeight??'',initialWeight:r.initialWeight??'',status:'ACTIVO'}]:[]}));$('#catalogUsesReagents').checked=sectionAllowsReagents(x.section)&&editingReagents.length>0;if(x.section==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration(x.name)&&!cc.enabled){$('#catalogRequiresCalibration').checked=true;if(!editingCalibrationPoints.length)editingCalibrationPoints=[{concentration:''},{concentration:''},{concentration:''}];}$('#catalogDialogTitle').textContent='Editar elemento';updateCatalogForm();updateCalibrationEditor();updateReagentEditor();$('#catalogDialog').showModal()}
 function addRule(){editingRules.push({id:uid('TMP'),minSamples:'',maxSamples:'',minutes:''});renderRuleRows();updateCalibrationEditor()}
 function splitMinutes(total){const n=Math.max(0,Number(total||0));return {hours:Math.floor(n/60),minutes:n%60}}
 function setDurationPicker(total){const d=splitMinutes(total);$('#catalogBaseHours').value=d.hours;$('#catalogBaseMinutePart').value=String(d.minutes)}
