@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.3-PESO-FINAL-CONSUMO';
+const APP_VERSION='V1.0.5.6.4-FIX-ELIMINACION-DEFINITIVA';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -422,6 +422,12 @@ function shouldAcceptCloud(local,remote){
 async function applyCloudRecord(storeName,id,data){
   if(!FIREBASE_SYNC_STORES.includes(storeName))return;
   const clean={...data,id:data.id||id};delete clean._cloudUpdatedAt;
+  // Si este equipo ya eliminó una planificación, una lectura atrasada de Firestore
+  // no puede resucitarla mientras se confirma el DELETE remoto.
+  if(storeName==='planning' && await isPlanningDeleted(clean.id)){
+    await del('planning',clean.id);
+    return;
+  }
   const local=await getOne(storeName,clean.id);
   if(shouldAcceptCloud(local,clean))await put(storeName,clean);
 }
@@ -630,7 +636,7 @@ async function effectivePlanDuration(item,samples){
 }
 
 async function updatePlanPreview(){if(!$('#planCatalog'))return;const id=$('#planCatalog').value,item=(await getAll('catalog')).find(x=>x.id===id);$('#planSamplesLabel').classList.toggle('hidden',!item||item.timeMode!=='BY_SAMPLES');const dur=await effectivePlanDuration(item,$('#planSamples').value);$('#planDuration').value=dur.minutes?`${minutesText(dur.minutes)}${dur.source==='HISTORICO'?' · histórico':''}`:dur.detail;const start=timeToMinutes($('#planStart').value);$('#planEnd').value=dur.minutes?minutesToTime(addWorkingMinutes(start,dur.minutes)):'';const steps=item?(await getAll('compositeSteps')).filter(s=>s.catalogId===item.id).sort((a,b)=>a.order-b.order):[];$('#planBreakdown').classList.toggle('hidden',!steps.length);$('#planBreakdown').innerHTML=steps.length?`<b>Desglose del bloque · ${minutesText(dur.minutes)}</b>${steps.map(s=>`<span>${escapeHtml(s.name)} · ${minutesText(s.minutes)}</span>`).join('')}`:'';await renderHistoricalIntelligence();await renderDailyLoad();await renderAgenda()}
-async function planningForDate(date){return (await getAll('planning')).filter(p=>p.date===date&&p.status!=='CANCELADO')}
+async function planningForDate(date){return (await visiblePlanningRows()).filter(p=>p.date===date&&p.status!=='CANCELADO')}
 function overlaps(aStart,aEnd,bStart,bEnd){return aStart<bEnd&&bStart<aEnd}
 function analystBusySegments(plans,analystId){
   const segs=[];
@@ -1583,35 +1589,47 @@ async function applyBossRecommendation(recId){
   await refreshPlanner();await analyzeBossDay();await renderMyDay();
 }
 
-async function renderAgenda(){if(!$('#agendaBody'))return;const date=$('#planDate').value,st=$('#agendaStatus').value;let data=(await getAll('planning')).filter(p=>p.date===date&&(!st||p.status===st));data.sort((a,b)=>a.startTime.localeCompare(b.startTime)||a.analystName.localeCompare(b.analystName,'es'));$('#agendaEmpty').classList.toggle('hidden',data.length>0);$('#agendaTableWrap').classList.toggle('hidden',data.length===0);const steps=await getAll('compositeSteps'),comments=await getAll('planComments');$('#agendaBody').innerHTML=data.map(p=>{const ss=steps.filter(s=>s.catalogId===p.catalogId).sort((a,b)=>a.order-b.order),cc=comments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));const detail=ss.length?`<div class="agenda-detail">${ss.map(s=>`${escapeHtml(s.name)} (${minutesText(s.minutes)})`).join(' · ')}</div>`:'';const note=p.notes?`<div class="agenda-note"><b>Jefe:</b> ${escapeHtml(p.notes)}</div>`:'';const comm=cc.length?`<div class="agenda-comments"><b>Analista (${cc.length}):</b> ${cc.map(c=>escapeHtml(c.text)).join(' · ')}</div>`:'';return `<tr><td><b>${p.startTime}-${p.endTime}</b></td><td>${escapeHtml(p.analystName)}</td><td>${escapeHtml(sectionMeta(p.section).label)}</td><td><b>${escapeHtml(p.catalogName)}</b>${p.samples?`<div class="agenda-detail">${p.samples} muestras</div>`:''}${detail}${note}${comm}</td><td>${minutesText(p.durationMinutes)}</td><td><select class="status-select" data-plan-status="${p.id}"><option ${p.status==='PROGRAMADO'?'selected':''}>PROGRAMADO</option><option ${p.status==='EN PROCESO'?'selected':''}>EN PROCESO</option><option ${p.status==='REALIZADO'?'selected':''}>REALIZADO</option><option ${p.status==='CANCELADO'?'selected':''}>CANCELADO</option></select></td><td class="row-actions"><button data-plan-delete="${p.id}">Eliminar</button></td></tr>`}).join('');$$('[data-plan-status]').forEach(el=>el.onchange=()=>changePlanStatus(el.dataset.planStatus,el.value));$$('[data-plan-delete]').forEach(el=>el.onclick=()=>deletePlan(el.dataset.planDelete))}
+async function renderAgenda(){if(!$('#agendaBody'))return;const date=$('#planDate').value,st=$('#agendaStatus').value;let data=(await visiblePlanningRows()).filter(p=>p.date===date&&(!st||p.status===st));data.sort((a,b)=>a.startTime.localeCompare(b.startTime)||a.analystName.localeCompare(b.analystName,'es'));$('#agendaEmpty').classList.toggle('hidden',data.length>0);$('#agendaTableWrap').classList.toggle('hidden',data.length===0);const steps=await getAll('compositeSteps'),comments=await getAll('planComments');$('#agendaBody').innerHTML=data.map(p=>{const ss=steps.filter(s=>s.catalogId===p.catalogId).sort((a,b)=>a.order-b.order),cc=comments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));const detail=ss.length?`<div class="agenda-detail">${ss.map(s=>`${escapeHtml(s.name)} (${minutesText(s.minutes)})`).join(' · ')}</div>`:'';const note=p.notes?`<div class="agenda-note"><b>Jefe:</b> ${escapeHtml(p.notes)}</div>`:'';const comm=cc.length?`<div class="agenda-comments"><b>Analista (${cc.length}):</b> ${cc.map(c=>escapeHtml(c.text)).join(' · ')}</div>`:'';return `<tr><td><b>${p.startTime}-${p.endTime}</b></td><td>${escapeHtml(p.analystName)}</td><td>${escapeHtml(sectionMeta(p.section).label)}</td><td><b>${escapeHtml(p.catalogName)}</b>${p.samples?`<div class="agenda-detail">${p.samples} muestras</div>`:''}${detail}${note}${comm}</td><td>${minutesText(p.durationMinutes)}</td><td><select class="status-select" data-plan-status="${p.id}"><option ${p.status==='PROGRAMADO'?'selected':''}>PROGRAMADO</option><option ${p.status==='EN PROCESO'?'selected':''}>EN PROCESO</option><option ${p.status==='REALIZADO'?'selected':''}>REALIZADO</option><option ${p.status==='CANCELADO'?'selected':''}>CANCELADO</option></select></td><td class="row-actions"><button data-plan-delete="${p.id}">Eliminar</button></td></tr>`}).join('');$$('[data-plan-status]').forEach(el=>el.onchange=()=>changePlanStatus(el.dataset.planStatus,el.value));$$('[data-plan-delete]').forEach(el=>el.onclick=()=>deletePlan(el.dataset.planDelete))}
 async function changePlanStatus(id,status){const p=await getOne('planning',id);if(!p)return;p.status=status;p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p);await audit('CAMBIAR_ESTADO','PLANIFICADOR',p.code,`${p.catalogName}: ${status}`);toast('Estado actualizado');if(typeof refreshPlanner==='function')await refreshPlanner();await renderAudit()}
 async function deletePlan(id){
-  const p=await getOne('planning',id);if(!p)return;
+  const p=await getOne('planning',id);if(!p)return toast('La actividad ya no existe');
   if(currentSessionUser?.role!=='JEFE')return toast('Solo JEFE puede eliminar planificación');
   if(!confirm(`¿Eliminar definitivamente "${p.catalogName}" de ${p.analystName}?`))return;
 
-  // 1) Tombstone first: prevents realtime/cloud replay from resurrecting this record.
-  await markPlanningDeleted(id);
+  try{
+    // 1) Registrar bloqueo local antes de borrar. Si Firestore entrega un snapshot atrasado,
+    // la actividad no puede reaparecer en pantalla.
+    await markPlanningDeleted(id);
 
-  // 2) Delete locally immediately.
-  await del('planning',id);
+    // 2) Borrado local primero para respuesta visual inmediata.
+    await del('planning',id);
 
-  // 3) Remove related comments locally and queue cloud deletes.
-  const comments=(await getAll('planComments')).filter(x=>x.planId===id);
-  for(const cm of comments){
-    await del('planComments',cm.id);
-    await queue('DELETE','planComments',{id:cm.id});
+    // 3) Eliminar comentarios relacionados localmente y preparar su borrado remoto.
+    const comments=(await getAll('planComments')).filter(x=>x.planId===id);
+    for(const cm of comments){
+      await del('planComments',cm.id);
+      await queue('DELETE','planComments',{id:cm.id});
+    }
+
+    // 4) Preparar DELETE remoto de la planificación.
+    await queue('DELETE','planning',{id});
+
+    // 5) Refrescar TODAS las vistas antes de esperar a Firebase.
+    await refreshPlanner();
+    if(typeof renderMyDay==='function')await renderMyDay();
+    if(typeof renderDailyMonitor==='function'&&currentSessionUser?.role==='JEFE')await renderDailyMonitor();
+    if(typeof renderManagementDashboard==='function'&&document.querySelector('.nav-item.active')?.dataset.view==='gestion')await renderManagementDashboard();
+
+    // 6) Confirmar Firestore. Si falla, permanece oculto localmente y Outbox reintenta.
+    let synced=false;
+    try{synced=await flushOutbox(false)}catch(e){console.warn('delete flush',e)}
+
+    await audit('ELIMINAR_PLANIFICACION_DEFINITIVA','PLANIFICADOR',p.code||id,`${p.analystName} · ${p.catalogName} · ${p.date}`);
+    toast(synced?'Actividad eliminada y sincronizada':'Actividad eliminada · sincronización pendiente');
+  }catch(err){
+    console.error('Eliminar planificación',err);
+    toast(`No se pudo eliminar: ${err?.message||err}`);
   }
-
-  // 4) Queue and force Firestore deletion.
-  await queue('DELETE','planning',{id});
-  try{await flushOutbox(false)}catch(e){console.warn('delete flush',e)}
-
-  await audit('ELIMINAR_PLANIFICACION_DEFINITIVA','PLANIFICADOR',p.code||id,`${p.analystName} · ${p.catalogName} · ${p.date}`);
-  toast('Actividad eliminada definitivamente');
-  await renderPlanning();
-  if(typeof renderMyDay==='function')await renderMyDay();
-  if(typeof renderDailyMonitor==='function'&&currentSessionUser?.role==='JEFE')await renderDailyMonitor();
 }
 function mgmtRealMinutes(p){
   return p.actualStartedAt&&p.actualFinishedAt?realWorkMinutesBetween(p.actualStartedAt,p.actualFinishedAt):0;
@@ -2069,10 +2087,10 @@ async function getDeletedPlanningIds(){
   return new Set(Array.isArray(rec?.ids)?rec.ids:[]);
 }
 async function saveDeletedPlanningIds(ids){
-  const rec={id:DELETED_PLANNING_CONFIG_KEY,ids:[...ids],updatedAt:nowISO()};
-  await put('config',rec);
-  // config is JEFE-only in Firestore and this operation is JEFE-only from planning admin.
-  try{await queue('UPDATE','config',rec)}catch(e){console.warn('tombstone sync',e)}
+  const rec={key:DELETED_PLANNING_CONFIG_KEY,ids:[...ids],updatedAt:nowISO()};
+  // Tombstone LOCAL: evita resurrección por snapshots atrasados mientras el DELETE de
+  // planning se confirma en Firestore. La eliminación remota se sincroniza por planning.
+  await put('config',rec)
 }
 async function markPlanningDeleted(id){
   const ids=await getDeletedPlanningIds();
