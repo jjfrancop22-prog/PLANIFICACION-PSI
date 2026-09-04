@@ -1099,6 +1099,8 @@ async function renderFinishReagents(p){
   block.classList.remove('hidden');
   const oldMap=new Map((p.reagentResult?.items||[]).map(x=>[x.reagentId,x]));
   const parts=[];
+  const lotCounts=new Map();
+  for(const cfg of p.reagentConfig){const k=normalizeIdentityText(cfg.name||'');lotCounts.set(k,(lotCounts.get(k)||0)+1)}
   for(let i=0;i<p.reagentConfig.length;i++){
     const r=p.reagentConfig[i],old=oldMap.get(r.id)||{};
     if(r.mode==='WEIGHT'){
@@ -1118,10 +1120,10 @@ async function renderFinishReagents(p){
           </div><div class="reagent-used-result" data-env-result="${r.id}|${env.id}">Consumo: <strong>—</strong></div>
         </div>`);
       }
-      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${r.physicalState==='LIQUID'?`LÍQUIDO · densidad ${Number(r.density).toFixed(4)} g/mL`:'SÓLIDO'} · ${containers.length} envase(s)</small></div><span class="badge">R${i+1}</span></div><div class="multi-container-list">${envCards.join('')}</div></div>`);
+      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${r.physicalState==='LIQUID'?`LÍQUIDO · densidad ${Number(r.density).toFixed(4)} g/mL`:'SÓLIDO'} · ${containers.length} envase(s)${(lotCounts.get(normalizeIdentityText(r.name||''))||0)>1?' · El analista puede usar este lote o cualquiera de los otros lotes activos del mismo reactivo.':''}</small></div><span class="badge">R${i+1}</span></div><div class="multi-container-list">${envCards.join('')}</div></div>`);
     }else{
       const latest=await latestConfirmedReagentRecord(r,p.id),stock=Number.isFinite(Number(old.stockBefore))?Number(old.stockBefore):(Number.isFinite(Number(latest?.item?.stockRemaining))?Number(latest.item.stockRemaining):Number(r.stockQuantity||0));
-      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${reagentModeLabel(r.mode)} · ${escapeHtml(r.unit||'unidad')}</small></div><span class="badge">Stock ${stock} ${escapeHtml(r.unit||'unidad')}</span></div><div class="reagent-inputs"><label>Stock disponible<input readonly data-reag-stock-before="${r.id}" value="${stock}"></label><label>Cantidad utilizada (${escapeHtml(r.unit||'unidad')})<input type="number" step="any" min="0" max="${stock}" data-reag-count="${r.id}" value="${old.used??''}"></label></div><div class="reagent-used-result" data-reag-result="${r.id}">Consumo: <strong>${old.used??'—'} ${escapeHtml(r.unit||'unidad')}</strong></div></div>`);
+      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${reagentModeLabel(r.mode)} · ${escapeHtml(r.unit||'unidad')}${(lotCounts.get(normalizeIdentityText(r.name||''))||0)>1?' · Lote seleccionable por el analista':''}</small></div><span class="badge">Stock ${stock} ${escapeHtml(r.unit||'unidad')}</span></div><div class="reagent-inputs"><label>Stock disponible<input readonly data-reag-stock-before="${r.id}" value="${stock}"></label><label>Cantidad utilizada (${escapeHtml(r.unit||'unidad')})<input type="number" step="any" min="0" max="${stock}" data-reag-count="${r.id}" value="${old.used??''}"></label></div><div class="reagent-used-result" data-reag-result="${r.id}">Consumo: <strong>${old.used??'—'} ${escapeHtml(r.unit||'unidad')}</strong></div></div>`);
     }
   }
   $('#finishReagentRows').innerHTML=parts.join('');
@@ -2143,7 +2145,7 @@ function renderReagentRows(){
   const box=$('#reagentRows');if(!box)return;
   box.innerHTML=reagentMasterDatalistHtml()+editingReagents.map((r,i)=>`<div class="reagent-row">
     <label>Reactivo / material<input list="reagentMasterList" data-reagent-name="${i}" value="${escapeHtml(r.name||'')}" placeholder="Escriba o seleccione un reactivo ya registrado"><small>${r._autofilled?`✓ Autocompletado · ${escapeHtml(r._masterSource||'última ficha disponible')}`:'Si ya existe, se completan automáticamente lote, control, stock, tara, peso y densidad.'}</small></label>
-    <label>Lote<input data-reagent-lot="${i}" value="${escapeHtml(r.lot||'')}" placeholder="Ej. A12345"></label>
+    <label>Lote<input data-reagent-lot="${i}" value="${escapeHtml(r.lot||'')}" placeholder="Ej. A12345"><small>Puede registrar el mismo reactivo con otro lote. Solo se bloquea si coinciden nombre + lote.</small></label>
     <label>Forma de control<select data-reagent-mode="${i}"><option value="COUNT" ${r.mode!=='WEIGHT'?'selected':''}>CONTABLE · stock por unidades</option><option value="WEIGHT" ${r.mode==='WEIGHT'?'selected':''}>PESO DE FRASCO · antes/después</option></select></label>
     <label>Unidad<input data-reagent-unit="${i}" value="${escapeHtml(r.unit||reagentDefaultUnit(r.mode))}" placeholder="unidad / sobre / tableta"></label>
     ${r.mode!=='WEIGHT'?`<label>Stock disponible<input type="number" min="0" step="any" data-reagent-stock="${i}" value="${r.stockQuantity??''}" placeholder="Ej. 100"><small>Cantidad existente antes de iniciar consumos.</small></label>`:''}
@@ -2205,17 +2207,18 @@ function validateReagents(){
   if(!sectionAllowsReagents(section)||!$('#catalogUsesReagents')?.checked){el.textContent='';el.className='inline-alert';return {level:'OK',text:''}}
   if(!editingReagents.length){const out={level:'ERROR',text:'Agregue al menos un reactivo o material, o desactive “Sí, registrar consumo”.'};el.textContent=out.text;el.className='inline-alert error';return out}
   const names=editingReagents.map(r=>(r.name||'').trim());
+  const reagentLotKeys=editingReagents.map(r=>`${normalizeIdentityText(r.name||'')}|${normalizeIdentityText(r.lot||'')}`);
   let out;
   if(names.some(n=>!n))out={level:'ERROR',text:'Todos los reactivos/materiales deben tener nombre.'};
   else if(editingReagents.some(r=>!(r.lot||'').trim()))out={level:'ERROR',text:'Registre el lote de cada reactivo/material.'};
+  else if(new Set(reagentLotKeys).size!==reagentLotKeys.length)out={level:'ERROR',text:'Ya existe este mismo reactivo con el mismo lote. Use un lote diferente o elimine la fila duplicada.'};
   else if(editingReagents.some(r=>r.mode!=='WEIGHT'&&(!Number.isFinite(Number(r.stockQuantity))||Number(r.stockQuantity)<0)))out={level:'ERROR',text:'Para materiales contables, registre el stock disponible.'};
   else if(editingReagents.some(r=>!(r.unit||'').trim()))out={level:'ERROR',text:'Defina la unidad de control de cada reactivo.'};
   else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>!(e.label||'').trim())))out={level:'ERROR',text:'Todos los frascos/sobres deben tener nombre.'};
   else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>!Number.isFinite(Number(e.tareWeight))||Number(e.tareWeight)<0)))out={level:'ERROR',text:'Registre una tara válida para cada frasco/sobre.'};
   else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>!Number.isFinite(Number(e.initialWeight))||Number(e.initialWeight)<=Number(e.tareWeight))))out={level:'ERROR',text:'El peso inicial de cada frasco/sobre debe ser mayor que su tara.'};
   else if(editingReagents.some(r=>r.mode==='WEIGHT' && r.physicalState==='LIQUID' && (r.density==='' || r.density===null || r.density===undefined || !Number.isFinite(Number(r.density)) || Number(r.density)<=0)))out={level:'ERROR',text:'Para cada reactivo LÍQUIDO, registre una densidad válida en g/mL.'};
-  else if(new Set(names.map(n=>normalizeIdentityText(n))).size!==names.length)out={level:'ERROR',text:'No repita el mismo reactivo dentro del ensayo.'};
-  else out={level:'OK',text:`${editingReagents.length} reactivo(s)/material(es) configurado(s) para captura obligatoria al finalizar.`};
+  else out={level:'OK',text:`${editingReagents.length} reactivo(s)/material(es) configurado(s). Se permite el mismo reactivo con lotes diferentes; reactivo + lote no puede repetirse.`};
   el.textContent=out.text;el.className='inline-alert '+out.level.toLowerCase();return out;
 }
 function reagentConfigFromForm(){

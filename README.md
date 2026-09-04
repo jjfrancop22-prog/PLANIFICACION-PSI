@@ -1,8 +1,7 @@
-## V1.0.5.6.11 · Catálogo inteligente de reactivos
+## V1.0.5.6.12 · Reactivo + lote como identidad
 
-- Reutiliza automáticamente la última ficha conocida de cada reactivo/material entre ensayos.
-- Al escribir o seleccionar un nombre ya registrado completa lote, tipo de control, unidad, stock, estado físico, densidad y envases.
-- Para contables toma el último stock restante confirmado cuando existe.
-- Para reactivos por peso toma como peso inicial vigente el último peso final confirmado del mismo envase cuando existe.
-- Mantiene la posibilidad de editar cualquier dato si cambió lote, frasco, tara, peso o densidad.
-- Conserva sincronización multi-PC, login manual y horarios secuenciales de versiones anteriores.
+- Permite registrar el mismo reactivo varias veces cuando el lote es diferente.
+- Bloquea únicamente duplicados exactos de nombre de reactivo + lote.
+- En la finalización del analista se muestran los lotes por separado para poder consumir el lote que corresponda.
+- Mantiene la trazabilidad y el saldo independiente por lote.
+- Conserva todas las mejoras de V1.0.5.6.11.
