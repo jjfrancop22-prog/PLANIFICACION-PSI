@@ -1,8 +1,10 @@
-# V1.0.5.6.1 — Fix monthStartISO
+# V1.0.5.6.2 — Fix de arranque completo
 
-Corrección puntual de arranque de V1.0.5.6:
+Correcciones puntuales sobre V1.0.5.6.1:
 
-- Se restaura `monthStartISO()` como función global disponible antes de la inicialización.
-- La limpieza de planificaciones eliminadas se ejecuta únicamente después de abrir IndexedDB.
-- Se conserva la eliminación definitiva/tombstone de V1.0.5.6.
-- No se cambia DB_VERSION, IndexedDB, Firebase, usuarios, roles ni datos.
+- `refreshPlanner()` vuelve a existir como función global antes del arranque.
+- Las llamadas de inicialización quedan protegidas.
+- Se conserva `monthStartISO()`.
+- Se conserva la eliminación definitiva/tombstone.
+- Se conserva la limpieza de eliminados después de abrir IndexedDB.
+- No se cambia DB_VERSION, IndexedDB, Firebase, usuarios ni roles.
