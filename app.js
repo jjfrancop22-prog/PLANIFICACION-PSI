@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.6-HORARIO-SECUENCIAL-INTELIGENTE';
+const APP_VERSION='V1.0.5.6.7-LOGIN-MANUAL-SYNC-VISIBLE';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -119,13 +119,15 @@ async function initFirebaseBridge(){
     const app=appMod.initializeApp(window.FIREBASE_CONFIG);
     firebaseBridge.app=app;
     firebaseBridge.db=fsMod.getFirestore(app);
-    firebaseBridge.auth=authMod.getAuth(app);
+    // V1.0.5.6.7: sesión deliberadamente NO persistente.
+    // Cada apertura/recarga exige correo + contraseña y clic en Ingresar.
+    // Evita que Firebase restaure automáticamente una sesión anterior.
+    firebaseBridge.auth=authMod.initializeAuth(app,{persistence:authMod.inMemoryPersistence});
     firebaseBridge.mods=fsMod;
     firebaseBridge.authMods=authMod;
     firebaseBridge.ready=true;
     firebaseBridge.authReady=true;
     firebaseBridge.lastError=null;
-    authMod.setPersistence(firebaseBridge.auth,authMod.browserLocalPersistence).catch(()=>{});
     if(firebaseBridge.authUnsub)firebaseBridge.authUnsub();
     firebaseBridge.authUnsub=authMod.onAuthStateChanged(firebaseBridge.auth,handleFirebaseAuthState);
     setSyncState('SINCRONIZADO','Firebase conectado · esperando sesión');
@@ -2374,8 +2376,14 @@ async function submitFirebaseLogin(e){
     firebaseBridge.authUser=cred.user;
 
     if(passInput)passInput.value='';
-    const gateStatus=$('#authGateConnection');if(gateStatus)gateStatus.textContent='Autenticación correcta · cargando perfil y datos…';
-    await handleFirebaseAuthState(cred.user);
+    // onAuthStateChanged continúa el flujo. La pantalla de acceso permanece visible
+    // mientras perfil + nube + Outbox terminan de sincronizarse.
+    const gateStatus=$('#authGateConnection');
+    if(gateStatus){
+      gateStatus.textContent='SINCRONIZANDO… cargando perfil y datos';
+      gateStatus.classList.add('syncing');
+    }
+    setSyncState('SINCRONIZANDO','Inicio correcto · descargando información compartida…');
 
   }catch(err){
     console.error('Firebase login',err);
@@ -2451,11 +2459,16 @@ async function handleFirebaseAuthState(authUser){
     currentSessionUser=null;
     applyRoleUI();
     refreshAuthUI();
+    const gateStatus=$('#authGateConnection');if(gateStatus)gateStatus.classList.remove('syncing');
     showAuthGate(firebaseBridge.authReady?'Ingrese correo y contraseña':'Conectando con Firebase…');
     return;
   }
 
   try{
+    const gateStatus=$('#authGateConnection');
+    if(gateStatus){gateStatus.textContent='SINCRONIZANDO… verificando perfil y datos';gateStatus.classList.add('syncing')}
+    setSyncState('SINCRONIZANDO','Verificando perfil y sincronizando datos…');
+
     // 1. El perfil Firestore users/{UID} manda sobre cualquier dato local.
     let profile=await findERPUserForAuth(authUser);
 
@@ -2544,6 +2557,9 @@ async function handleFirebaseAuthState(authUser){
     startRealtimeSync();
     await refreshMigrationUI();
 
+    const gateDone=$('#authGateConnection');
+    if(gateDone){gateDone.textContent='SINCRONIZACIÓN COMPLETA · abriendo ERP';gateDone.classList.remove('syncing')}
+    setSyncState('SINCRONIZADO','Datos actualizados · sesión lista');
     hideAuthGate();
     toast(`Bienvenido · ${profile.name}`);
 

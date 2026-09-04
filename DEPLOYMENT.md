@@ -1,17 +1,5 @@
-# Despliegue controlado
+# Deploy V1.0.5.6.7
 
-## Estrategia
-- `main`: versión estable publicada.
-- `develop`: integración Firebase / mejoras en prueba.
-- Etiquetas: `v1.0.0-baseline`, `v1.0.1`, etc.
+Subir el contenido de esta carpeta a GitHub/Netlify. El `service-worker.js` usa un caché nuevo `erp-planificacion-v1.0.5.6.7`, por lo que reemplaza la compilación anterior.
 
-## Flujo
-1. Probar localmente.
-2. Commit en `develop`.
-3. Validar Firebase/roles/sincronización.
-4. Merge a `main`.
-5. Netlify despliega automáticamente `main`.
-6. Validar PWA y actualización en dos computadoras.
-
-## Regla crítica
-No cambiar `DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN'` ni borrar IndexedDB durante actualizaciones.
+Prueba recomendada: abrir ERP -> debe pedir credenciales -> clic **Ingresar al ERP** -> debe verse **SINCRONIZANDO…** en rojo -> recién después debe abrir el panel. Cerrar o recargar la aplicación debe volver a solicitar credenciales.
