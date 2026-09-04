@@ -1,39 +1,7 @@
-# ERP Planificación NextGen V1.0.4.4 — Inventario y Consumo de Reactivos
+# ERP Planificación NextGen V1.0.5.0 — Seguimiento Diario
 
-## Ubicación del Excel
-**Dashboard Gestión → Inventario y Consumo**.
+Nuevo módulo exclusivo para JEFE llamado **Seguimiento Diario**.
 
-El mismo archivo Excel contiene dos hojas:
+Muestra por fecha: KPIs del día, resumen por analista, carga por hora, actividades Programadas / En proceso / Realizadas, tiempo planificado y real, inicio/fin real, muestras, curvas (incluye R²), reactivos/materiales registrados, comentarios y notas.
 
-1. **CONSUMOS**
-   - Fecha
-   - Analista
-   - Sección
-   - Parámetro / actividad
-   - Reactivo / material
-   - Sólido / líquido / contable
-   - Densidad
-   - Tara
-   - Peso inicial
-   - Peso final
-   - Consumo en g
-   - Consumo en mL (líquidos)
-   - Cantidad contable
-   - Inventario neto final
-
-2. **INVENTARIO ACTUAL**
-   - Último peso bruto vigente
-   - Tara del envase
-   - Contenido neto actual en g
-   - Contenido neto actual en mL para líquidos
-   - Último uso, analista y actividad
-
-## Tara
-Para reactivos controlados por peso se configura la **tara del envase vacío**.
-
-- Contenido neto actual (g) = peso bruto vigente - tara.
-- Para líquidos: contenido neto actual (mL) = contenido neto actual (g) / densidad.
-
-El analista sigue registrando únicamente el **peso final**; ese peso pasa a ser el inicial del siguiente uso.
-
-No se cambió DB_VERSION, nombre de IndexedDB, Firestore, usuarios, roles ni sincronización.
+Es una vista de lectura ejecutiva sobre los datos existentes. No modifica planificación, IndexedDB, Firestore, usuarios, roles ni sincronización.

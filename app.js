@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.4.4-INVENTARIO-CONSUMO';
+const APP_VERSION='V1.0.5.0-SEGUIMIENTO-DIARIO';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -915,8 +915,9 @@ function assertOwnPlan(p){
 }
 async function startMyActivity(planId){
   const _guardPlan=await getOne('planning',planId);if(!_guardPlan||!assertOwnPlan(_guardPlan))return toast('No puede modificar actividades de otro analista');
-  const p=await getOne('planning',planId);if(!p)return;
+  let p=await getOne('planning',planId);if(!p)return;
   if(p.status==='REALIZADO')return toast('La actividad ya está finalizada');
+  p=await hydratePlanTechnicalRequirements(p);
   p.status='EN PROCESO';p.actualStartedAt=p.actualStartedAt||nowISO();p.updatedAt=nowISO();
   await put('planning',p);await queue('UPDATE','planning',p);
   await audit('INICIAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} inició ${p.catalogName} a las ${formatActualStamp(p.actualStartedAt)}`);
@@ -924,6 +925,13 @@ async function startMyActivity(planId){
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
 }
 
+
+function technicalRequirementBadge(p){
+  const parts=[];
+  if(planRequiresCalibration(p))parts.push('CURVA');
+  if(planHasReagents(p))parts.push('REACTIVOS');
+  return parts.length?`<span class="technical-required-badge">REQUERIDO: ${parts.join(' + ')}</span>`:'';
+}
 function planRequiresCalibration(p){
   return !!(p?.calibrationConfig?.enabled && Array.isArray(p.calibrationConfig.points) && p.calibrationConfig.points.length);
 }
@@ -1143,6 +1151,66 @@ async function saveReagentDraft(){
   await audit('GUARDAR_CONSUMO_REACTIVOS_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó consumos parciales de ${p.catalogName}`);
   toast('Consumos guardados sin finalizar');
 }
+
+async function hydratePlanTechnicalRequirements(p){
+  if(!p)return p;
+  let changed=false;
+
+  // Buscar el mismo elemento de catálogo por catalogId; como respaldo, por nombre+sección.
+  const catalog=await getAll('catalog');
+  let item=catalog.find(x=>x.id===p.catalogId);
+  if(!item){
+    item=catalog.find(x=>x.section===p.section && normalizeIdentityText(x.name)===normalizeIdentityText(p.catalogName));
+  }
+  if(!item)return p;
+
+  // Si la planificación es antigua y no tenía la configuración copiada,
+  // tomar la configuración actual del catálogo ANTES de permitir finalizar.
+  if(!planRequiresCalibration(p) && item.calibrationConfig?.enabled && Array.isArray(item.calibrationConfig.points) && item.calibrationConfig.points.length){
+    p.calibrationConfig=JSON.parse(JSON.stringify(item.calibrationConfig));
+    if(!p.calibrationResult)p.calibrationResult=null;
+    changed=true;
+  }
+  if(!planHasReagents(p) && Array.isArray(item.reagentConfig) && item.reagentConfig.length){
+    p.reagentConfig=JSON.parse(JSON.stringify(item.reagentConfig));
+    if(!p.reagentResult)p.reagentResult=null;
+    changed=true;
+  }
+
+  if(changed){
+    p.updatedAt=nowISO();
+    await put('planning',p);
+    await queue('UPDATE','planning',p);
+    await audit('ACTUALIZAR_REQUISITOS_TECNICOS','MI JORNADA',p.code,`${p.catalogName}: requisitos técnicos tomados del catálogo antes del cierre`);
+  }
+  return p;
+}
+
+async function editCompletedTechnicalData(planId){
+  let p=await getOne('planning',planId);
+  if(!p)return;
+  if(!assertOwnPlan(p) && currentSessionUser?.role!=='JEFE')return toast('No tiene permiso para modificar esta actividad');
+  if(p.status!=='REALIZADO')return finishMyActivity(planId);
+
+  p=await hydratePlanTechnicalRequirements(p);
+  const needsCurve=planRequiresCalibration(p),needsReagents=planHasReagents(p);
+  if(!needsCurve&&!needsReagents)return toast('Esta actividad no tiene curva ni reactivos configurados');
+
+  $('#finishActivityPlanId').value=p.id;
+  $('#finishTechnicalEditMode').value='1';
+  $('#finishActivitySummary').innerHTML=`<b>${escapeHtml(p.catalogName)}</b><span>Actividad REALIZADA · edición técnica con trazabilidad</span>`;
+  $('#finishSamplesLabel').classList.add('hidden');
+  $('#finishActualSamples').required=false;
+  $('#finishActualSamples').value=p.actualSamples??'';
+  $('#finishActivityComment').value='';
+  $('#finishActivityHelp').textContent='Puede completar o corregir los datos técnicos. El estado REALIZADO y los tiempos originales no cambiarán.';
+  await renderFinishCalibration(p);
+  await renderFinishReagents(p);
+
+  const submit=$('#finishActivityForm button[type="submit"]');
+  if(submit)submit.textContent='Guardar datos técnicos';
+  $('#finishActivityDialog').showModal();
+}
 async function finishMyActivity(planId){
   const _guardPlan=await getOne('planning',planId);if(!_guardPlan||!assertOwnPlan(_guardPlan))return toast('No puede modificar actividades de otro analista');
   const p=await getOne('planning',planId);if(!p)return;
@@ -1152,12 +1220,14 @@ async function finishMyActivity(planId){
   const needsSamples=requiresActualSamples(p.section),needsCurve=planRequiresCalibration(p),needsReagents=planHasReagents(p);
   if(needsSamples||needsCurve||needsReagents){
     $('#finishActivityPlanId').value=p.id;
+    $('#finishTechnicalEditMode').value='0';
+    const _finishSubmit=$('#finishActivityForm button[type="submit"]');if(_finishSubmit)_finishSubmit.textContent='Finalizar actividad';
     $('#finishActivitySummary').innerHTML=`<b>${escapeHtml(p.catalogName)}</b><span>${escapeHtml(sectionMeta(p.section).label)} · ${p.startTime}–${p.endTime} · ${minutesText(p.durationMinutes)}</span>`;
     $('#finishSamplesLabel').classList.toggle('hidden',!needsSamples);
     $('#finishActualSamples').required=needsSamples;
     $('#finishActualSamples').value=needsSamples?(p.actualSamples??''):'';
     $('#finishActivityComment').value='';
-    $('#finishActivityHelp').textContent=needsCurve?'Complete las lecturas requeridas de la curva antes de finalizar.':needsReagents?'Registre el consumo real de los reactivos/materiales antes de finalizar.':'Para cerrar esta actividad registre cuántas muestras procesó realmente.';
+    $('#finishActivityHelp').textContent=(needsCurve&&needsReagents)?'Antes de finalizar debe completar la curva de calibración y registrar los reactivos/materiales utilizados.':needsCurve?'Complete las lecturas requeridas de la curva antes de finalizar.':needsReagents?'Registre el consumo real de los reactivos/materiales antes de finalizar.':'Para cerrar esta actividad registre cuántas muestras procesó realmente.';
     renderFinishCalibration(p);await renderFinishReagents(p);
     $('#finishActivityDialog').showModal();
     setTimeout(()=>needsCurve?document.querySelector('[data-cal-reading]')?.focus():needsReagents?document.querySelector('[data-reag-count], [data-reag-final]')?.focus():$('#finishActualSamples').focus(),50);
@@ -1180,10 +1250,11 @@ async function completeActivityRecord(p,actualSamples=null,finalComment='',calib
 }
 async function submitFinishActivity(e){
   e.preventDefault();
-  const p=await getOne('planning',$('#finishActivityPlanId').value);if(!p)return;
-  if(p.status==='REALIZADO'){ $('#finishActivityDialog').close(); return toast('La actividad ya está finalizada') }
-  const samples=Number($('#finishActualSamples').value);
-  if(requiresActualSamples(p.section)&&(!Number.isFinite(samples)||samples<0))return toast('Ingrese el número de muestras analizadas');
+  let p=await getOne('planning',$('#finishActivityPlanId').value);if(!p)return;
+  p=await hydratePlanTechnicalRequirements(p);
+
+  const editMode=$('#finishTechnicalEditMode')?.value==='1';
+
   let calibrationResult=undefined;
   if(planRequiresCalibration(p)){
     const curve=collectCalibrationResult(p,true);
@@ -1191,6 +1262,7 @@ async function submitFinishActivity(e){
     if(!curve.result?.completed)return toast('Complete todos los puntos de la curva');
     calibrationResult=curve.result;
   }
+
   let reagentResult=undefined;
   if(planHasReagents(p)){
     const rr=collectReagentResult(p,true);
@@ -1198,7 +1270,44 @@ async function submitFinishActivity(e){
     if(!rr.complete)return toast('Complete todos los consumos de reactivos');
     reagentResult=rr.result;
   }
+
   const comment=$('#finishActivityComment').value.trim();
+
+  if(editMode){
+    const beforeCurve=JSON.stringify(p.calibrationResult||null);
+    const beforeReagents=JSON.stringify(p.reagentResult||null);
+
+    if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;
+    if(reagentResult!==undefined)p.reagentResult=reagentResult;
+    p.technicalEditedAt=nowISO();
+    p.technicalEditedBy=currentSessionUser?.name||currentSessionUser?.email||'Usuario';
+    p.updatedAt=nowISO();
+
+    await put('planning',p);
+    await queue('UPDATE','planning',p);
+
+    if(comment){
+      const rec={id:uid('COM'),planId:p.id,text:`[EDICIÓN TÉCNICA POST-CIERRE] ${comment}`,author:p.technicalEditedBy,createdAt:nowISO()};
+      await put('planComments',rec);
+      await queue('CREATE','planComments',rec);
+    }
+
+    const changes=[];
+    if(beforeCurve!==JSON.stringify(p.calibrationResult||null))changes.push('curva');
+    if(beforeReagents!==JSON.stringify(p.reagentResult||null))changes.push('reactivos/materiales');
+    await audit('EDITAR_DATOS_TECNICOS_POST_CIERRE','MI JORNADA',p.code,`${p.technicalEditedBy} actualizó ${changes.join(' y ')||'datos técnicos'} de ${p.catalogName} sin cambiar el estado REALIZADO`);
+    $('#finishActivityDialog').close();
+    $('#finishTechnicalEditMode').value='0';
+    toast('Datos técnicos actualizados con trazabilidad');
+    await renderMyDay();
+    return;
+  }
+
+  if(p.status==='REALIZADO'){ $('#finishActivityDialog').close(); return toast('La actividad ya está finalizada') }
+
+  const samples=Number($('#finishActualSamples').value);
+  if(requiresActualSamples(p.section)&&(!Number.isFinite(samples)||samples<0))return toast('Ingrese el número de muestras analizadas');
+
   $('#finishActivityDialog').close();
   await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment,calibrationResult,reagentResult);
 }
@@ -1270,6 +1379,7 @@ async function restoreBossSchedule(date,analystId){
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
 }
 
+
 async function renderMyDay(){
   if(!$('#myDayCards'))return;
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
@@ -1313,7 +1423,7 @@ async function renderMyDay(){
       ?`${flex}<button class="btn primary myday-action" data-start-activity="${p.id}">▶ Iniciar actividad</button>`
       :p.status==='EN PROCESO'
         ?`<button class="btn primary myday-action" data-finish-activity="${p.id}">✓ Finalizar actividad</button>`
-        :`<span class="done-pill">✓ Finalizada${p.actualFinishedAt?` · ${formatActualStamp(p.actualFinishedAt)}`:''}</span>`;
+        :`<span class="done-pill">✓ Finalizada${p.actualFinishedAt?` · ${formatActualStamp(p.actualFinishedAt)}`:''}</span>${(planRequiresCalibration(p)||planHasReagents(p))?`<button type="button" class="btn secondary technical-edit-btn" data-edit-technical="${p.id}">Completar / Editar datos técnicos</button>`:''}`;
     let actual='';
     if(p.actualStartedAt){
       const realMins=p.actualFinishedAt?realWorkMinutesBetween(p.actualStartedAt,p.actualFinishedAt):0;
@@ -1348,7 +1458,7 @@ async function renderMyDay(){
     </article>`;
   }).join('');
   $$('[data-start-activity]').forEach(el=>el.onclick=()=>startMyActivity(el.dataset.startActivity));
-  $$('[data-finish-activity]').forEach(el=>el.onclick=()=>finishMyActivity(el.dataset.finishActivity));
+  $$('[data-finish-activity]').forEach(el=>el.onclick=()=>finishMyActivity(el.dataset.finishActivity));$$('[data-edit-technical]').forEach(b=>b.onclick=()=>editCompletedTechnicalData(b.dataset.editTechnical));
   $$('[data-move-up]').forEach(el=>el.onclick=()=>moveMyActivity(el.dataset.moveUp,-1));
   $$('[data-move-down]').forEach(el=>el.onclick=()=>moveMyActivity(el.dataset.moveDown,1));
   $$('[data-prioritize]').forEach(el=>el.onclick=()=>prioritizeMyActivity(el.dataset.prioritize));  $$('[data-comment-save]').forEach(el=>el.onclick=()=>addAnalystComment(el.dataset.commentSave));
@@ -1455,7 +1565,7 @@ async function analyzeBossDay(){
       <h4>Propuestas de mejora</h4>
       ${bossAIRecommendations.length?bossAIRecommendations.slice(0,8).map((r,i)=>`<article class="boss-rec"><div><span class="rec-rank">#${i+1}</span><b>${escapeHtml(r.title)}</b><p>${escapeHtml(r.text)}</p></div><button class="btn secondary compact" data-apply-boss-rec="${r.id}">Aplicar propuesta</button></article>`).join(''):`<p class="muted">No hay movimientos con una mejora suficientemente clara. Puede mantener la distribución actual.</p>`}
     </div>`;
-  $$('[data-apply-boss-rec]').forEach(b=>b.onclick=()=>applyBossRecommendation(b.dataset.applyBossRec));
+  $$('[data-apply-boss-rec]').forEach(b=>b.onclick=()=>applyBossRecommendation(b.dataset.applyBossRec));$$('[data-edit-technical]').forEach(b=>b.onclick=()=>editCompletedTechnicalData(b.dataset.editTechnical));
   await renderExecutivePlanner();
   await audit('ANALIZAR_JORNADA_IA','PLANIFICADOR',date,`Puntaje ${score}/100 · ${bossAIRecommendations.length} propuesta(s) · ${conflicts} cruce(s)`);
 }
@@ -1509,6 +1619,39 @@ async function renderManagementFilters(){
   $('#mgmtAnalyst').innerHTML='<option value="">Todos los analistas</option>'+anas.map(a=>`<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
   if(current&&anas.some(a=>a.id===current))$('#mgmtAnalyst').value=current;
 }
+
+function dailyStatusClass(p){if(p.status==='REALIZADO')return 'done';if(p.actualStartedAt)return 'progress';return 'planned'}
+function dailyStatusLabel(p){if(p.status==='REALIZADO')return 'REALIZADO';if(p.actualStartedAt)return 'EN PROCESO';return 'PROGRAMADO'}
+function dailyDurationReal(p){if(!p.actualStartedAt)return null;const start=Date.parse(p.actualStartedAt),end=p.actualFinishedAt?Date.parse(p.actualFinishedAt):Date.now();return Number.isFinite(start)&&Number.isFinite(end)?Math.max(0,Math.round((end-start)/60000)):null}
+function dailyTechnicalSummary(p){
+  const parts=[];
+  if(p.actualSamples!==undefined&&p.actualSamples!==null)parts.push(`${p.actualSamples} muestra(s)`);
+  if(p.calibrationResult?.completed){const r2=p.calibrationResult.regression?.r2;parts.push(`Curva ${p.calibrationResult.points?.length||0} puntos${Number.isFinite(r2)?` · R² ${r2.toFixed(4)}`:''}`)}
+  else if(planRequiresCalibration(p))parts.push('Curva pendiente');
+  if(p.reagentResult?.items?.length){
+    const x=p.reagentResult.items.slice(0,3).map(r=>r.mode==='COUNT'?`${r.name}: ${r.used??'—'} ${r.unit||'u'}`:r.physicalState==='LIQUID'?`${r.name}: ${Number(r.volumeUsedMl||0).toFixed(2)} mL`:`${r.name}: ${Number(r.used||0).toFixed(2)} g`);
+    parts.push(`Reactivos · ${x.join(' · ')}${p.reagentResult.items.length>3?' · …':''}`);
+  }else if(planHasReagents(p))parts.push('Reactivos pendientes');
+  return parts.join(' | ');
+}
+async function renderDailyMonitor(){
+  if(currentSessionUser?.role!=='JEFE')return;
+  const date=$('#dailyMonitorDate')?.value||dateToday();
+  const plans=(await getAll('planning')).filter(p=>p.date===date).sort((a,b)=>(a.startTime||'').localeCompare(b.startTime||''));
+  const analysts=(await getAll('analysts')).filter(a=>a.status==='ACTIVO'&&isOperationalAnalyst(a)).sort((a,b)=>a.name.localeCompare(b.name,'es'));
+  const comments=await getAll('planComments');
+  const total=plans.length,done=plans.filter(p=>p.status==='REALIZADO').length,inProgress=plans.filter(p=>p.actualStartedAt&&p.status!=='REALIZADO').length,pending=plans.filter(p=>!p.actualStartedAt&&p.status!=='REALIZADO').length;
+  const realMinutes=plans.reduce((sum,p)=>sum+(dailyDurationReal(p)||0),0);
+  const techNeed=plans.filter(p=>planRequiresCalibration(p)||planHasReagents(p));
+  const techDone=techNeed.filter(p=>(!planRequiresCalibration(p)||p.calibrationResult?.completed)&&(!planHasReagents(p)||p.reagentResult?.completed)).length;
+  $('#dailyMonitorKpis').innerHTML=`<article><span>Actividades</span><strong>${total}</strong><small>${date}</small></article><article><span>Realizadas</span><strong>${done}</strong><small>${total?Math.round(done/total*100):0}% del plan</small></article><article><span>En proceso</span><strong>${inProgress}</strong><small>${pending} pendientes</small></article><article><span>Tiempo real</span><strong>${minutesText(realMinutes)}</strong><small>ejecutado acumulado</small></article><article><span>Cierre técnico</span><strong>${techDone}/${techNeed.length}</strong><small>curvas/reactivos completos</small></article>`;
+  $('#dailyAnalystSummary').innerHTML=analysts.map(a=>{const ap=plans.filter(p=>p.analystId===a.id||normalizeIdentityText(p.analystName)===normalizeIdentityText(a.name));const ad=ap.filter(p=>p.status==='REALIZADO').length,rm=ap.reduce((sum,p)=>sum+(dailyDurationReal(p)||0),0);return `<button class="daily-analyst-chip" data-jump-analyst="${a.id}"><span class="daily-avatar">${escapeHtml((a.name||'?').split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase())}</span><span><b>${escapeHtml(a.name)}</b><small>${ad}/${ap.length} realizadas · ${minutesText(rm)}</small></span><strong>${ap.length}</strong></button>`}).join('')||'<div class="empty-state">Sin analistas activos.</div>';
+  const hb=[];for(let hr=8;hr<=16;hr++){const hs=String(hr).padStart(2,'0')+':00';hb.push({hr,count:plans.filter(p=>(p.startTime||'00:00')<=hs&&(p.endTime||'00:00')>hs).length})}const max=Math.max(1,...hb.map(x=>x.count));$('#dailyHourSummary').innerHTML=hb.map(x=>`<div class="hour-row"><span>${String(x.hr).padStart(2,'0')}:00</span><div><i style="width:${Math.round(x.count/max*100)}%"></i></div><b>${x.count}</b></div>`).join('');
+  $('#dailyAnalystBoards').innerHTML=analysts.map(a=>{const ap=plans.filter(p=>p.analystId===a.id||normalizeIdentityText(p.analystName)===normalizeIdentityText(a.name));const dn=ap.filter(p=>p.status==='REALIZADO').length;if(!ap.length)return `<section class="daily-board" id="daily-board-${a.id}"><header><div><b>${escapeHtml(a.name)}</b><small>Sin actividades</small></div><span class="daily-board-total">0</span></header><div class="empty-state compact">Sin planificación para este día.</div></section>`;return `<section class="daily-board" id="daily-board-${a.id}"><header><div><b>${escapeHtml(a.name)}</b><small>${dn}/${ap.length} realizadas · ${Math.round(dn/ap.length*100)}%</small></div><span class="daily-board-total">${ap.length}</span></header><div class="daily-progress"><i style="width:${Math.round(dn/ap.length*100)}%"></i></div><div class="daily-task-list">${ap.map(p=>{const tech=dailyTechnicalSummary(p),real=dailyDurationReal(p),pc=comments.filter(x=>x.planId===p.id).length;return `<article class="daily-task ${dailyStatusClass(p)}"><div class="daily-task-time"><b>${escapeHtml(p.startTime||'—')}</b><span>${escapeHtml(p.endTime||'—')}</span></div><div class="daily-task-body"><div class="daily-task-top"><div><span class="daily-section">${escapeHtml(sectionMeta(p.section).label)}</span><h4>${escapeHtml(p.catalogName)}</h4></div><span class="daily-state ${dailyStatusClass(p)}">${dailyStatusLabel(p)}</span></div><div class="daily-task-meta"><span>Plan ${minutesText(p.durationMinutes||0)}</span>${real!==null?`<span>Real ${minutesText(real)}</span>`:''}${p.actualStartedAt?`<span>Inicio ${formatActualStamp(p.actualStartedAt)}</span>`:''}${p.actualFinishedAt?`<span>Fin ${formatActualStamp(p.actualFinishedAt)}</span>`:''}${pc?`<span>${pc} comentario(s)</span>`:''}</div>${tech?`<div class="daily-tech">${escapeHtml(tech)}</div>`:''}${p.notes?`<div class="daily-note"><b>Nota:</b> ${escapeHtml(p.notes)}</div>`:''}</div></article>`}).join('')}</div></section>`}).join('');
+  $$('[data-jump-analyst]').forEach(b=>b.onclick=()=>document.getElementById(`daily-board-${b.dataset.jumpAnalyst}`)?.scrollIntoView({behavior:'smooth',block:'start'}));
+  $('#dailyMonitorSubtitle').textContent=`${date} · ${plans.length} actividad(es) · ${done} realizada(s)`;
+}
+
 async function renderManagementDashboard(){
   if(!$('#managementBody'))return;
   await renderManagementFilters();
@@ -2243,7 +2386,7 @@ async function handleFirebaseAuthState(authUser){
 }
 
 const ROLE_ACCESS={
-  JEFE:['inicio','planificador','mi-jornada','gestion','catalogo','analistas','inteligencia','trazabilidad','configuracion'],
+  JEFE:['inicio','planificador','mi-jornada','seguimiento-diario','gestion','catalogo','analistas','inteligencia','trazabilidad','configuracion'],
   ANALISTA:['inicio','mi-jornada'],
   SIN_ROL:['inicio']
 };
@@ -2303,11 +2446,17 @@ function switchView(view){
   if(!canAccessView(view)){
     toast('Este módulo no está habilitado para su rol');
     view=currentSessionUser?.role==='ANALISTA'?'mi-jornada':'inicio';
-  }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador')refreshPlanner();if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='gestion')renderManagementDashboard()}
+  }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],'seguimiento-diario':['Seguimiento Diario','Vista ejecutiva del trabajo diario por analista'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador')refreshPlanner();if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='seguimiento-diario')renderDailyMonitor();if(view==='gestion')renderManagementDashboard()}
 async function init(){db=await openDB();
   firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogName').addEventListener('input',()=>{if($('#catalogSection').value==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration($('#catalogName').value)&&!$('#catalogId').value){$('#catalogRequiresCalibration').checked=true;updateCalibrationEditor()}});$('#catalogRequiresCalibration').addEventListener('change',updateCalibrationEditor);$('#calibrationUnit').addEventListener('input',validateCalibrationConfig);if($('#btnAddCalibrationPoint'))$('#btnAddCalibrationPoint').onclick=addCalibrationPoint;if($('#catalogUsesReagents'))$('#catalogUsesReagents').addEventListener('change',updateReagentEditor);if($('#btnAddReagent'))$('#btnAddReagent').onclick=addReagent;$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
 $('#planActivitySearch').addEventListener('input',renderPlanSelectors);
-if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openCatalogFromPlanner;$('#planSamples').addEventListener('input',smartPlannerRecalculate);$('#planStart').addEventListener('input',updatePlanPreview);$('#planDate').addEventListener('change',async()=>{await smartPlannerRecalculate();await renderExecutivePlanner();if($('#bossAIResults')){$('#bossAIResults').classList.add('hidden');$('#bossAIEmpty').classList.remove('hidden')}});$('#agendaStatus').addEventListener('change',renderAgenda);if($('#btnSuggestAnalyst'))$('#btnSuggestAnalyst').onclick=suggestAnalyst;if($('#btnOptimizeDay'))$('#btnOptimizeDay').onclick=analyzeBossDay;if($('#btnSavePlan'))$('#btnSavePlan').onclick=savePlan;$('#planAnalyst').addEventListener('change',autoScheduleSelectedAnalyst);}if($('#myDayDate')){$('#myDayDate').addEventListener('change',renderMyDay);if($('#btnMyDayToday'))$('#btnMyDayToday').onclick=()=>{$('#myDayDate').value=dateToday();renderMyDay()};$('#myDayAnalyst').addEventListener('change',renderMyDay);if($('#btnRestoreBossPlan'))$('#btnRestoreBossPlan').onclick=()=>restoreBossSchedule($('#myDayDate').value,$('#myDayAnalyst').value);}if($('#mgmtFrom')){
+if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openCatalogFromPlanner;$('#planSamples').addEventListener('input',smartPlannerRecalculate);$('#planStart').addEventListener('input',updatePlanPreview);$('#planDate').addEventListener('change',async()=>{await smartPlannerRecalculate();await renderExecutivePlanner();if($('#bossAIResults')){$('#bossAIResults').classList.add('hidden');$('#bossAIEmpty').classList.remove('hidden')}});$('#agendaStatus').addEventListener('change',renderAgenda);if($('#btnSuggestAnalyst'))$('#btnSuggestAnalyst').onclick=suggestAnalyst;if($('#btnOptimizeDay'))$('#btnOptimizeDay').onclick=analyzeBossDay;if($('#btnSavePlan'))$('#btnSavePlan').onclick=savePlan;$('#planAnalyst').addEventListener('change',autoScheduleSelectedAnalyst);}if($('#myDayDate')){$('#myDayDate').addEventListener('change',renderMyDay);if($('#btnMyDayToday'))$('#btnMyDayToday').onclick=()=>{$('#myDayDate').value=dateToday();renderMyDay()};$('#myDayAnalyst').addEventListener('change',renderMyDay);if($('#btnRestoreBossPlan'))$('#btnRestoreBossPlan').onclick=()=>restoreBossSchedule($('#myDayDate').value,$('#myDayAnalyst').value);}if($('#dailyMonitorDate')){
+  $('#dailyMonitorDate').value=dateToday();
+  $('#dailyMonitorDate').addEventListener('change',renderDailyMonitor);
+  if($('#btnDailyToday'))$('#btnDailyToday').onclick=()=>{$('#dailyMonitorDate').value=dateToday();renderDailyMonitor()};
+  if($('#btnRefreshDailyMonitor'))$('#btnRefreshDailyMonitor').onclick=renderDailyMonitor;
+}
+if($('#mgmtFrom')){
   $('#mgmtFrom').value=monthStartISO();
   $('#mgmtTo').value=dateToday();
   $('#mgmtFrom').addEventListener('change',renderManagementDashboard);

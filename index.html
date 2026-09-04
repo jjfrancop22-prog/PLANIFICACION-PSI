@@ -16,6 +16,7 @@
       <button class="nav-item active" data-view="inicio">⌂ <span>Inicio</span></button>
       <button class="nav-item" data-view="planificador">✦ <span>Planificador Inteligente</span></button>
       <button class="nav-item" data-view="mi-jornada">☑ <span>Mi Jornada</span></button>
+      <button class="nav-item" data-view="seguimiento-diario">◉ <span>Seguimiento Diario</span></button>
       <button class="nav-item" data-view="gestion">▤ <span>Dashboard Gestión</span></button>
       <button class="nav-item" data-view="catalogo">▦ <span>Catálogo Maestro</span></button>
       <button class="nav-item" data-view="analistas">♙ <span>Analistas</span></button>
@@ -23,7 +24,7 @@
       <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
       <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
     </nav>
-    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.4.4-INVENTARIO-CONSUMO · Firebase Auth</small></div>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.0-SEGUIMIENTO-DIARIO · Firebase Auth</small></div>
   </aside>
 
   <main class="main">
@@ -52,7 +53,7 @@
 
     <section id="view-inicio" class="view active">
       <div class="hero card">
-        <div><span class="eyebrow">V1.0.4.4-INVENTARIO-CONSUMO · FIREBASE AUTH + SESIÓN REAL</span><h2>Catálogo y planificación en una sola base</h2><p>El Catálogo Maestro, los analistas y la planificación permanecen en la misma base local. Firebase Authentication + Firestore con confirmación de escritura, Outbox y sincronización en tiempo real.</p></div>
+        <div><span class="eyebrow">V1.0.5.0-SEGUIMIENTO-DIARIO · FIREBASE AUTH + SESIÓN REAL</span><h2>Catálogo y planificación en una sola base</h2><p>El Catálogo Maestro, los analistas y la planificación permanecen en la misma base local. Firebase Authentication + Firestore con confirmación de escritura, Outbox y sincronización en tiempo real.</p></div>
         <div class="hero-status"><span>Estado</span><strong>FIREBASE CONFIGURADO</strong><small>Proyecto inventario-psi · Auth + Firestore validados</small></div>
       </div>
       <div class="stats-grid">
@@ -145,6 +146,31 @@
       </div>
       <div id="myDayEmpty" class="card empty"><div class="empty-icon">☑</div><h4>Sin actividades para esta jornada</h4><p>Seleccione fecha y analista.</p></div>
       <div id="myDayCards" class="myday-cards"></div><div id="myDayRecent" class="card myday-recent"></div>
+    </section>
+
+    
+    <section id="view-seguimiento-diario" class="view">
+      <div class="section-header daily-monitor-head">
+        <div><span class="eyebrow">CONTROL OPERATIVO</span><h2>Seguimiento Diario</h2><p>Vista ejecutiva del día a día de cada analista, con ejecución y datos técnicos.</p></div>
+        <div class="daily-monitor-tools">
+          <label>Fecha<input id="dailyMonitorDate" type="date"></label>
+          <button type="button" class="btn secondary" id="btnDailyToday">Hoy</button>
+          <button type="button" class="btn primary" id="btnRefreshDailyMonitor">Actualizar</button>
+        </div>
+      </div>
+      <div id="dailyMonitorKpis" class="daily-monitor-kpis"></div>
+      <div class="daily-monitor-grid">
+        <aside class="daily-monitor-side">
+          <div class="card"><div class="card-title"><div><b>Analistas</b><small>Resumen del día</small></div></div><div id="dailyAnalystSummary" class="daily-analyst-summary"></div></div>
+          <div class="card"><div class="card-title"><div><b>Carga por hora</b><small>Actividades simultáneas</small></div></div><div id="dailyHourSummary" class="daily-hour-summary"></div></div>
+        </aside>
+        <div class="daily-monitor-main">
+          <div class="card">
+            <div class="card-title daily-main-head"><div><b>Detalle por analista</b><small id="dailyMonitorSubtitle">Planificación, ejecución y resultados técnicos.</small></div><div class="daily-legend"><span class="dot planned"></span> Programado <span class="dot progress"></span> En proceso <span class="dot done"></span> Realizado</div></div>
+            <div id="dailyAnalystBoards" class="daily-analyst-boards"></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section id="view-gestion" class="view">
@@ -383,6 +409,7 @@
     <button type="button" class="icon-btn" data-close="finishActivityDialog">×</button>
   </div>
   <input type="hidden" id="finishActivityPlanId"/>
+    <input type="hidden" id="finishTechnicalEditMode" value="0"/>
   <div class="finish-activity-summary" id="finishActivitySummary"></div>
   <div class="form-grid">
     <label id="finishSamplesLabel" class="full">Número de muestras analizadas
