@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.1-MENU-REQUISITOS-TECNICOS';
+const APP_VERSION='V1.0.5.2-REACTIVOS-VIGENTES-REPOSICION';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1034,26 +1034,9 @@ function reagentCycleKey(r){
   return `${normalizeIdentityText(r?.name||'')}|${normalizeIdentityText(r?.unit||'')}`;
 }
 async function resolvePreviousReagentWeight(plan,reagent){
-  // El peso inicial efectivo es el último peso final confirmado del mismo reactivo.
-  // Si todavía nunca se ha usado, toma el peso inicial configurado en catálogo.
-  const key=reagentCycleKey(reagent);
-  const plans=await getAll('planning');
-  const candidates=[];
-  for(const p of plans){
-    if(p.id===plan.id || p.status!=='REALIZADO' || !p.reagentResult?.items?.length)continue;
-    for(const item of p.reagentResult.items){
-      if(item.mode!=='WEIGHT')continue;
-      if(reagentCycleKey(item)!==key)continue;
-      const finalWeight=Number(item.finalWeight ?? item.after);
-      if(!Number.isFinite(finalWeight))continue;
-      const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
-      candidates.push({finalWeight,stamp,planId:p.id,finishedAt:p.actualFinishedAt||p.updatedAt||''});
-    }
-  }
-  candidates.sort((a,b)=>b.stamp-a.stamp);
-  if(candidates.length)return {weight:candidates[0].finalWeight,source:'HISTORICO',...candidates[0]};
-  const configured=Number(reagent.initialWeight);
-  return Number.isFinite(configured)?{weight:configured,source:'CATALOGO',planId:null,finishedAt:null}:null;
+  const latest=await latestConfirmedReagentRecord(reagent,plan.id);
+  if(latest){const f=Number(latest.item.finalWeight??latest.item.after);if(Number.isFinite(f)){if(reagentIsDepleted(latest.item))return {weight:null,source:'AGOTADO',depleted:true};return {weight:f,source:'HISTORICO',depleted:false}}}
+  const configured=Number(reagent.initialWeight);return Number.isFinite(configured)?{weight:configured,source:'CATALOGO',depleted:false}:null;
 }
 async function renderFinishReagents(p){
   const block=$('#finishReagentBlock');if(!block)return;
@@ -1068,6 +1051,9 @@ async function renderFinishReagents(p){
       const initial=Number.isFinite(Number(old.initialWeight))?Number(old.initialWeight):(previous?.weight??null);
       const source=old.initialSource||previous?.source||'CATALOGO';
       const finalValue=old.finalWeight ?? old.after ?? '';
+      if(previous?.depleted===true&&!Number.isFinite(Number(old.initialWeight))){
+        parts.push(`<div class="reagent-capture-card reagent-depleted-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)}</b><small>AGOTADO · requiere nuevo frasco</small></div><span class="badge danger">AGOTADO</span></div><div class="reagent-replacement-alert"><b>El frasco anterior llegó a cero.</b><span>Ingrese el peso inicial del nuevo frasco.</span></div><div class="reagent-inputs"><label>Nuevo peso inicial (g)<input type="number" step="any" min="${Number(r.tareWeight||0)}" data-reag-new-initial="${r.id}" placeholder="Ej. 590.00"></label><label>Peso final (g)<input type="number" step="any" min="0" data-reag-final="${r.id}" value="${finalValue}"></label><label>Consumo calculado<input readonly data-reag-used="${r.id}"></label></div><input type="hidden" data-reag-initial="${r.id}" data-reag-source="REPOSICION" value=""><div class="reagent-used-result" data-reag-result="${r.id}">Pendiente de registrar nuevo frasco.</div></div>`);continue;
+      }
       parts.push(`<div class="reagent-capture-card">
         <div class="reagent-capture-head"><div><b>${escapeHtml(r.name)}</b><small>PESO DE FRASCO · ${r.physicalState==='LIQUID'?`LÍQUIDO · densidad ${Number(r.density).toFixed(4)} g/mL`:'SÓLIDO'} · tara ${Number(r.tareWeight||0).toFixed(3)} g</small></div><span class="badge">R${i+1}</span></div>
         <div class="reagent-inputs reagent-cycle-inputs">
@@ -1086,7 +1072,7 @@ async function renderFinishReagents(p){
     }
   }
   $('#finishReagentRows').innerHTML=parts.join('');
-  $$('[data-reag-final], [data-reag-count]').forEach(el=>el.addEventListener('input',()=>updateReagentCalculations(p)));
+  $$('[data-reag-new-initial]').forEach(el=>el.addEventListener('input',()=>{const x=$(`[data-reag-initial="${el.dataset.reagNewInitial}"]`);if(x)x.value=el.value;updateReagentCalculations(p)}));$$('[data-reag-final], [data-reag-count]').forEach(el=>el.addEventListener('input',()=>updateReagentCalculations(p)));
   updateReagentCalculations(p);
 }
 function updateReagentCalculations(p){
@@ -1128,13 +1114,13 @@ function collectReagentResult(p,requireComplete=true){
       const ri=$(`[data-reag-initial="${r.id}"]`)?.value,rf=$(`[data-reag-final="${r.id}"]`)?.value;
       if(ri===''||rf===''){complete=false;if(requireComplete)return {ok:false,text:`Ingrese el peso final de ${r.name}.`};items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:r.unit,initialWeight:ri===''?null:Number(ri),finalWeight:null,used:null});continue}
       const initialWeight=Number(ri),finalWeight=Number(rf);
-      if(!Number.isFinite(initialWeight)||!Number.isFinite(finalWeight)||initialWeight<0||finalWeight<0)return {ok:false,text:`Revise el peso final registrado de ${r.name}.`};
+      if(!Number.isFinite(initialWeight)||!Number.isFinite(finalWeight)||initialWeight<0||finalWeight<0)return {ok:false,text:`Revise los pesos registrados de ${r.name}.`};if(initialWeight<=Number(r.tareWeight||0))return {ok:false,text:`El peso inicial de ${r.name} debe ser mayor que la tara.`};
       if(finalWeight>initialWeight)return {ok:false,text:`En ${r.name}, el peso final no puede ser mayor al peso inicial vigente (${initialWeight} ${r.unit||'g'}).`};
       const used=initialWeight-finalWeight;
       const density=r.physicalState==='LIQUID'?Number(r.density):null;
       const volumeUsedMl=r.physicalState==='LIQUID'&&Number.isFinite(density)&&density>0?used/density:null;
-      const tareWeight=Number(r.tareWeight||0),netRemainingG=Math.max(0,finalWeight-tareWeight),netRemainingMl=r.physicalState==='LIQUID'&&Number.isFinite(density)&&density>0?netRemainingG/density:null;
-      items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density,tareWeight,initialWeight,finalWeight,used,volumeUsedMl,netRemainingG,netRemainingMl,consumptionValue:r.physicalState==='LIQUID'?volumeUsedMl:used,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',initialSource:$(`[data-reag-initial="${r.id}"]`)?.dataset?.reagSource||'HISTORICO'});
+      const tareWeight=Number(r.tareWeight||0),netRemainingG=Math.max(0,finalWeight-tareWeight),netRemainingMl=r.physicalState==='LIQUID'&&Number.isFinite(density)&&density>0?netRemainingG/density:null,depleted=netRemainingG<=0.000001;
+      items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:'g',physicalState:r.physicalState||'SOLID',density,tareWeight,initialWeight,finalWeight,used,volumeUsedMl,netRemainingG,netRemainingMl,depleted,consumptionValue:r.physicalState==='LIQUID'?volumeUsedMl:used,consumptionUnit:r.physicalState==='LIQUID'?'mL':'g',initialSource:$(`[data-reag-initial="${r.id}"]`)?.dataset?.reagSource||'HISTORICO'});
     }else{
       const raw=$(`[data-reag-count="${r.id}"]`)?.value;
       if(raw===''){complete=false;if(requireComplete)return {ok:false,text:`Ingrese la cantidad utilizada de ${r.name}.`};items.push({reagentId:r.id,name:r.name,mode:r.mode,unit:r.unit,used:null});continue}
@@ -1178,40 +1164,24 @@ function technicalRequirementMenuHtml(p,req){
   return `<div class="tech-req-menu"><div class="tech-req-head"><div><b>Requisitos para finalizar</b><small>${allDone?'Datos técnicos completos':'Complete estos datos antes de finalizar la actividad'}</small></div><span class="tech-req-status ${allDone?'done':''}">${allDone?'COMPLETO':'PENDIENTE'}</span></div><div class="tech-req-items">${rows.join('')}</div>${button}</div>`;
 }
 
+
+function mergeReagentConfigFromCatalog(oldCfg=[],newCfg=[]){const m=new Map((oldCfg||[]).map(x=>[x.id,x]));return (newCfg||[]).map((x,i)=>({...m.get(x.id),...JSON.parse(JSON.stringify(x)),order:x.order??i+1}))}
+function reagentIsDepleted(item){if(!item||item.mode!=='WEIGHT')return false;if(item.depleted===true)return true;const f=Number(item.finalWeight??item.after),t=Number(item.tareWeight);return Number.isFinite(f)&&Number.isFinite(t)&&f<=t+0.000001}
+async function latestConfirmedReagentRecord(reagent,excludePlanId=null){const key=reagentCycleKey(reagent),plans=await getAll('planning');let best=null;for(const p of plans){if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;for(const item of p.reagentResult.items){if(reagentCycleKey(item)!==key)continue;const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;if(!best||stamp>best.stamp)best={plan:p,item,stamp}}}return best}
 async function hydratePlanTechnicalRequirements(p){
-  if(!p)return p;
-  let changed=false;
-
-  // Buscar el mismo elemento de catálogo por catalogId; como respaldo, por nombre+sección.
-  const catalog=await getAll('catalog');
-  let item=catalog.find(x=>x.id===p.catalogId);
-  if(!item){
-    item=catalog.find(x=>x.section===p.section && normalizeIdentityText(x.name)===normalizeIdentityText(p.catalogName));
-  }
+  if(!p)return p;let changed=false;
+  const catalog=await getAll('catalog');let item=catalog.find(x=>x.id===p.catalogId);
+  if(!item)item=catalog.find(x=>x.section===p.section&&normalizeIdentityText(x.name)===normalizeIdentityText(p.catalogName));
   if(!item)return p;
-
-  // Si la planificación es antigua y no tenía la configuración copiada,
-  // tomar la configuración actual del catálogo ANTES de permitir finalizar.
-  if(!planRequiresCalibration(p) && item.calibrationConfig?.enabled && Array.isArray(item.calibrationConfig.points) && item.calibrationConfig.points.length){
-    p.calibrationConfig=JSON.parse(JSON.stringify(item.calibrationConfig));
-    if(!p.calibrationResult)p.calibrationResult=null;
-    changed=true;
+  if(item.calibrationConfig?.enabled&&item.calibrationConfig?.points?.length&&!planRequiresCalibration(p)){p.calibrationConfig=JSON.parse(JSON.stringify(item.calibrationConfig));p.calibrationResult=p.calibrationResult||null;changed=true}
+  if(item.reagentConfig?.length&&!p.reagentResult?.completed){
+    const merged=mergeReagentConfigFromCatalog(p.reagentConfig||[],item.reagentConfig);
+    if(JSON.stringify(merged)!==JSON.stringify(p.reagentConfig||[])){p.reagentConfig=merged;changed=true}
+    p.reagentResult=p.reagentResult||null;
   }
-  if(!planHasReagents(p) && Array.isArray(item.reagentConfig) && item.reagentConfig.length){
-    p.reagentConfig=JSON.parse(JSON.stringify(item.reagentConfig));
-    if(!p.reagentResult)p.reagentResult=null;
-    changed=true;
-  }
-
-  if(changed){
-    p.updatedAt=nowISO();
-    await put('planning',p);
-    await queue('UPDATE','planning',p);
-    await audit('ACTUALIZAR_REQUISITOS_TECNICOS','MI JORNADA',p.code,`${p.catalogName}: requisitos técnicos tomados del catálogo antes del cierre`);
-  }
+  if(changed){p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p)}
   return p;
 }
-
 
 async function openTechnicalData(planId){
   let p=await getOne('planning',planId);if(!p)return;
@@ -1839,7 +1809,7 @@ async function exportReagentConsumptionExcel(){
       const state=hit?.r?.physicalState||r.physicalState||'SOLID';
       const netG=(Number.isFinite(gross)&&Number.isFinite(tare))?Math.max(0,gross-tare):'';
       const netMl=state==='LIQUID'&&netG!==''&&Number.isFinite(density)&&density>0?netG/density:'';
-      inventoryRows.push([r.name||'',reagentModeLabel(r.mode),state==='LIQUID'?'LÍQUIDO':'SÓLIDO',Number.isFinite(density)?density:'',Number.isFinite(tare)?tare:'',Number.isFinite(gross)?gross:'',netG,netMl,'','',p?.date||'',p?.analystName||'',p?.catalogName||cfg?.cat?.name||'',p?sectionMeta(p.section).label:(cfg?.cat?sectionMeta(cfg.cat.section).label:''),hit?'ÚLTIMO PESO FINAL':'PESO INICIAL CATÁLOGO',(Number.isFinite(gross)&&Number.isFinite(tare))?'CALCULADO':'FALTA TARA/PESO']);
+      inventoryRows.push([r.name||'',reagentModeLabel(r.mode),state==='LIQUID'?'LÍQUIDO':'SÓLIDO',Number.isFinite(density)?density:'',Number.isFinite(tare)?tare:'',Number.isFinite(gross)?gross:'',netG,netMl,'','',p?.date||'',p?.analystName||'',p?.catalogName||cfg?.cat?.name||'',p?sectionMeta(p.section).label:(cfg?.cat?sectionMeta(cfg.cat.section).label:''),hit?'ÚLTIMO PESO FINAL':'PESO INICIAL CATÁLOGO',(Number.isFinite(gross)&&Number.isFinite(tare))?(netG<=0.000001?'AGOTADO · REPONER':'ACTIVO'):'FALTA TARA/PESO']);
     }else{
       inventoryRows.push([r.name||'',reagentModeLabel(r.mode),'','','','','','',''+(r.unit||'unidad'),hit?.r?.used??'',p?.date||'',p?.analystName||'',p?.catalogName||cfg?.cat?.name||'',p?sectionMeta(p.section).label:(cfg?.cat?sectionMeta(cfg.cat.section).label:''),'NO APLICA','CONSUMO CONTABLE']);
     }
