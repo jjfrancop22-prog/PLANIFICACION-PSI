@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#0f4c81" />
+  <title>ERP Planificación NextGen</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">P</div><div><strong>ERP PLANIFICACIÓN</strong><span>NextGen</span></div></div>
+    <nav id="nav">
+      <button class="nav-item active" data-view="inicio">⌂ <span>Inicio</span></button>
+      <button class="nav-item" data-view="planificador">✦ <span>Planificador Inteligente</span></button>
+      <button class="nav-item" data-view="mi-jornada">☑ <span>Mi Jornada</span></button>
+      <button class="nav-item" data-view="seguimiento-diario">◉ <span>Seguimiento Diario</span></button>
+      <button class="nav-item" data-view="gestion">▤ <span>Dashboard Gestión</span></button>
+      <button class="nav-item" data-view="catalogo">▦ <span>Catálogo Maestro</span></button>
+      <button class="nav-item" data-view="analistas">♙ <span>Analistas</span></button>
+      <button class="nav-item" data-view="inteligencia">✦ <span>Control inteligente</span></button>
+      <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
+      <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
+    </nav>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.6-HORARIO-SECUENCIAL-INTELIGENTE · Firebase Auth</small></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div><h1 id="pageTitle">Inicio</h1><p id="pageSubtitle">Catálogo maestro que alimenta el Planificador</p></div>
+      <div class="top-actions">
+        <div class="session-chip" id="sessionChip">
+          <span id="sessionRoleBadge">LOCAL</span>
+          <select id="localSessionSelect" aria-label="Usuario de prueba local"></select>
+          <div id="firebaseSessionInfo" class="firebase-session-info hidden">
+            <strong id="firebaseSessionName">—</strong>
+            <small id="firebaseSessionEmail">—</small>
+          </div>
+          <button type="button" class="btn secondary compact hidden" id="btnFirebaseLogin">Iniciar sesión</button>
+          <button type="button" class="icon-btn hidden" id="btnFirebaseLogout" title="Cerrar sesión">⇥</button>
+        </div>
+        <div class="sync-cluster" title="Estado de sincronización">
+          <span id="syncDot" class="sync-dot local"></span>
+          <div class="sync-copy"><b id="syncLabel">LOCAL</b><small id="syncDetail">Firebase no configurado</small></div>
+          <button type="button" class="icon-btn sync-btn" id="btnSyncNow" title="Sincronizar ahora">↻</button>
+        </div>
+        <button class="btn secondary" id="btnBackup">Exportar respaldo</button>
+        <button class="btn primary hidden" id="btnContextNew">+ Nuevo</button>
+      </div>
+    </header>
+
+    <section id="view-inicio" class="view active">
+      <div class="hero card">
+        <div><span class="eyebrow">V1.0.5.6.6-HORARIO-SECUENCIAL-INTELIGENTE · FIREBASE AUTH + SESIÓN REAL</span><h2>Catálogo y planificación en una sola base</h2><p>El Catálogo Maestro, los analistas y la planificación permanecen en la misma base local. Firebase Authentication + Firestore con confirmación de escritura, Outbox y sincronización en tiempo real.</p></div>
+        <div class="hero-status"><span>Estado</span><strong>FIREBASE CONFIGURADO</strong><small>Proyecto inventario-psi · Auth + Firestore validados</small></div>
+      </div>
+      <div class="stats-grid">
+        <article class="card stat"><span>Catálogo activo</span><strong id="statCatalog">0</strong><small>actividades/ensayos</small></article>
+        <article class="card stat"><span>Analistas activos</span><strong id="statAnalysts">0</strong><small>personas disponibles</small></article>
+        <article class="card stat"><span>Reglas de tiempo</span><strong id="statRules">0</strong><small>rangos configurados</small></article>
+        <article class="card stat"><span>Alertas inteligentes</span><strong id="statAlerts">0</strong><small>por revisar</small></article>
+      </div>
+      <div class="card architecture-map">
+        <h3>Arquitectura operativa</h3>
+        <div class="flow-grid">
+          <div><b>ACTIVIDAD LABORATORIO</b><span>Mantenimiento · Calibración · Verificación · Limpieza · Preparación · Control · Otros</span></div>
+          <div><b>SOPORTE DE CALIDAD</b><span>Gestión, revisión, auditoría, documentación y soporte.</span></div>
+          <div><b>OPERACIONES</b><span>Actividades operativas que consumen jornada y deben entrar al plan.</span></div>
+          <div><b>ENSAYOS ANALÍTICOS</b><span>Técnica → ensayo/parámetro → reglas por cantidad de muestras y tiempo.</span></div>
+          <div><b>RECEPCIÓN DE MUESTRAS</b><span>El analista registra las muestras reales al cierre de la actividad.</span></div>
+          <div><b>MICROBIOLOGÍA</b><span>Actividad compuesta con duración total y desglose de subactividades.</span></div>
+          <div><b>AASS</b><span>Bloque compuesto con duración total y muestras reales al cierre.</span></div>
+          <div class="accent"><b>PLANIFICADOR INTELIGENTE</b><span>Consume directamente catálogo, competencias, carga diaria e historial real.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-planificador" class="view">
+      <div id="executivePlannerSummary" class="executive-summary"></div>
+      <div class="card visual-day-card">
+        <div class="section-head">
+          <div><span class="eyebrow">VISTA EJECUTIVA</span><h3>Distribución visual de la jornada</h3><p>Jornada efectiva 08:00–12:00 / 13:00–17:00. El almuerzo 12:00–13:00 corta visualmente cada actividad.</p></div>
+          <div class="visual-legend"><span><i class="leg busy"></i>Planificado</span><span><i class="leg lunch"></i>Almuerzo</span><span><i class="leg free"></i>Libre</span></div>
+        </div>
+        <div id="plannerTimeline" class="planner-timeline"></div>
+      </div>
+      <div class="planner-grid">
+        <div class="card">
+          <div class="section-head"><div><h3>Nueva planificación</h3><p>Seleccione actividad y analista. El motor combina catálogo, disponibilidad y ejecuciones reales previas para proponer tiempo, persona y horario.</p></div></div>
+          <div class="planner-form">
+            <label>Fecha<input id="planDate" type="date"/></label>
+            <label>Sección<select id="planSection"></select></label>
+            <label class="full">Actividad / ensayo
+  <div class="activity-picker-tools">
+    <input id="planActivitySearch" type="search" placeholder="Buscar actividad, ensayo, técnica o clasificación..."/>
+    <button type="button" class="btn secondary compact" id="btnAddActivityFromPlanner">+ Agregar actividad</button>
+  </div>
+  <select id="planCatalog"></select>
+  <small id="planActivitySearchInfo" class="picker-help"></small>
+</label>
+            <label id="planSamplesLabel" class="hidden">Número de muestras<input id="planSamples" type="number" min="1" step="1" placeholder="Ej. 8"/></label>
+            <label>Hora inicio <small style="font-weight:400">· automática / editable</small><input id="planStart" type="time" value="08:00"/></label>
+            <label>Duración calculada<input id="planDuration" readonly/></label>
+            <label>Hora fin<input id="planEnd" readonly/></label>
+            <label class="full">Analista<select id="planAnalyst"><option value="">Seleccione o use sugerencia inteligente</option></select></label>
+            <label class="full">Observación del jefe<textarea id="planNotes" rows="2" placeholder="Instrucción, prioridad, condición especial o comentario para el analista"></textarea></label>
+          </div>
+          <div id="planBreakdown" class="planner-breakdown hidden"></div><div id="historicalAI" class="historical-ai hidden"></div>
+          <div id="recommendationBox" class="recommendation-box"><b>Asistente inteligente</b><span>Seleccione fecha, actividad y hora para evaluar la mejor asignación.</span></div>
+          <div class="planner-actions"><button class="btn secondary" id="btnSuggestAnalyst">✦ Sugerir analista</button><button class="btn primary" id="btnSavePlan">Guardar planificación</button></div>
+        </div>
+        <div class="card">
+          <div class="section-head"><div><h3>Carga del día</h3><p>Horas planificadas por analista para la fecha seleccionada.</p></div></div>
+          <div id="loadCards" class="load-cards"></div>
+        </div>
+      </div>
+      <div class="card boss-ai-panel">
+        <div class="section-head boss-ai-head">
+          <div>
+            <span class="eyebrow">ASISTENTE DE ORGANIZACIÓN</span>
+            <h3>✦ Revisión inteligente de la jornada</h3>
+            <p>Analiza carga, espacios disponibles, competencias y experiencia histórica. Las propuestas nunca se aplican sin aprobación del jefe.</p>
+          </div>
+          <button class="btn primary" id="btnOptimizeDay">✦ Analizar y proponer mejoras</button>
+        </div>
+        <div id="bossAIEmpty" class="boss-ai-empty">Seleccione una fecha y pulse “Analizar y proponer mejoras”.</div>
+        <div id="bossAIResults" class="hidden"></div>
+      </div>
+      <div class="card planner-agenda-card">
+        <div class="section-head"><div><h3>Agenda diaria consolidada</h3><p>Todos los módulos convergen aquí sin duplicar el catálogo.</p></div><div class="filters"><select id="agendaStatus"><option value="">Todos los estados</option><option>PROGRAMADO</option><option>EN PROCESO</option><option>REALIZADO</option><option>CANCELADO</option></select></div></div>
+        <div class="empty" id="agendaEmpty"><div class="empty-icon">▤</div><h4>Sin actividades planificadas</h4><p>Cree la primera asignación para esta fecha.</p></div>
+        <div class="table-wrap hidden" id="agendaTableWrap"><table><thead><tr><th>Horario</th><th>Analista</th><th>Sección</th><th>Actividad</th><th>Duración</th><th>Estado</th><th></th></tr></thead><tbody id="agendaBody"></tbody></table></div>
+      </div>
+    </section>
+
+
+    <section id="view-mi-jornada" class="view">
+      <div class="card analyst-day-header">
+        <div class="section-head">
+          <div><h3>Mi Jornada</h3><p>Vista flexible: el analista puede priorizar actividades pendientes; el sistema recalcula los horarios sin alterar duración ni trazabilidad.</p><button type="button" class="btn secondary compact restore-boss-plan" id="btnRestoreBossPlan">↺ Restaurar orden del jefe</button></div>
+          <div class="filters analyst-day-filters"><label>Fecha<div class="date-inline"><input id="myDayDate" type="date"/><button class="btn secondary compact" id="btnMyDayToday" type="button">Hoy</button></div></label><label>Analista<select id="myDayAnalyst"></select></label></div>
+        </div>
+        <div id="myDaySummary" class="myday-summary"></div>
+      </div>
+      <div id="myDayEmpty" class="card empty"><div class="empty-icon">☑</div><h4>Sin actividades para esta jornada</h4><p>Seleccione fecha y analista.</p></div>
+      <div id="myDayCards" class="myday-cards"></div><div id="myDayRecent" class="card myday-recent"></div>
+    </section>
+
+    
+    <section id="view-seguimiento-diario" class="view">
+      <div class="section-header daily-monitor-head">
+        <div><span class="eyebrow">CONTROL OPERATIVO</span><h2>Seguimiento Diario</h2><p>Vista ejecutiva del día a día de cada analista, con ejecución y datos técnicos.</p></div>
+        <div class="daily-monitor-tools">
+          <label>Fecha<input id="dailyMonitorDate" type="date"></label>
+          <button type="button" class="btn secondary" id="btnDailyToday">Hoy</button>
+          <button type="button" class="btn primary" id="btnRefreshDailyMonitor">Actualizar</button>
+        </div>
+      </div>
+      <div id="dailyMonitorKpis" class="daily-monitor-kpis"></div>
+      <div class="daily-monitor-grid">
+        <aside class="daily-monitor-side">
+          <div class="card"><div class="card-title"><div><b>Analistas</b><small>Resumen del día</small></div></div><div id="dailyAnalystSummary" class="daily-analyst-summary"></div></div>
+          <div class="card"><div class="card-title"><div><b>Carga por hora</b><small>Actividades simultáneas</small></div></div><div id="dailyHourSummary" class="daily-hour-summary"></div></div>
+        </aside>
+        <div class="daily-monitor-main">
+          <div class="card">
+            <div class="card-title daily-main-head"><div><b>Detalle por analista</b><small id="dailyMonitorSubtitle">Planificación, ejecución y resultados técnicos.</small></div><div class="daily-legend"><span class="dot planned"></span> Programado <span class="dot progress"></span> En proceso <span class="dot done"></span> Realizado</div></div>
+            <div id="dailyAnalystBoards" class="daily-analyst-boards"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-gestion" class="view">
+      <div class="card management-hero">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">CONTROL DE GESTIÓN</span>
+            <h3>Dashboard de actividades por analista</h3>
+            <p>Planificado vs realizado, horas reales, desviaciones, observaciones y edición controlada de actividades todavía programadas.</p>
+          </div>
+          <div class="management-actions">
+            <button class="btn secondary" id="btnManagementAI">✦ Analizar con IA</button>
+            <button class="btn secondary" id="btnExportReagentExcel">↓ Inventario y Consumo</button>
+            <button class="btn primary" id="btnExportManagementExcel">↓ Descargar Excel</button>
+          </div>
+        </div>
+        <div class="management-filters">
+          <label>Desde<input id="mgmtFrom" type="date"/></label>
+          <label>Hasta<input id="mgmtTo" type="date"/></label>
+          <label>Analista<select id="mgmtAnalyst"><option value="">Todos los analistas</option></select></label>
+          <label>Estado<select id="mgmtStatus"><option value="">Todos los estados</option><option>PROGRAMADO</option><option>EN PROCESO</option><option>REALIZADO</option><option>CANCELADO</option></select></label>
+          <button class="btn secondary" id="btnMgmtToday">Hoy</button>
+        </div>
+      </div>
+
+      <div id="managementKpis" class="management-kpis"></div>
+
+      <div class="card management-ai-card">
+        <div class="section-head"><div><h3>✦ Análisis inteligente</h3><p>Recomendaciones explicables basadas en ejecución real y cumplimiento del período seleccionado.</p></div></div>
+        <div id="managementAI" class="management-ai-empty">Pulse “Analizar con IA” para revisar el período.</div>
+      </div>
+
+      <div class="card">
+        <div class="section-head"><div><h3>Resumen por analista</h3><p>Comparativo de carga, actividades realizadas y comportamiento del tiempo real.</p></div></div>
+        <div id="managementAnalystCards" class="analyst-performance-grid"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-head">
+          <div><h3>Detalle de actividades</h3><p>Las actividades PROGRAMADAS pueden editarse. Una actividad iniciada o realizada permanece protegida.</p></div>
+          <span id="managementCount" class="muted"></span>
+        </div>
+        <div class="empty hidden" id="managementEmpty"><div class="empty-icon">▤</div><h4>Sin actividades para estos filtros</h4></div>
+        <div class="table-wrap" id="managementTableWrap">
+          <table class="management-table">
+            <thead><tr>
+              <th>Fecha</th><th>Analista</th><th>Actividad</th><th>Planificado</th><th>Real</th><th>Desviación</th><th>Estado</th><th></th>
+            </tr></thead>
+            <tbody id="managementBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-catalogo" class="view">
+      <div class="section-tabs" id="sectionTabs"></div>
+      <div class="card">
+        <div class="section-head">
+          <div><h3 id="catalogHeading">Catálogo Maestro</h3><p id="catalogHelp">Seleccione una sección y construya su catálogo desde cero.</p></div>
+          <div class="filters"><input id="catalogSearch" placeholder="Buscar por nombre, técnica o código..."/><select id="catalogStatusFilter"><option value="">Todos</option><option>ACTIVO</option><option>INACTIVO</option></select></div>
+        </div>
+        <div class="empty" id="catalogEmpty"><div class="empty-icon">▦</div><h4>Sin registros en esta sección</h4><p>Use “+ Nuevo” para crear el primer elemento. No hay información precargada.</p></div>
+        <div class="table-wrap hidden" id="catalogTableWrap"><table><thead><tr><th>Código</th><th>Sección</th><th>Clasificación / Técnica</th><th>Nombre</th><th>Modelo de tiempo</th><th>Estado</th><th></th></tr></thead><tbody id="catalogBody"></tbody></table></div>
+      </div>
+    </section>
+
+    <section id="view-analistas" class="view">
+      <div class="card">
+        <div class="section-head"><div><h3>Catálogo de Analistas</h3><p>Personas que posteriormente podrán recibir actividades según disponibilidad y competencias.</p></div><div class="filters"><input id="analystSearch" placeholder="Buscar analista..."/></div></div>
+        <div class="empty" id="analystEmpty"><div class="empty-icon">♙</div><h4>Sin analistas</h4><p>Ingrese sus analistas desde cero.</p></div>
+        <div class="table-wrap hidden" id="analystTableWrap"><table><thead><tr><th>Código</th><th>Analista</th><th>Cargo</th><th>Jornada</th><th>Competencias por sección</th><th>Estado</th><th></th></tr></thead><tbody id="analystBody"></tbody></table></div>
+      </div>
+    </section>
+
+    <section id="view-inteligencia" class="view">
+      <div class="card smart-hero"><div><span class="eyebrow">MOTOR INTELIGENTE LOCAL</span><h3>Revisión preventiva del Catálogo Maestro</h3><p>Antes del futuro módulo de IA conectada, esta versión ya detecta problemas estructurales que podrían generar asignaciones incorrectas: duplicados, actividades sin tiempo, rangos superpuestos, huecos entre rangos y analistas sin competencias.</p></div><button class="btn primary" id="btnAnalyze">✦ Analizar catálogo</button></div>
+      <div class="stats-grid compact"><article class="card stat"><span>Errores</span><strong id="smartErrors">0</strong></article><article class="card stat"><span>Advertencias</span><strong id="smartWarnings">0</strong></article><article class="card stat"><span>Correctos</span><strong id="smartOk">0</strong></article><article class="card stat"><span>Preparación</span><strong id="smartScore">100%</strong></article></div>
+      <div class="card"><div class="section-head"><div><h3>Hallazgos</h3><p>Cada recomendación explica qué debe corregir; el sistema nunca modifica sus datos automáticamente.</p></div></div><div id="smartResults" class="smart-results"><div class="empty"><div class="empty-icon">✦</div><h4>Listo para analizar</h4><p>El análisis se actualiza también al crear o editar catálogos.</p></div></div></div>
+    </section>
+
+    <section id="view-trazabilidad" class="view">
+      <div class="card"><div class="section-head"><div><h3>Trazabilidad</h3><p>Creación, edición, activación/desactivación, reglas y analistas quedan auditados.</p></div></div><div class="empty" id="auditEmpty"><div class="empty-icon">↺</div><h4>Sin eventos todavía</h4></div><div class="table-wrap hidden" id="auditTableWrap"><table><thead><tr><th>Fecha/hora</th><th>Usuario</th><th>Acción</th><th>Módulo</th><th>Registro</th><th>Detalle</th></tr></thead><tbody id="auditBody"></tbody></table></div></div>
+    </section>
+
+    <section id="view-configuracion" class="view">
+      <div class="card firebase-ready-card">
+        <div class="section-head"><div><span class="eyebrow">FIREBASE READY</span><h3>Arquitectura multiusuario preparada</h3><p>Los permisos ya funcionan localmente por rol. Al conectar Firebase Authentication, cada sesión tomará automáticamente su perfil sin cambiar el resto del ERP.</p></div><span class="firebase-state">FIREBASE REAL</span></div>
+        <div class="firebase-map">
+          <div><b>JEFE</b><span>Planificador · Dashboard · Catálogo · IA · Trazabilidad · Configuración</span></div>
+          <div><b>ANALISTA</b><span>Mi Jornada · Inicio/finalización · muestras reales · comentarios</span></div>
+        </div>
+      </div>
+      <div class="settings-grid">
+        <div class="card"><h3>Identidad del sistema</h3><label>Nombre del laboratorio<input id="cfgLab" placeholder="Ingrese nombre"/></label><label>Responsable por defecto<input id="cfgUser" placeholder="Usuario local"/></label><label>Horas de jornada estándar<input id="cfgDayHours" type="number" min="1" max="24" step="0.5" value="8"/></label><button class="btn primary" id="btnSaveConfig">Guardar configuración</button></div>
+        <div class="card"><h3>Arquitectura</h3><div class="architecture-item"><b>IndexedDB</b><span>ACTIVO · v2</span></div><div class="architecture-item"><b>Outbox</b><span>ACTIVO</span></div><div class="architecture-item"><b>Auditoría</b><span>ACTIVO</span></div><div class="architecture-item"><b>PWA</b><span>ACTIVO</span></div><div class="architecture-item"><b>Motor inteligente local</b><span>ACTIVO</span></div><div class="architecture-item"><b>Firebase</b><span>ACTIVO · AUTH + FIRESTORE</span></div><div class="architecture-item muted"><b>IA conectada</b><span>POSTERIOR</span></div></div>
+        <div class="card danger-zone"><h3>Datos locales</h3><p>El reinicio elimina únicamente la base local de esta línea de desarrollo.</p><button class="btn danger" id="btnReset">Reiniciar base local</button></div>
+      </div>
+    
+      <div class="card auth-settings-card">
+        <div class="section-head">
+          <div><h3>🔐 Firebase Authentication</h3><p>Sesión real por correo/contraseña y vínculo automático con el usuario ERP.</p></div>
+          <span id="authConfigBadge" class="sync-config-badge">LOCAL</span>
+        </div>
+        <div class="auth-settings-grid">
+          <div><small>Modo</small><strong id="authModeLabel">Sesión local de prueba</strong></div>
+          <div><small>Usuario autenticado</small><strong id="authCurrentUser">—</strong></div>
+          <div><small>Rol ERP</small><strong id="authCurrentRole">—</strong></div>
+          <div><small>Vínculo analista</small><strong id="authAnalystLink">—</strong></div><div><small>Perfil</small><strong id="authProfileSource">Firestore users/{UID}</strong></div>
+        </div>
+        <div class="inline-alert info">Cuando Firebase esté configurado, el selector de sesión local se oculta. El rol se obtiene del documento <b>users</b> asociado al UID o correo autenticado.</div>
+      </div>
+<div class="card sync-settings-card">
+        <div class="section-head">
+          <div><h3>☁ Sincronización Firebase</h3><p>IndexedDB permanece como base local. Firestore funciona como capa multiusuario cuando existe configuración válida.</p></div>
+          <span id="syncConfigBadge" class="sync-config-badge">LOCAL</span>
+        </div>
+        <div class="sync-settings-grid">
+          <div><small>Estado</small><strong id="syncSettingsState">Firebase no configurado</strong></div>
+          <div><small>Pendientes Outbox</small><strong id="syncPendingCount">0</strong></div>
+          <div><small>Última sincronización</small><strong id="syncLastAt">—</strong></div>
+          <div><small>Último error</small><strong id="syncLastError">—</strong></div>
+        </div>
+        <div class="sync-settings-grid">
+          <div><small>Migración inicial</small><strong id="migrationState">PENDIENTE</strong></div>
+          <div><small>Fuente inicial</small><strong id="migrationSourceLabel">Estado global Firestore</strong></div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="btn secondary" id="btnSyncConfigNow">↻ Sincronizar ahora</button>
+          <button type="button" class="btn secondary" id="btnPullFirebase">↓ Actualizar desde nube</button>
+          <button type="button" class="btn primary" id="btnInitialMigration">↑ Migración inicial controlada</button>
+        </div>
+        <div class="inline-alert info"><b>Primera puesta en marcha:</b> inicie sesión como JEFE y ejecute la migración una sola vez desde la computadora que contiene la base local completa. IndexedDB no se elimina.</div>
+      </div>
+</section>
+  </main>
+</div>
+
+<dialog id="catalogDialog"><form method="dialog" id="catalogForm">
+  <div class="dialog-head"><div><h3 id="catalogDialogTitle">Nuevo elemento</h3><p id="catalogDialogHelp">Complete únicamente lo que corresponda a esta sección.</p></div><button type="button" class="icon-btn" data-close="catalogDialog">×</button></div>
+  <input type="hidden" id="catalogId"/>
+  <div class="form-grid">
+    <label>Sección<select id="catalogSection" required></select></label>
+    <label>Nombre / Actividad / Ensayo<input id="catalogName" required placeholder="Ej. Nitratos / Verificación de balanza"/></label>
+    <label id="familyLabel">Clasificación / Técnica<input id="catalogFamily" placeholder="Ej. UV-VISIBLES / VERIFICACIÓN"/></label>
+    <label>Modelo de tiempo<select id="catalogTimeMode"><option value="FIXED">TIEMPO FIJO</option><option value="BY_SAMPLES">POR CANTIDAD DE MUESTRAS</option><option value="NONE">SIN TIEMPO PREDEFINIDO</option><option value="COMPOSITE">ACTIVIDAD COMPUESTA</option></select></label>
+    <label id="baseMinutesLabel">Duración estándar<div class="duration-picker"><label class="mini-label">Horas<input id="catalogBaseHours" type="number" min="0" max="24" step="1" value="0"/></label><label class="mini-label">Minutos<select id="catalogBaseMinutePart"><option value="0">00 min</option><option value="5">05 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="25">25 min</option><option value="30">30 min</option><option value="35">35 min</option><option value="40">40 min</option><option value="45">45 min</option><option value="50">50 min</option><option value="55">55 min</option></select></label></div></label>
+    <label>Estado<select id="catalogStatus"><option>ACTIVO</option><option>INACTIVO</option></select></label>
+    <label class="full">Descripción / alcance<textarea id="catalogDescription" rows="3" placeholder="Opcional"></textarea></label>
+  </div>
+  <div id="rulesEditor" class="rules-editor hidden"><div class="rules-title"><div><b>Reglas por cantidad de muestras</b><small>El Planificador calculará la duración según el rango que corresponda.</small></div><button type="button" class="btn secondary" id="btnAddRule">+ Agregar rango</button></div><div id="ruleRows"></div><div class="inline-alert" id="ruleValidation"></div></div>
+  <div id="compositeEditor" class="rules-editor hidden"><div class="rules-title"><div><b>Desglose de actividad compuesta</b><small id="compositeHelp">El jefe seleccionará una sola actividad y el futuro Planificador reservará el bloque completo. En Recepción de Muestras el total queda fijado en 5 h.</small></div><button type="button" class="btn secondary" id="btnAddStep">+ Agregar detalle</button></div><div class="composite-total"><span>Duración total del bloque</span><strong id="compositeTotalLabel">5 h</strong><small id="compositeProgress">Desglose pendiente: 5 h</small></div><div id="stepRows"></div><div class="inline-alert" id="stepValidation"></div></div>
+  <div id="calibrationEditor" class="rules-editor hidden">
+    <div class="rules-title">
+      <div><b>Curva de calibración</b><small>Esta configuración aplica únicamente a las actividades de laboratorio de tipo curva de calibración. Registre los puntos que el analista leerá por triplicado.</small></div>
+      <label class="switch-line"><input id="catalogRequiresCalibration" type="checkbox"/> Requiere registro de curva</label>
+    </div>
+    <div id="calibrationConfigBody" class="hidden">
+      <div class="form-grid curve-config-grid">
+        <label>Unidad de concentración<input id="calibrationUnit" placeholder="Ej. mg/L, µg/L"/></label>
+        <label>Réplicas por punto<input value="3" readonly/></label>
+      </div>
+      <div class="rules-title compact"><div><b>Puntos de la curva</b><small>Registre concentración nominal de cada estándar.</small></div><button type="button" class="btn secondary" id="btnAddCalibrationPoint">+ Agregar punto</button></div>
+      <div id="calibrationPointRows"></div>
+      <div class="inline-alert" id="calibrationValidation"></div>
+    </div>
+  </div>
+  <div id="reagentEditor" class="rules-editor hidden">
+    <div class="rules-title">
+      <div><b>¿Utiliza reactivos o materiales?</b><small>Disponible en esta sección. Active la opción únicamente cuando la actividad consuma algo que deba quedar registrado.</small></div>
+      <label class="switch-line"><input id="catalogUsesReagents" type="checkbox"/> Sí, registrar consumo</label>
+    </div>
+    <div id="reagentConfigBody" class="hidden">
+      <div class="rules-title compact">
+        <div><b>Reactivos / materiales utilizados</b><small>Configure lo que el analista deberá reportar al finalizar la actividad.</small></div>
+        <button type="button" class="btn secondary" id="btnAddReagent">+ Agregar reactivo</button>
+      </div>
+      <div id="reagentRows"></div>
+      <div class="inline-alert info" id="reagentHelp">Para materiales contables registre cantidad. Para reactivos por peso configure la tara del envase; en líquidos indique además densidad (g/mL). La tara permite calcular el contenido real disponible.</div>
+      <div class="inline-alert" id="reagentValidation"></div>
+    </div>
+  </div>
+  <div class="dialog-actions"><button type="button" class="btn secondary" data-close="catalogDialog">Cancelar</button><button class="btn primary" value="default">Guardar elemento</button></div>
+</form></dialog>
+
+<dialog id="analystDialog"><form method="dialog" id="analystForm">
+  <div class="dialog-head"><div><h3 id="analystDialogTitle">Nuevo analista</h3><p>La competencia se registra por sección en A2; más adelante podremos bajarla a técnica/ensayo.</p></div><button type="button" class="icon-btn" data-close="analystDialog">×</button></div>
+  <input type="hidden" id="analystId"/>
+  <div class="form-grid"><label>Nombre completo<input id="analystName" required/></label><label>Cargo<input id="analystRole" placeholder="Ej. Analista de laboratorio"/></label><label>Jornada diaria (horas)<input id="analystHours" type="number" min="1" max="24" step="0.5" value="8"/></label><label>Estado<select id="analystStatus"><option>ACTIVO</option><option>INACTIVO</option></select></label><label class="full">Competencias / secciones autorizadas<div class="check-grid" id="competencyChecks"></div></label><label class="full">Observaciones<textarea id="analystNotes" rows="3"></textarea></label></div>
+  <div class="dialog-actions"><button type="button" class="btn secondary" data-close="analystDialog">Cancelar</button><button class="btn primary" value="default">Guardar analista</button></div>
+</form></dialog>
+
+<dialog id="planningEditDialog"><form method="dialog" id="planningEditForm">
+  <div class="dialog-head">
+    <div><h3>Editar planificación</h3><p>Disponible únicamente mientras la actividad permanezca PROGRAMADA. El cambio quedará en trazabilidad.</p></div>
+    <button type="button" class="icon-btn" data-close="planningEditDialog">×</button>
+  </div>
+  <input type="hidden" id="editPlanId"/>
+  <div class="form-grid">
+    <label class="full">Actividad<input id="editPlanActivity" readonly/></label>
+    <label>Fecha<input id="editPlanDate" type="date" required/></label>
+    <label>Analista<select id="editPlanAnalyst" required></select></label>
+    <label>Hora inicio<input id="editPlanStart" type="time" required/></label>
+    <label>Hora fin<input id="editPlanEnd" readonly/></label>
+    <label>Duración<input id="editPlanDuration" readonly/></label>
+    <label class="full">Observación del jefe<textarea id="editPlanNotes" rows="3"></textarea></label>
+  </div>
+  <div class="inline-alert info">La actividad y su duración no se modifican aquí. Si necesita cambiar el ensayo/actividad, cree una nueva planificación para mantener trazabilidad.</div>
+  <div class="dialog-actions">
+    <button type="button" class="btn secondary" data-close="planningEditDialog">Cancelar</button>
+    <button class="btn primary" value="default">Guardar cambios</button>
+  </div>
+</form></dialog>
+
+<div id="firebaseLoginDialog" class="auth-gate">
+  <div class="auth-gate-card">
+    <form id="firebaseLoginForm" autocomplete="on">
+      <div class="auth-gate-heading">
+        <div class="auth-mark auth-mark-large">PSI</div>
+        <div><span class="auth-kicker">ERP PLANIFICACIÓN NEXTGEN</span><h2>Iniciar sesión</h2><p>Ingrese con su cuenta autorizada para acceder al ERP.</p></div>
+      </div>
+      <div class="form-grid auth-login-grid">
+        <label class="full">Correo electrónico<input id="firebaseLoginEmail" name="email" type="email" autocomplete="username" inputmode="email" required placeholder="usuario@empresa.com"/></label>
+        <label class="full">Contraseña<input id="firebaseLoginPassword" name="password" type="password" autocomplete="current-password" required placeholder="••••••••"/></label>
+      </div>
+      <div id="firebaseLoginError" class="inline-alert danger hidden"></div>
+      <button type="submit" class="btn primary auth-submit" id="btnFirebaseLoginSubmit">Ingresar al ERP</button>
+      <div class="auth-security-note"><b>Acceso seguro con Firebase Authentication</b><span>La contraseña no se almacena en IndexedDB ni en el código del ERP.</span></div>
+      <div class="auth-connection" id="authGateConnection">Conectando con Firebase…</div>
+    </form>
+  </div>
+</div>
+
+<dialog id="finishActivityDialog"><form method="dialog" id="finishActivityForm">
+  <div class="dialog-head">
+    <div><h3>Finalizar actividad</h3><p id="finishActivityHelp">Registre el resultado real de la ejecución.</p></div>
+    <button type="button" class="icon-btn" data-close="finishActivityDialog">×</button>
+  </div>
+  <input type="hidden" id="finishActivityPlanId"/>
+    <input type="hidden" id="finishTechnicalEditMode" value="0"/>
+  <div class="finish-activity-summary" id="finishActivitySummary"></div>
+  <div class="form-grid">
+    <label id="finishSamplesLabel" class="full">Número de muestras analizadas
+      <input id="finishActualSamples" type="number" min="0" step="1" placeholder="Ej. 18"/>
+      <small>Ingrese la cantidad que realmente procesó durante esta actividad.</small>
+    </label>
+    <div id="finishCalibrationBlock" class="full calibration-finish hidden">
+      <div class="calibration-finish-head">
+        <div><b>Lecturas de curva de calibración</b><small id="finishCalibrationUnit">Registre las tres absorbancias de cada punto.</small></div>
+        <span class="badge">TRIPLICADO</span>
+      </div>
+      <div class="curve-table-wrap">
+        <table class="curve-table">
+          <thead><tr><th>Punto</th><th>Concentración</th><th>Abs. 1</th><th>Abs. 2</th><th>Abs. 3</th><th>Promedio</th><th>CV %</th></tr></thead>
+          <tbody id="finishCalibrationRows"></tbody>
+        </table>
+      </div>
+      <div id="finishCalibrationSummary" class="curve-summary"></div>
+      <div id="finishCalibrationValidation" class="inline-alert info">Complete las tres absorbancias de todos los puntos.</div>
+      <button type="button" class="btn secondary" id="btnSaveCalibrationDraft">Guardar lecturas sin finalizar</button>
+    </div>
+    <div id="finishReagentBlock" class="full reagent-finish hidden">
+      <div class="calibration-finish-head">
+        <div><b>Consumo de reactivos / materiales</b><small>Marque únicamente los reactivos/envases que realmente utilizó. Los demás quedarán registrados como NO UTILIZADOS.</small></div>
+        <span class="badge">OBLIGATORIO</span>
+      </div>
+      <div id="finishReagentRows" class="reagent-capture-list"></div>
+      <div id="finishReagentValidation" class="inline-alert info">Complete todos los consumos configurados para poder finalizar.</div>
+      <button type="button" class="btn secondary" id="btnSaveReagentDraft">Guardar consumos sin finalizar</button>
+    </div>
+    <label class="full">Comentario final <span class="muted">(opcional)</span>
+      <textarea id="finishActivityComment" rows="3" placeholder="Novedad, observación o condición de cierre..."></textarea>
+    </label>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn secondary" data-close="finishActivityDialog">Cancelar</button>
+    <button class="btn primary" value="default">✓ Confirmar finalización</button>
+  </div>
+</form></dialog>
+
+
+<div id="pwaUpdateBar" class="pwa-update-bar hidden" role="status" aria-live="polite">
+  <div class="pwa-update-copy">
+    <b id="pwaUpdateTitle">Nueva versión disponible</b>
+    <span id="pwaUpdateText">Hay una actualización lista para instalar.</span>
+  </div>
+  <button id="pwaUpdateBtn" type="button" class="btn primary">Actualizar</button>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="firebase-config.js"></script>
+<script src="app.js"></script>
+
+<script>
+(function(){
+  if(!('serviceWorker' in navigator)) return;
+
+  let refreshing=false;
+  let waitingWorker=null;
+
+  const bar=()=>document.getElementById('pwaUpdateBar');
+  const text=()=>document.getElementById('pwaUpdateText');
+  const btn=()=>document.getElementById('pwaUpdateBtn');
+
+  async function showUpdate(worker){
+    waitingWorker=worker;
+    let version='nueva versión';
+    try{
+      const r=await fetch('./version.json?t='+Date.now(),{cache:'no-store'});
+      if(r.ok){
+        const v=await r.json();
+        if(v.version)version=v.version;
+      }
+    }catch{}
+    const b=bar();
+    const t=text();
+    if(t)t.textContent=`${version} está lista. Actualice cuando termine lo que está haciendo.`;
+    if(b)b.classList.remove('hidden');
+  }
+
+  window.addEventListener('load', async()=>{
+    try{
+      const reg=await navigator.serviceWorker.register('./service-worker.js',{scope:'./'});
+      if(reg.waiting && navigator.serviceWorker.controller) showUpdate(reg.waiting);
+
+      reg.addEventListener('updatefound',()=>{
+        const worker=reg.installing;
+        if(!worker)return;
+        worker.addEventListener('statechange',()=>{
+          if(worker.state==='installed' && navigator.serviceWorker.controller){
+            showUpdate(worker);
+          }
+        });
+      });
+
+      // Consultar al servidor por una versión nueva cada vez que la APP vuelve al frente.
+      const check=()=>reg.update().catch(()=>{});
+      document.addEventListener('visibilitychange',()=>{if(!document.hidden)check()});
+      window.addEventListener('online',check);
+      setInterval(check,5*60*1000);
+      check();
+    }catch(err){
+      console.warn('Service Worker:',err);
+    }
+  });
+
+  document.addEventListener('click',e=>{
+    if(e.target && e.target.id==='pwaUpdateBtn'){
+      const b=btn();
+      if(b){b.disabled=true;b.textContent='Actualizando…'}
+      if(waitingWorker)waitingWorker.postMessage({type:'SKIP_WAITING'});
+    }
+  });
+
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if(refreshing)return;
+    refreshing=true;
+    location.reload();
+  });
+})();
+</script>
+</body></html>

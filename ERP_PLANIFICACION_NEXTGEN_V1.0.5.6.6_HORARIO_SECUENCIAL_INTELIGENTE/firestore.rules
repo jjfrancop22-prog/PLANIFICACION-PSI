@@ -1,0 +1,37 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function userProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function activeUser() { return signedIn() && userProfile().data.status == 'ACTIVO'; }
+    function isBoss() { return activeUser() && userProfile().data.role == 'JEFE'; }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isBoss());
+      allow create, update, delete: if isBoss();
+    }
+    match /catalog/{id} { allow read: if activeUser(); allow write: if isBoss(); }
+    match /timeRules/{id} { allow read: if activeUser(); allow write: if isBoss(); }
+    match /compositeSteps/{id} { allow read: if activeUser(); allow write: if isBoss(); }
+    match /analysts/{id} { allow read: if activeUser(); allow write: if isBoss(); }
+    match /planning/{id} {
+      allow read: if activeUser();
+      allow create, delete: if isBoss();
+      allow update: if activeUser();
+    }
+    match /planComments/{id} {
+      allow read, create: if activeUser();
+      allow update, delete: if isBoss();
+    }
+    match /audit/{id} {
+      allow read: if isBoss();
+      allow create: if activeUser();
+      allow update, delete: if false;
+    }
+    match /config/{id} { allow read, write: if isBoss(); }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
