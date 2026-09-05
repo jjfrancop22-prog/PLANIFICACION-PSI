@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.14-CENTRO-COMUNICACIONES';
+const APP_VERSION='V1.0.5.6.15-AGENDA-FUTURA-NOTIFICACIONES';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -489,8 +489,9 @@ function startRealtimeSync(){
   if(!firebaseBridge.ready)return;
   const {collection,onSnapshot}=firebaseBridge.mods;
   FIREBASE_SYNC_STORES.forEach(storeName=>{
+    let listenerReady=false;
     const unsub=onSnapshot(collection(firebaseBridge.db,storeName),async snap=>{
-      let changed=false;
+      let changed=false, incomingComments=[];
       for(const ch of snap.docChanges()){
         if(ch.type==='removed'){
           const pending=(await getAll('outbox')).some(x=>
@@ -503,6 +504,7 @@ function startRealtimeSync(){
           continue;
         }
         await applyCloudRecord(storeName,ch.doc.id,ch.doc.data());changed=true;
+        if(storeName==='planComments'&&listenerReady&&ch.type==='added')incomingComments.push({...ch.doc.data(),id:ch.doc.id});
       }
       // En planning no basta con procesar docChanges(): si este equipo estuvo
       // desconectado cuando otro eliminó una actividad, el snapshot inicial no trae
@@ -522,7 +524,13 @@ function startRealtimeSync(){
         if(active==='mi-jornada')await renderMyDay();
         else if(active==='planificador')await refreshPlanner();
         else if(active==='gestion')await renderManagementDashboard();
+        if(storeName==='planComments'){
+          await refreshNotificationBadge();
+          const newest=incomingComments.filter(c=>communicationVisibleComment(c)&&!isOwnCommunication(c)).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0];
+          if(newest)await showCommunicationPopup(newest);
+        }
       }
+      listenerReady=true;
     },err=>{
       firebaseBridge.lastError=String(err?.message||err);setSyncState('ERROR','Escucha en tiempo real interrumpida');
     });
@@ -953,11 +961,30 @@ async function communicationThreads(){
   comments.forEach(c=>{if(!map.has(c.planId))map.set(c.planId,[]);map.get(c.planId).push(c)});
   return [...map.entries()].map(([planId,items])=>{items.sort((a,b)=>a.createdAt.localeCompare(b.createdAt));const p=plans.find(x=>x.id===planId);return {planId,p,items,last:items[items.length-1],closed:items.some(x=>x.threadStatus==='CLOSED')&&items[items.length-1]?.threadStatus==='CLOSED'}}).sort((a,b)=>(b.last?.createdAt||'').localeCompare(a.last?.createdAt||''));
 }
+
+function isOwnCommunication(c){
+  return (currentSessionUser?.role==='JEFE'&&c.authorType==='JEFE')||(currentSessionUser?.role==='ANALISTA'&&c.authorType==='ANALISTA');
+}
+function communicationUnread(c,key=communicationUserKey()){
+  return !isOwnCommunication(c)&&!(c.readBy||[]).includes(key);
+}
+let communicationPopupTimer=null;
+async function showCommunicationPopup(comment){
+  if(!comment||!communicationVisibleComment(comment)||isOwnCommunication(comment))return;
+  const p=await getOne('planning',comment.planId);
+  let el=$('#communicationPopup');
+  if(!el){el=document.createElement('div');el.id='communicationPopup';el.className='communication-popup';document.body.appendChild(el)}
+  el.innerHTML=`<button type="button" class="communication-popup-main"><span class="popup-icon">🔔</span><span><b>${escapeHtml(comment.authorName||'Nuevo mensaje')}</b><small>${escapeHtml(p?.catalogName||'Actividad')} · ${escapeHtml(comment.text||'')}</small></span><em>Ver</em></button><button type="button" class="communication-popup-close" aria-label="Cerrar">×</button>`;
+  el.classList.add('show');
+  el.querySelector('.communication-popup-main').onclick=async()=>{el.classList.remove('show');await openCommunications();};
+  el.querySelector('.communication-popup-close').onclick=()=>el.classList.remove('show');
+  clearTimeout(communicationPopupTimer);communicationPopupTimer=setTimeout(()=>el.classList.remove('show'),8500);
+}
 async function refreshNotificationBadge(){
   if(!$('#notificationBadge'))return;
   const key=communicationUserKey();if(!key){$('#notificationBadge').classList.add('hidden');return}
   const threads=await communicationThreads();let n=0;
-  threads.forEach(t=>t.items.forEach(c=>{const own=(currentSessionUser.role==='JEFE'&&c.authorType==='JEFE')||(currentSessionUser.role==='ANALISTA'&&c.authorType==='ANALISTA');if(!own&&!(c.readBy||[]).includes(key))n++}));
+  threads.forEach(t=>t.items.forEach(c=>{if(communicationUnread(c,key))n++}));
   $('#notificationBadge').textContent=String(n);$('#notificationBadge').classList.toggle('hidden',n===0);$('#btnNotifications')?.classList.toggle('has-unread',n>0);
 }
 async function markThreadRead(planId){
@@ -966,11 +993,15 @@ async function markThreadRead(planId){
   await refreshNotificationBadge();
 }
 async function renderCommunications(){
-  if(!$('#communicationsList'))return;const filter=$('#commStatusFilter')?.value||'OPEN';let ts=await communicationThreads();
+  if(!$('#communicationsList'))return;
+  const filter=$('#commStatusFilter')?.value||'OPEN', key=communicationUserKey();let ts=await communicationThreads();
+  const allThreads=[...ts], unreadCount=allThreads.reduce((n,t)=>n+t.items.filter(c=>communicationUnread(c,key)).length,0), openCount=allThreads.filter(t=>!t.closed).length, closedCount=allThreads.filter(t=>t.closed).length;
+  if($('#commSummary'))$('#commSummary').innerHTML=`<button type="button" data-comm-filter="UNREAD" class="comm-kpi ${unreadCount?'hot':''}"><b>${unreadCount}</b><span>Nuevos</span></button><button type="button" data-comm-filter="OPEN" class="comm-kpi"><b>${openCount}</b><span>Pendientes</span></button><button type="button" data-comm-filter="CLOSED" class="comm-kpi"><b>${closedCount}</b><span>Atendidos</span></button>`;
+  if(filter==='UNREAD')ts=ts.filter(t=>t.items.some(c=>communicationUnread(c,key)));
   if(filter==='OPEN')ts=ts.filter(t=>!t.closed);if(filter==='CLOSED')ts=ts.filter(t=>t.closed);
-  if(!ts.length){$('#communicationsList').innerHTML='<div class="empty"><h4>Sin conversaciones</h4><p>No hay novedades para este filtro.</p></div>';return}
-  $('#communicationsList').innerHTML=ts.map(t=>{const p=t.p||{}, analyst=p.analystName||t.items[0]?.analystName||'Analista';return `<article class="comm-thread ${t.closed?'closed':''}"><div class="comm-head"><div><b>${escapeHtml(p.catalogName||'Actividad')}</b><small>${escapeHtml(analyst)} · ${escapeHtml(p.date||'')}</small></div><span class="comm-state">${t.closed?'ATENDIDO':'PENDIENTE'}</span></div><div class="comm-messages">${t.items.map(c=>`<div class="comm-message ${c.authorType==='JEFE'?'boss':'analyst'}"><b>${escapeHtml(c.authorName||c.author||'Usuario')}</b><small>${fmtDate(c.createdAt)}</small><div>${escapeHtml(c.text)}</div></div>`).join('')}</div><div class="comm-reply"><input data-comm-reply="${t.planId}" placeholder="Escribir respuesta..."/><button class="btn primary compact" data-comm-send="${t.planId}">Responder</button>${currentSessionUser.role==='JEFE'?`<button class="btn secondary compact" data-comm-close="${t.planId}">${t.closed?'Reabrir':'✓ Marcar atendido'}</button>`:''}</div></article>`}).join('');
-  $$('[data-comm-send]').forEach(b=>b.onclick=()=>replyCommunication(b.dataset.commSend));$$('[data-comm-close]').forEach(b=>b.onclick=()=>toggleCommunicationClosed(b.dataset.commClose));
+  if(!ts.length){$('#communicationsList').innerHTML=`<div class="comm-empty"><span>🔔</span><b>${filter==='UNREAD'?'No hay mensajes nuevos':'Sin conversaciones'}</b><small>${filter==='UNREAD'?'Cuando un analista o el jefe responda, aparecerá aquí y la campana mostrará el aviso.':'No hay novedades para este filtro.'}</small></div>`;$$('[data-comm-filter]').forEach(b=>b.onclick=()=>{$('#commStatusFilter').value=b.dataset.commFilter;renderCommunications()});return}
+  $('#communicationsList').innerHTML=ts.map(t=>{const p=t.p||{}, analyst=p.analystName||t.items[0]?.analystName||'Analista', unread=t.items.filter(c=>communicationUnread(c,key)).length;return `<article class="comm-thread ${t.closed?'closed':''} ${unread?'unread':''}"><div class="comm-head"><div><div class="comm-title-line"><b>${escapeHtml(p.catalogName||'Actividad')}</b>${unread?`<span class="comm-unread-pill">${unread} nuevo${unread>1?'s':''}</span>`:''}</div><small>${escapeHtml(analyst)} · ${escapeHtml(p.date||'')} ${p.startTime?`· ${p.startTime}`:''}</small></div><span class="comm-state">${t.closed?'ATENDIDO':'PENDIENTE'}</span></div><div class="comm-messages">${t.items.map(c=>`<div class="comm-message ${c.authorType==='JEFE'?'boss':'analyst'} ${communicationUnread(c,key)?'new':''}"><b>${escapeHtml(c.authorName||c.author||'Usuario')}</b><small>${fmtDate(c.createdAt)}</small><div>${escapeHtml(c.text)}</div></div>`).join('')}</div><div class="comm-reply"><input data-comm-reply="${t.planId}" placeholder="Escribir respuesta..."/><button class="btn primary compact" data-comm-send="${t.planId}">Responder</button>${currentSessionUser.role==='JEFE'?`<button class="btn secondary compact" data-comm-close="${t.planId}">${t.closed?'Reabrir':'✓ Marcar atendido'}</button>`:''}</div></article>`}).join('');
+  $$('[data-comm-send]').forEach(b=>b.onclick=()=>replyCommunication(b.dataset.commSend));$$('[data-comm-close]').forEach(b=>b.onclick=()=>toggleCommunicationClosed(b.dataset.commClose));$$('[data-comm-filter]').forEach(b=>b.onclick=()=>{$('#commStatusFilter').value=b.dataset.commFilter;renderCommunications()});
   for(const t of ts)await markThreadRead(t.planId);
 }
 async function openCommunications(){await renderCommunications();$('#notificationsDialog').showModal()}
@@ -1004,6 +1035,7 @@ function assertOwnPlan(p){
 async function startMyActivity(planId){
   const _guardPlan=await getOne('planning',planId);if(!_guardPlan||!assertOwnPlan(_guardPlan))return toast('No puede modificar actividades de otro analista');
   let p=await getOne('planning',planId);if(!p)return;
+  if(p.date>dateToday())return toast(`Actividad programada para ${formatShortDate(p.date)}. Se habilitará el día correspondiente.`);
   if(p.status==='REALIZADO')return toast('La actividad ya está finalizada');
   p=await hydratePlanTechnicalRequirements(p);
   p.status='EN PROCESO';p.actualStartedAt=p.actualStartedAt||nowISO();p.updatedAt=nowISO();
@@ -1467,6 +1499,50 @@ async function restoreBossSchedule(date,analystId){
 }
 
 
+function parseLocalDate(dateStr){
+  const [y,m,d]=String(dateStr||'').split('-').map(Number);
+  return y&&m&&d?new Date(y,m-1,d):new Date();
+}
+function formatShortDate(dateStr){
+  const d=parseLocalDate(dateStr);
+  return d.toLocaleDateString('es-EC',{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+function formatMonthTitle(dateStr){
+  const x=parseLocalDate(dateStr);
+  const t=x.toLocaleDateString('es-EC',{month:'long',year:'numeric'});
+  return t.charAt(0).toUpperCase()+t.slice(1);
+}
+function addDaysISO(dateStr,days){
+  const d=parseLocalDate(dateStr);d.setDate(d.getDate()+days);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+async function renderUpcomingAgenda(analystId,selectedDate){
+  const box=$('#myDayRecent');if(!box)return;
+  if(!analystId){box.innerHTML='';box.classList.add('hidden');return}
+  const all=(await visiblePlanningRows()).filter(p=>p.analystId===analystId&&p.status!=='CANCELADO');
+  const base=selectedDate||dateToday(), monthDate=parseLocalDate(base), y=monthDate.getFullYear(),m=monthDate.getMonth();
+  const first=new Date(y,m,1),last=new Date(y,m+1,0),startPad=(first.getDay()+6)%7;
+  const byDate=new Map();all.forEach(p=>{if(!byDate.has(p.date))byDate.set(p.date,[]);byDate.get(p.date).push(p)});
+  let cells='';
+  for(let i=0;i<startPad;i++)cells+='<div class="future-cal-day muted"></div>';
+  for(let day=1;day<=last.getDate();day++){
+    const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`, items=byDate.get(ds)||[];
+    const future=ds>=dateToday(), selected=ds===base, today=ds===dateToday();
+    const dots=items.length?`<span class="future-cal-count">${items.length}</span>`:'';
+    cells+=`<button type="button" class="future-cal-day ${items.length?'has-plan':''} ${selected?'selected':''} ${today?'today':''} ${!future?'past':''}" data-agenda-date="${ds}"><b>${day}</b>${dots}</button>`;
+  }
+  const futurePlans=all.filter(p=>p.date>dateToday()&&p.status==='PROGRAMADO').sort((a,b)=>a.date.localeCompare(b.date)||a.startTime.localeCompare(b.startTime)).slice(0,8);
+  box.classList.remove('hidden');
+  box.innerHTML=`<div class="future-agenda-head"><div><span class="eyebrow">AGENDA FUTURA</span><h3>Próximas actividades</h3><p>Las actividades del mes quedan visibles desde ahora. El analista puede consultarlas, pero solo iniciarlas el día programado.</p></div><div class="future-agenda-legend"><span><i></i> Día con actividad</span><span class="today-mark">HOY</span></div></div>
+    <div class="future-agenda-grid">
+      <div class="future-calendar"><div class="future-calendar-title"><b>${escapeHtml(formatMonthTitle(base))}</b><div><button type="button" class="icon-btn compact-cal" data-agenda-month="-1">‹</button><button type="button" class="icon-btn compact-cal" data-agenda-month="1">›</button></div></div><div class="future-weekdays">${['L','M','X','J','V','S','D'].map(x=>`<span>${x}</span>`).join('')}</div><div class="future-calendar-days">${cells}</div></div>
+      <div class="future-next-list"><div class="future-next-title"><b>Siguientes asignaciones</b><span>${futurePlans.length?'Próximas programadas':'Sin actividades futuras'}</span></div>${futurePlans.length?futurePlans.map(p=>`<button type="button" class="future-plan-row" data-agenda-date="${p.date}"><div class="future-plan-date"><b>${parseLocalDate(p.date).getDate()}</b><span>${parseLocalDate(p.date).toLocaleDateString('es-EC',{month:'short'}).replace('.','')}</span></div><div><b>${escapeHtml(p.catalogName)}</b><span>${p.startTime}–${p.endTime} · ${escapeHtml(sectionMeta(p.section).label)}</span>${p.notes?`<small>⚑ ${escapeHtml(p.notes)}</small>`:''}</div><span class="future-state">PROGRAMADO</span></button>`).join(''):'<div class="empty-state compact"><b>Agenda despejada</b><span>Cuando el jefe planifique días posteriores aparecerán aquí automáticamente.</span></div>'}</div>
+    </div>`;
+  $$('[data-agenda-date]').forEach(el=>el.onclick=async()=>{$('#myDayDate').value=el.dataset.agendaDate;await renderMyDay();});
+  $$('[data-agenda-month]').forEach(el=>el.onclick=async()=>{const d=parseLocalDate(base);d.setMonth(d.getMonth()+Number(el.dataset.agendaMonth));$('#myDayDate').value=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;await renderMyDay();});
+}
+
+
 async function renderMyDay(){
   if(!$('#myDayCards'))return;
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
@@ -1476,7 +1552,7 @@ async function renderMyDay(){
   const total=plans.reduce((t,p)=>t+Number(p.durationMinutes||0),0);
   const done=plans.filter(p=>p.status==='REALIZADO').length,inProgress=plans.filter(p=>p.status==='EN PROCESO').length;
   const pct=plans.length?Math.round(done/plans.length*100):0;
-  const today=date===dateToday(),now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
+  const today=date===dateToday(),futureDay=date>dateToday(),now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
   const active=plans.find(p=>p.status==='EN PROCESO')||(today?plans.find(p=>p.status==='PROGRAMADO'&&timeToMinutes(p.startTime)<=nowMin&&timeToMinutes(p.endTime)>nowMin):null);
   const next=plans.find(p=>p.status==='PROGRAMADO'&&(!today||timeToMinutes(p.startTime)>nowMin));
   let focusText='Sin actividad pendiente';
@@ -1509,7 +1585,7 @@ async function renderMyDay(){
     else if(isNext&&today)smartDetail=`Comienza en ${Math.max(0,st-nowMin)} min`;
     const flex=p.status==='PROGRAMADO'?`<div class="flex-order-actions"><button class="icon-order" title="Subir prioridad" data-move-up="${p.id}">↑</button><button class="icon-order" title="Bajar prioridad" data-move-down="${p.id}">↓</button><button class="btn secondary compact" data-prioritize="${p.id}">⇥ Hacer primero</button></div>`:'';
     const action=p.status==='PROGRAMADO'
-      ?`${flex}<button class="btn primary myday-action" data-start-activity="${p.id}">▶ Iniciar actividad</button>`
+      ?(futureDay?`${flex}<button class="btn secondary myday-action future-locked" disabled>🗓 Disponible el ${formatShortDate(p.date)}</button>`:`${flex}<button class="btn primary myday-action" data-start-activity="${p.id}">▶ Iniciar actividad</button>`)
       :p.status==='EN PROCESO'
         ?`<button class="btn primary myday-action" data-finish-activity="${p.id}">✓ Finalizar actividad</button>`
         :`<span class="done-pill">✓ Finalizada${p.actualFinishedAt?` · ${formatActualStamp(p.actualFinishedAt)}`:''}</span>`;
@@ -1552,7 +1628,7 @@ async function renderMyDay(){
   $$('[data-move-up]').forEach(el=>el.onclick=()=>moveMyActivity(el.dataset.moveUp,-1));
   $$('[data-move-down]').forEach(el=>el.onclick=()=>moveMyActivity(el.dataset.moveDown,1));
   $$('[data-prioritize]').forEach(el=>el.onclick=()=>prioritizeMyActivity(el.dataset.prioritize));  $$('[data-comment-save]').forEach(el=>el.onclick=()=>addAnalystComment(el.dataset.commentSave));
-  if($('#myDayRecent')){$('#myDayRecent').innerHTML='';$('#myDayRecent').classList.add('hidden')}
+  await renderUpcomingAgenda(analystId,date);
 }
 
 let bossAIRecommendations=[];
@@ -2450,8 +2526,8 @@ async function analyzeData(render=true){const [cat,rules,steps,ana]=await Promis
 async function renderAudit(){let data=await getAll('audit');data.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));$('#auditEmpty').classList.toggle('hidden',data.length>0);$('#auditTableWrap').classList.toggle('hidden',data.length===0);$('#auditBody').innerHTML=data.map(x=>`<tr><td>${fmtDate(x.createdAt)}</td><td>${escapeHtml(x.user||'')}</td><td><b>${x.action}</b></td><td>${x.module}</td><td>${x.recordId}</td><td>${escapeHtml(x.detail||'')}</td></tr>`).join('')}
 async function loadConfig(){$('#cfgLab').value=(await getOne('config','labName'))?.value||'';$('#cfgUser').value=(await getOne('config','defaultUser'))?.value||'';$('#cfgDayHours').value=(await getOne('config','dayHours'))?.value||8}
 async function saveConfig(){const lab=$('#cfgLab').value.trim(),user=$('#cfgUser').value.trim(),dayHours=Number($('#cfgDayHours').value||8);await put('config',{key:'labName',value:lab});await put('config',{key:'defaultUser',value:user});await put('config',{key:'dayHours',value:dayHours});await audit('CONFIGURAR','SISTEMA','CONFIG','Configuración general actualizada');toast('Configuración guardada');await refreshAll()}
-async function backup(){const data={app:'ERP_PLANIFICACION_NEXTGEN',version:APP_VERSION,exportedAt:nowISO(),catalog:await getAll('catalog'),timeRules:await getAll('timeRules'),compositeSteps:await getAll('compositeSteps'),analysts:await getAll('analysts'),audit:await getAll('audit'),outbox:await getAll('outbox'),config:await getAll('config'),planning:await getAll('planning')};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`RESPALDO_ERP_PLANIFICACION_${APP_VERSION}_${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);await audit('EXPORTAR','SISTEMA','BACKUP','Respaldo general exportado');toast('Respaldo generado');await refreshAll()}
-async function resetDB(){if(!confirm('Esto eliminará catálogo, reglas, analistas y trazabilidad locales de esta versión. ¿Continuar?'))return;await Promise.all(['catalog','timeRules','compositeSteps','analysts','audit','outbox','config','planning'].map(clearStore));toast('Base local reiniciada');await loadConfig();await refreshAll()}
+async function backup(){const data={app:'ERP_PLANIFICACION_NEXTGEN',version:APP_VERSION,exportedAt:nowISO(),catalog:await getAll('catalog'),timeRules:await getAll('timeRules'),compositeSteps:await getAll('compositeSteps'),analysts:await getAll('analysts'),audit:await getAll('audit'),outbox:await getAll('outbox'),config:await getAll('config'),planning:await getAll('planning'),planComments:await getAll('planComments')};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`RESPALDO_ERP_PLANIFICACION_${APP_VERSION}_${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);await audit('EXPORTAR','SISTEMA','BACKUP','Respaldo general exportado');toast('Respaldo generado');await refreshAll()}
+async function resetDB(){if(!confirm('Esto eliminará catálogo, reglas, analistas y trazabilidad locales de esta versión. ¿Continuar?'))return;await Promise.all(['catalog','timeRules','compositeSteps','analysts','audit','outbox','config','planning','planComments'].map(clearStore));toast('Base local reiniciada');await loadConfig();await refreshAll()}
 async function refreshAll(){await Promise.all([renderDashboard(),renderCatalog(),renderAnalysts(),renderAudit(),analyzeData(true),renderMyDayAnalysts(),renderManagementFilters(),refreshNotificationBadge()]);if($('#planDate'))await refreshPlanner();if($('#myDayDate'))await renderMyDay()}
 
 let currentSessionUser=null;
