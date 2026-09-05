@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.15-AGENDA-FUTURA-NOTIFICACIONES';
+const APP_VERSION='V1.0.5.6.16-COMUNICACIONES-SYNC-ESTABLE';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -987,10 +987,59 @@ async function refreshNotificationBadge(){
   threads.forEach(t=>t.items.forEach(c=>{if(communicationUnread(c,key))n++}));
   $('#notificationBadge').textContent=String(n);$('#notificationBadge').classList.toggle('hidden',n===0);$('#btnNotifications')?.classList.toggle('has-unread',n>0);
 }
+async function syncCommentReadReceipt(commentId,keys){
+  // Las confirmaciones de lectura son metadatos de la campana, no cambios operativos.
+  // Se envían por un canal silencioso para que abrir el Centro de Comunicaciones
+  // nunca deje el ERP en estado SINCRONIZANDO ni bloquee la Outbox principal.
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||!commentId)return false;
+  const list=[...new Set((Array.isArray(keys)?keys:[keys]).filter(Boolean))];
+  if(!list.length)return true;
+  try{
+    const {doc,setDoc,arrayUnion}=firebaseBridge.mods;
+    await setDoc(doc(firebaseBridge.db,'planComments',commentId),{readBy:arrayUnion(...list)},{merge:true});
+    return true;
+  }catch(err){
+    console.warn('Lectura de comunicación pendiente (canal silencioso)',commentId,err);
+    return false;
+  }
+}
+async function retireLegacyCommentReadOutbox(){
+  // V1.0.5.6.15 guardaba cada lectura como UPDATE en la Outbox. Al abrir varias
+  // conversaciones podían acumularse escrituras y el indicador quedaba largo rato
+  // en SINCRONIZANDO. Se retiran únicamente esos UPDATE de lectura heredados.
+  const items=(await getAll('outbox')).filter(x=>
+    x.entity==='planComments'&&x.type==='UPDATE'&&
+    (x.status==='PENDIENTE'||x.status==='ERROR')
+  );
+  for(const item of items){
+    const payload=item.payload||{};
+    item.status='OMITIDO';
+    item.lastError='Migrado a confirmación de lectura silenciosa';
+    item.syncedAt=nowISO();
+    await put('outbox',item);
+    if(payload.id&&(payload.readBy||[]).length){
+      // No bloquear inicio de sesión: Firestore lo confirma en segundo plano.
+      syncCommentReadReceipt(payload.id,payload.readBy);
+    }
+  }
+  if(items.length)await refreshSyncUI();
+  return items.length;
+}
 async function markThreadRead(planId){
-  const key=communicationUserKey();if(!key)return;const cs=(await getAll('planComments')).filter(c=>c.planId===planId&&communicationVisibleComment(c));
-  for(const c of cs){if(!(c.readBy||[]).includes(key)){c.readBy=[...(c.readBy||[]),key];await put('planComments',c);await queue('UPDATE','planComments',c)}}
-  await refreshNotificationBadge();
+  const key=communicationUserKey();if(!key)return 0;
+  const cs=(await getAll('planComments')).filter(c=>c.planId===planId&&communicationVisibleComment(c));
+  let changed=0;
+  for(const c of cs){
+    // Solo marcar mensajes realmente nuevos del otro participante. Los mensajes
+    // propios no necesitan una segunda confirmación de lectura.
+    if(communicationUnread(c,key)){
+      c.readBy=[...new Set([...(c.readBy||[]),key])];
+      await put('planComments',c);
+      changed++;
+      syncCommentReadReceipt(c.id,key);
+    }
+  }
+  return changed;
 }
 async function renderCommunications(){
   if(!$('#communicationsList'))return;
@@ -1003,6 +1052,7 @@ async function renderCommunications(){
   $('#communicationsList').innerHTML=ts.map(t=>{const p=t.p||{}, analyst=p.analystName||t.items[0]?.analystName||'Analista', unread=t.items.filter(c=>communicationUnread(c,key)).length;return `<article class="comm-thread ${t.closed?'closed':''} ${unread?'unread':''}"><div class="comm-head"><div><div class="comm-title-line"><b>${escapeHtml(p.catalogName||'Actividad')}</b>${unread?`<span class="comm-unread-pill">${unread} nuevo${unread>1?'s':''}</span>`:''}</div><small>${escapeHtml(analyst)} · ${escapeHtml(p.date||'')} ${p.startTime?`· ${p.startTime}`:''}</small></div><span class="comm-state">${t.closed?'ATENDIDO':'PENDIENTE'}</span></div><div class="comm-messages">${t.items.map(c=>`<div class="comm-message ${c.authorType==='JEFE'?'boss':'analyst'} ${communicationUnread(c,key)?'new':''}"><b>${escapeHtml(c.authorName||c.author||'Usuario')}</b><small>${fmtDate(c.createdAt)}</small><div>${escapeHtml(c.text)}</div></div>`).join('')}</div><div class="comm-reply"><input data-comm-reply="${t.planId}" placeholder="Escribir respuesta..."/><button class="btn primary compact" data-comm-send="${t.planId}">Responder</button>${currentSessionUser.role==='JEFE'?`<button class="btn secondary compact" data-comm-close="${t.planId}">${t.closed?'Reabrir':'✓ Marcar atendido'}</button>`:''}</div></article>`}).join('');
   $$('[data-comm-send]').forEach(b=>b.onclick=()=>replyCommunication(b.dataset.commSend));$$('[data-comm-close]').forEach(b=>b.onclick=()=>toggleCommunicationClosed(b.dataset.commClose));$$('[data-comm-filter]').forEach(b=>b.onclick=()=>{$('#commStatusFilter').value=b.dataset.commFilter;renderCommunications()});
   for(const t of ts)await markThreadRead(t.planId);
+  await refreshNotificationBadge();
 }
 async function openCommunications(){await renderCommunications();$('#notificationsDialog').showModal()}
 async function replyCommunication(planId){
@@ -2811,7 +2861,10 @@ async function handleFirebaseAuthState(authUser){
       switchView('inicio');
     }
 
-    // 7. Confirmar pendientes, volver a contrastar con nube y recién después activar live sync.
+    // 7. Limpiar confirmaciones de lectura heredadas de V1.0.5.6.15 antes de
+    // confirmar la Outbox operativa. La campana ya usa un canal silencioso.
+    try{await retireLegacyCommentReadOutbox()}catch(e){console.warn('Limpieza de lecturas heredadas',e)}
+    // Confirmar pendientes, volver a contrastar con nube y recién después activar live sync.
     // Esto protege el caso: cerrar sesión / cerrar APP / volver horas después.
     try{await flushOutbox(false)}catch(e){console.warn('Outbox pendiente al reanudar sesión',e)}
     try{await pullFirebaseData(false)}catch(e){console.warn('Revisión cloud pendiente al reanudar sesión',e)}
