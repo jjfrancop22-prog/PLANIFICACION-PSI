@@ -1,3 +1,9 @@
+## V1.0.5.6.19 — Corrección de campana técnica
+- Las alertas técnicas se generan como eventos del sistema dirigidos al JEFE.
+- Funcionan cuando registra el analista y también cuando el JEFE prueba/corrige desde Mi Jornada.
+- La versión visible del ERP ya muestra V1.0.5.6.19 para evitar confusión con la V1.0.5.6.16.
+- Los analistas no reciben como nuevas sus propias alertas técnicas automáticas.
+
 ## V1.0.5.6.12 · Reactivo + lote como identidad
 
 - Permite registrar el mismo reactivo varias veces cuando el lote es diferente.
