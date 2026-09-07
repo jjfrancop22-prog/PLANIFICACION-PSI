@@ -18,3 +18,10 @@
 - Cuando un analista guarda consumo de reactivos/materiales, el Jefe recibe el resumen del consumo y una advertencia si el registro deja un envase/material agotado o susceptible de baja.
 - Al finalizar una actividad con datos técnicos, se genera un aviso de cierre técnico para diferenciar un avance de un registro definitivo.
 - Las alertas usan el mismo Centro de Comunicaciones y pueden marcarse como atendidas, sin obligar al Jefe a revisar Seguimiento Diario.
+
+
+## V1.0.5.6.20 — Alertas técnicas con detalle consistente
+- Guardar curva sin finalizar: alerta inmediata CURVA · GUARDADO PARCIAL con puntos, réplicas y estadísticos disponibles.
+- Guardar consumos sin finalizar: alerta inmediata INVENTARIO / CONSUMO · GUARDADO PARCIAL con reactivo, lote y consumo.
+- Confirmar finalización: genera avisos finales detallados de CURVA e INVENTARIO y un CIERRE TÉCNICO consolidado.
+- El cierre técnico ya no muestra solo conteos: incluye el detalle de los consumos y los indicadores principales de la curva.

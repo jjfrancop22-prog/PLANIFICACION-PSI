@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.19-ALERTAS-TECNICAS-JEFE-FIX';
+const APP_VERSION='V1.0.5.6.20-ALERTAS-TECNICAS-DETALLE-FINAL';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -962,49 +962,70 @@ function technicalAlertActorIsAnalyst(plan){
 }
 function technicalAlertReagentSummary(result){
   const used=(result?.items||[]).filter(x=>x.usedInActivity&&!x.notUsed);
-  if(!used.length)return {text:'Sin consumo informado en este guardado.',depleted:[]};
+  if(!used.length)return {text:'Sin consumo informado en este guardado.',depleted:[],used:[]};
   const depleted=used.filter(x=>x.depleted===true||(Array.isArray(x.containers)&&x.containers.some(e=>e.depleted===true)));
-  const brief=used.slice(0,4).map(x=>{
+  const details=used.map(x=>{
     const amount=Number(x.consumptionValue??x.used);
     const unit=x.consumptionUnit||x.unit||'';
     const qty=Number.isFinite(amount)?`${Number(amount.toFixed(4))} ${unit}`.trim():'consumo registrado';
     return `${x.name}${x.lot?` · lote ${x.lot}`:''}: ${qty}`;
-  }).join(' | ')+(used.length>4?` | +${used.length-4} más`: '');
-  return {text:brief,depleted};
+  });
+  return {text:details.join(' | '),depleted,used,details};
+}
+function technicalAlertCurveSummary(plan,result){
+  const r=result||plan?.calibrationResult||{};
+  const cfg=plan?.calibrationConfig||{};
+  const points=r.points?.length||cfg.points?.length||0;
+  const reps=Number(r.replicates||cfg.replicates||3);
+  const r2=Number(r.regression?.r2);
+  const slope=Number(r.regression?.slope);
+  const intercept=Number(r.regression?.intercept);
+  const pointDetails=(r.points||[]).slice(0,8).map((pt,i)=>{
+    const c=pt.concentration??cfg.points?.[i]?.concentration??'';
+    const avg=Number(pt.mean??pt.average);
+    return `${c!==''?c:`P${i+1}`}${Number.isFinite(avg)?`→${avg.toFixed(4)}`:''}`;
+  });
+  const stats=[];
+  if(Number.isFinite(r2))stats.push(`R² ${r2.toFixed(6)}`);
+  if(Number.isFinite(slope))stats.push(`pendiente ${slope.toFixed(6)}`);
+  if(Number.isFinite(intercept))stats.push(`intercepto ${intercept.toFixed(6)}`);
+  return {points,reps,stats,pointDetails,completed:!!r.completed};
 }
 async function createTechnicalAlert(plan,kind,payload={}){
   if(!plan||!technicalAlertActorIsAnalyst(plan))return null;
   let text='',priority='INFO',action='CONOCIMIENTO';
+  const stage=payload.stage==='FINAL'?'FINAL':'PARCIAL';
+  const stageLabel=stage==='FINAL'?'AL FINALIZAR':'GUARDADO PARCIAL';
   if(kind==='CURVA'){
     const r=payload.result||plan.calibrationResult||{};
-    const points=r.points?.length||plan.calibrationConfig?.points?.length||0;
-    const reps=Number(r.replicates||plan.calibrationConfig?.replicates||3);
-    const done=!!r.completed;
-    const r2=Number(r.regression?.r2);
-    text=`📈 REGISTRO TÉCNICO · Curva ${done?'completa':'guardada'}: ${points} punto(s) × ${reps} réplica(s)${Number.isFinite(r2)?` · R² ${r2.toFixed(6)}`:''}.`;
+    const sm=technicalAlertCurveSummary(plan,r);
+    const stats=sm.stats.length?` · ${sm.stats.join(' · ')}`:'';
+    const points=sm.pointDetails.length?` · Valores: ${sm.pointDetails.join(' | ')}`:'';
+    text=`📈 CURVA · ${stageLabel} · ${sm.completed?'Completa':'Guardada'}: ${sm.points} punto(s) × ${sm.reps} réplica(s)${stats}${points}.`;
   }else if(kind==='REACTIVOS'){
     const r=payload.result||plan.reagentResult||{};
     const summary=technicalAlertReagentSummary(r);
-    const used=(r.items||[]).filter(x=>x.usedInActivity&&!x.notUsed).length;
-    if(!used)return null;
+    if(!summary.used.length)return null;
     if(summary.depleted.length){priority='ALTA';action='REVISAR_BAJA';}
-    text=`🧪 CONSUMO / INVENTARIO · ${summary.text}.${summary.depleted.length?` ⚠️ Posible baja/ag agotamiento: ${summary.depleted.map(x=>`${x.name}${x.lot?` lote ${x.lot}`:''}`).join(', ')}. Revisar inventario.`:' Revisar inventario cuando corresponda.'}`.replace('baja/ag agotamiento','baja/agotamiento');
+    text=`🧪 INVENTARIO / CONSUMO · ${stageLabel} · ${summary.text}.${summary.depleted.length?` ⚠️ Posible baja/agotamiento: ${summary.depleted.map(x=>`${x.name}${x.lot?` · lote ${x.lot}`:''}`).join(', ')}. REVISAR INVENTARIO.`:' Para conocimiento; revisar inventario cuando corresponda.'}`;
   }else if(kind==='CIERRE_TECNICO'){
     const parts=[];
-    if(plan.calibrationResult?.completed)parts.push('curva registrada');
+    if(plan.calibrationResult?.completed){
+      const sm=technicalAlertCurveSummary(plan,plan.calibrationResult);
+      parts.push(`CURVA: ${sm.points} punto(s) × ${sm.reps} réplica(s)${sm.stats.length?` · ${sm.stats.join(' · ')}`:''}`);
+    }
     if(plan.reagentResult?.completed){
       const sm=technicalAlertReagentSummary(plan.reagentResult);
-      const used=(plan.reagentResult.items||[]).filter(x=>x.usedInActivity&&!x.notUsed).length;
-      if(used)parts.push(`${used} consumo(s) de reactivos/materiales`);
-      if(sm.depleted.length){priority='ALTA';action='REVISAR_BAJA';parts.push(`${sm.depleted.length} posible(s) baja(s)`);}
+      if(sm.used.length)parts.push(`INVENTARIO: ${sm.text}`);
+      if(sm.depleted.length){priority='ALTA';action='REVISAR_BAJA';parts.push(`⚠️ REVISAR BAJA: ${sm.depleted.map(x=>`${x.name}${x.lot?` · lote ${x.lot}`:''}`).join(', ')}`);}
     }
     if(!parts.length)return null;
-    text=`✅ CIERRE TÉCNICO · Actividad finalizada con ${parts.join(' · ')}. ${priority==='ALTA'?'Requiere revisión de inventario.':'Datos disponibles para conocimiento y seguimiento.'}`;
+    text=`✅ CIERRE TÉCNICO · ${parts.join(' || ')}.`;
   }else return null;
   const actorName=currentSessionUser?.name||plan.analystName||'Usuario';
   const actorRole=currentSessionUser?.role||'USUARIO';
   text=`${text} Registrado por: ${actorName}${actorRole==='JEFE'?' (prueba/corrección del jefe)':''}`;
-  const rec={id:uid('COM'),planId:plan.id,analystId:plan.analystId,analystName:plan.analystName,authorType:'SISTEMA',authorName:'Alerta técnica',text,createdAt:nowISO(),threadStatus:'OPEN',readBy:[],notificationType:'TECNICA',technicalKind:kind,priority,actionRequired:action,autoGenerated:true,recipientRole:'JEFE',createdByRole:actorRole,createdByName:actorName};
+  const rec={id:uid('COM'),planId:plan.id,analystId:plan.analystId,analystName:plan.analystName,authorType:'SISTEMA',authorName:'Alerta técnica',text,createdAt:nowISO(),threadStatus:'OPEN',readBy:[],notificationType:'TECNICA',technicalKind:kind,technicalStage:stage,priority,actionRequired:action,autoGenerated:true,recipientRole:'JEFE',createdByRole:actorRole,createdByName:actorName};
   await put('planComments',rec);await queue('CREATE','planComments',rec);
   return rec;
 }
@@ -1264,7 +1285,7 @@ async function saveCalibrationDraft(){
   p.calibrationResult=c.result;p.updatedAt=nowISO();
   await put('planning',p);await queue('UPDATE','planning',p);
   await audit('GUARDAR_CURVA_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó avance de curva de ${p.catalogName}`);
-  await createTechnicalAlert(p,'CURVA',{result:c.result});
+  await createTechnicalAlert(p,'CURVA',{result:c.result,stage:'PARCIAL'});
   toast('Lecturas de curva guardadas · jefe notificado');
 }
 
@@ -1393,7 +1414,7 @@ async function saveReagentDraft(){
   const rr=collectReagentResult(p,false);if(!rr.ok)return toast(rr.text);
   p.reagentResult=rr.result;p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p);
   await audit('GUARDAR_CONSUMO_REACTIVOS_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó consumos parciales de ${p.catalogName}`);
-  await createTechnicalAlert(p,'REACTIVOS',{result:rr.result});
+  await createTechnicalAlert(p,'REACTIVOS',{result:rr.result,stage:'PARCIAL'});
   toast('Consumos guardados · jefe notificado');
 }
 
@@ -1499,7 +1520,9 @@ async function completeActivityRecord(p,actualSamples=null,finalComment='',calib
   }
   const sampleDetail=p.actualSamples!==null&&p.actualSamples!==undefined?` · ${p.actualSamples} muestras analizadas`:'';const curveDetail=p.calibrationResult?.completed?` · curva ${p.calibrationResult.points.length} puntos × ${Number(p.calibrationResult.replicates||p.calibrationConfig?.replicates||3)} · R² ${p.calibrationResult.regression?.r2?.toFixed(6)??'—'}`:'';const reagentDetail=p.reagentResult?.completed?` · ${p.reagentResult.items.length} consumo(s) de reactivos registrados`:'';
   await audit('FINALIZAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} finalizó ${p.catalogName} a las ${formatActualStamp(p.actualFinishedAt)}${sampleDetail}${curveDetail}${reagentDetail}`);
-  await createTechnicalAlert(p,'CIERRE_TECNICO');
+  if(p.calibrationResult?.completed)await createTechnicalAlert(p,'CURVA',{result:p.calibrationResult,stage:'FINAL'});
+  if(p.reagentResult?.completed)await createTechnicalAlert(p,'REACTIVOS',{result:p.reagentResult,stage:'FINAL'});
+  await createTechnicalAlert(p,'CIERRE_TECNICO',{stage:'FINAL'});
   toast(`Actividad finalizada${sampleDetail}${(p.calibrationResult?.completed||p.reagentResult?.completed)?' · jefe notificado':''}`);
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();await renderManagementDashboard();
 }
@@ -1537,8 +1560,8 @@ async function submitFinishActivity(e){
       await put('planComments',rec);await queue('CREATE','planComments',rec);
     }
     await audit(mode==='1'?'EDITAR_DATOS_TECNICOS_POST_CIERRE':'GUARDAR_DATOS_TECNICOS_PREVIOS','MI JORNADA',p.code,`${p.technicalEditedBy} guardó datos técnicos de ${p.catalogName}`);
-    if(calibrationResult!==undefined)await createTechnicalAlert(p,'CURVA',{result:calibrationResult});
-    if(reagentResult!==undefined)await createTechnicalAlert(p,'REACTIVOS',{result:reagentResult});
+    if(calibrationResult!==undefined)await createTechnicalAlert(p,'CURVA',{result:calibrationResult,stage:'FINAL'});
+    if(reagentResult!==undefined)await createTechnicalAlert(p,'REACTIVOS',{result:reagentResult,stage:'FINAL'});
     const _corrected=(p.reagentResult?.items||[]).filter(x=>x.initialWeightCorrected);
     if(_corrected.length)await audit('CORREGIR_PESO_INICIAL_REACTIVO','MI JORNADA',p.code,`${p.technicalEditedBy} corrigió peso inicial de: ${_corrected.map(x=>`${x.name} (${x.initialWeight} g)`).join(', ')}`);
     $('#finishActivityDialog').close();$('#finishTechnicalEditMode').value='0';
