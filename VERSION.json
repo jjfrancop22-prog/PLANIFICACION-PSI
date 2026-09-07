@@ -1,12 +1,12 @@
 {
   "app": "ERP Planificación NextGen",
-  "version": "V1.0.5.6.12",
+  "version": "V1.0.5.6.18",
   "channel": "firebase-integration",
   "database": "ERP_PLANIFICACION_NEXTGEN_CLEAN",
   "databaseVersion": 7,
   "firebaseProject": "inventario-psi",
   "deployment": "GitHub -> Netlify -> PWA",
-  "notes": "Catálogo inteligente de reactivos/materiales: al escribir un nombre previamente usado, reutiliza la última ficha disponible y completa lote, control, unidad, stock, densidad y envases; incorpora último stock/peso confirmado cuando existe.",
+  "notes": "Centro de Comunicaciones ampliado con alertas técnicas inteligentes: curva, consumos/reactivos, posible baja de inventario y cierre técnico.",
   "features": [
     "Firebase Authentication",
     "Controlled Initial Migration",
@@ -14,7 +14,11 @@
     "Outbox",
     "Automatic Analyst Link",
     "Smart Reagent Master Catalog",
-    "Automatic Last Profile Reuse"
+    "Automatic Last Profile Reuse",
+    "Future Analyst Agenda",
+    "Smart Communication Alerts",
+    "Technical Data Notifications",
+    "Smart Inventory Review Alerts"
   ],
   "architecture": "Firebase Auth UID -> Firestore profile -> Cloud-first bootstrap -> IndexedDB cache -> Live Sync",
   "sync": "Outbox retries + Firestore write verification + realtime snapshot reconciliation of deleted planning + truthful sync state",
