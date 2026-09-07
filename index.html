@@ -310,6 +310,19 @@
 </div>
 
 
+
+<dialog id="reassignPlanDialog"><form method="dialog" id="reassignPlanForm">
+  <div class="dialog-head"><div><h3>Cambiar asignación</h3><p>Mueva la actividad a otro analista sin eliminarla ni perder su código, datos o trazabilidad.</p></div><button type="button" class="icon-btn" data-close="reassignPlanDialog">×</button></div>
+  <input type="hidden" id="reassignPlanId"/>
+  <div class="inline-alert info" id="reassignPlanSummary"></div>
+  <div class="form-grid">
+    <label>Nuevo analista<select id="reassignAnalyst" required></select></label>
+    <label>Hora de inicio<input id="reassignStart" type="time" required/></label>
+  </div>
+  <div class="inline-alert info">El sistema conserva la actividad original y recalcula la hora final según su duración. Si detecta un cruce, puede buscar automáticamente el primer espacio disponible.</div>
+  <div class="dialog-actions"><button type="button" class="btn secondary" data-close="reassignPlanDialog">Cancelar</button><button class="btn primary" value="default">Guardar cambio</button></div>
+</form></dialog>
+
 <dialog id="notificationsDialog" class="communications-dialog">
   <div class="dialog-head"><div><h3>🔔 Centro de Comunicaciones</h3><p>Comentarios, respuestas y novedades vinculadas a las actividades.</p></div><button type="button" class="icon-btn" data-close="notificationsDialog">×</button></div>
   <div id="commSummary" class="comm-summary"></div><div class="comm-toolbar"><select id="commStatusFilter"><option value="UNREAD">Nuevas sin leer</option><option value="OPEN" selected>Pendientes / en conversación</option><option value="ALL">Todas</option><option value="CLOSED">Atendidas</option></select><button type="button" class="btn secondary" id="btnRefreshCommunications">↻ Actualizar</button></div>
@@ -332,13 +345,13 @@
   <div id="compositeEditor" class="rules-editor hidden"><div class="rules-title"><div><b>Desglose de actividad compuesta</b><small id="compositeHelp">El jefe seleccionará una sola actividad y el futuro Planificador reservará el bloque completo. En Recepción de Muestras el total queda fijado en 5 h.</small></div><button type="button" class="btn secondary" id="btnAddStep">+ Agregar detalle</button></div><div class="composite-total"><span>Duración total del bloque</span><strong id="compositeTotalLabel">5 h</strong><small id="compositeProgress">Desglose pendiente: 5 h</small></div><div id="stepRows"></div><div class="inline-alert" id="stepValidation"></div></div>
   <div id="calibrationEditor" class="rules-editor hidden">
     <div class="rules-title">
-      <div><b>Curva de calibración</b><small>Esta configuración aplica únicamente a las actividades de laboratorio de tipo curva de calibración. Registre los puntos que el analista leerá por triplicado.</small></div>
+      <div><b>Curva de calibración</b><small>Esta configuración aplica únicamente a las actividades de laboratorio de tipo curva de calibración. Registre los puntos que el analista leerá con el número de réplicas configurado.</small></div>
       <label class="switch-line"><input id="catalogRequiresCalibration" type="checkbox"/> Requiere registro de curva</label>
     </div>
     <div id="calibrationConfigBody" class="hidden">
       <div class="form-grid curve-config-grid">
         <label>Unidad de concentración<input id="calibrationUnit" placeholder="Ej. mg/L, µg/L"/></label>
-        <label>Réplicas por punto<input value="3" readonly/></label>
+        <label>Réplicas por punto<input id="calibrationReplicates" type="number" min="1" max="10" step="1" value="3"/></label>
       </div>
       <div class="rules-title compact"><div><b>Puntos de la curva</b><small>Registre concentración nominal de cada estándar.</small></div><button type="button" class="btn secondary" id="btnAddCalibrationPoint">+ Agregar punto</button></div>
       <div id="calibrationPointRows"></div>
@@ -427,16 +440,16 @@
     <div id="finishCalibrationBlock" class="full calibration-finish hidden">
       <div class="calibration-finish-head">
         <div><b>Lecturas de curva de calibración</b><small id="finishCalibrationUnit">Registre las tres absorbancias de cada punto.</small></div>
-        <span class="badge">TRIPLICADO</span>
+        <span class="badge" id="finishCalibrationReplicateBadge">3 RÉPLICAS</span>
       </div>
       <div class="curve-table-wrap">
         <table class="curve-table">
-          <thead><tr><th>Punto</th><th>Concentración</th><th>Abs. 1</th><th>Abs. 2</th><th>Abs. 3</th><th>Promedio</th><th>CV %</th></tr></thead>
+          <thead id="finishCalibrationHead"><tr><th>Punto</th><th>Concentración</th><th>Abs. 1</th><th>Abs. 2</th><th>Abs. 3</th><th>Promedio</th><th>CV %</th></tr></thead>
           <tbody id="finishCalibrationRows"></tbody>
         </table>
       </div>
       <div id="finishCalibrationSummary" class="curve-summary"></div>
-      <div id="finishCalibrationValidation" class="inline-alert info">Complete las tres absorbancias de todos los puntos.</div>
+      <div id="finishCalibrationValidation" class="inline-alert info">Complete todas las lecturas configuradas de todos los puntos.</div>
       <button type="button" class="btn secondary" id="btnSaveCalibrationDraft">Guardar lecturas sin finalizar</button>
     </div>
     <div id="finishReagentBlock" class="full reagent-finish hidden">
