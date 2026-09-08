@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.20-ALERTAS-TECNICAS-DETALLE-FINAL';
+const APP_VERSION='V1.0.5.6.21-CATALOGO-VIVO-ACTIVIDADES-ABIERTAS';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1454,9 +1454,18 @@ async function hydratePlanTechnicalRequirements(p){
   if(!item)item=catalog.find(x=>x.section===p.section&&normalizeIdentityText(x.name)===normalizeIdentityText(p.catalogName));
   if(!item)return p;
   if(item.calibrationConfig?.enabled&&item.calibrationConfig?.points?.length&&!planRequiresCalibration(p)){p.calibrationConfig=JSON.parse(JSON.stringify(item.calibrationConfig));p.calibrationResult=p.calibrationResult||null;changed=true}
-  if(item.reagentConfig?.length&&!p.reagentResult?.completed){
-    const merged=mergeReagentConfigFromCatalog(p.reagentConfig||[],item.reagentConfig);
-    if(JSON.stringify(merged)!==JSON.stringify(p.reagentConfig||[])){p.reagentConfig=merged;changed=true}
+  if(item.reagentConfig?.length && p.status!=='REALIZADO'){
+    const oldCfg=p.reagentConfig||[], merged=mergeReagentConfigFromCatalog(oldCfg,item.reagentConfig);
+    if(JSON.stringify(merged)!==JSON.stringify(oldCfg)){
+      const capturedIds=new Set((p.reagentResult?.items||[]).map(x=>x?.reagentId).filter(Boolean));
+      const addedPending=merged.some(r=>r?.id&&!capturedIds.has(r.id));
+      p.reagentConfig=merged;
+      // Si el catálogo agregó un reactivo/lote después de que el analista había
+      // completado el formulario anterior, el registro vuelve a PENDIENTE para
+      // que el nuevo insumo se vea y pueda marcarse USADO o NO UTILIZADO.
+      if(addedPending&&p.reagentResult?.completed)p.reagentResult={...p.reagentResult,completed:false,catalogExpandedAt:nowISO()};
+      changed=true;
+    }
     p.reagentResult=p.reagentResult||null;
   }
   if(changed){p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p)}
@@ -1488,7 +1497,11 @@ async function openTechnicalData(planId){
 async function editCompletedTechnicalData(planId){return openTechnicalData(planId)}
 async function finishMyActivity(planId){
   const _guardPlan=await getOne('planning',planId);if(!_guardPlan||!assertOwnPlan(_guardPlan))return toast('No puede modificar actividades de otro analista');
-  const p=await getOne('planning',planId);if(!p)return;
+  let p=await getOne('planning',planId);if(!p)return;
+  // Releer la ficha técnica vigente justo antes de abrir la finalización.
+  // Esto permite que un reactivo/lote agregado por el jefe después de planificar
+  // aparezca aunque la actividad ya esté iniciada o el modal se hubiera abierto antes.
+  p=await hydratePlanTechnicalRequirements(p);
   if(p.status==='REALIZADO')return toast('La actividad ya está finalizada');
   if(!p.actualStartedAt)return toast('Primero debe iniciar la actividad');
 
@@ -2676,7 +2689,47 @@ function compositeTarget(){return $('#catalogSection').value==='RECEPCION_MUESTR
 function renderStepRows(){const box=$('#stepRows');if(!box)return;box.innerHTML=editingSteps.map((s,i)=>{const d=splitMinutes(s.minutes);return `<div class="step-row"><div class="step-order">${i+1}</div><label>Detalle / subactividad<input value="${escapeHtml(s.name||'')}" data-step="${i}" data-step-field="name" placeholder="Ej. Revisión de condiciones"></label><label>Horas<input type="number" min="0" max="8" step="1" value="${d.hours}" data-step-hours="${i}"></label><label>Minutos<select data-step-minutes="${i}">${[0,5,10,15,20,25,30,35,40,45,50,55].map(m=>`<option value="${m}" ${m===d.minutes?'selected':''}>${String(m).padStart(2,'0')} min</option>`).join('')}</select></label><button type="button" class="icon-btn" data-remove-step="${i}">×</button></div>`}).join('');$$('[data-step-field]').forEach(el=>el.oninput=()=>{editingSteps[Number(el.dataset.step)][el.dataset.stepField]=el.value;validateSteps()});$$('[data-step-hours]').forEach(el=>el.oninput=()=>{const i=Number(el.dataset.stepHours),mins=Number($(`[data-step-minutes="${i}"]`).value||0);editingSteps[i].minutes=Number(el.value||0)*60+mins;validateSteps()});$$('[data-step-minutes]').forEach(el=>el.onchange=()=>{const i=Number(el.dataset.stepMinutes),hrs=Number($(`[data-step-hours="${i}"]`).value||0);editingSteps[i].minutes=hrs*60+Number(el.value||0);validateSteps()});$$('[data-remove-step]').forEach(el=>el.onclick=()=>{editingSteps.splice(Number(el.dataset.removeStep),1);renderStepRows()});validateSteps()}
 function validateSteps(){const el=$('#stepValidation');if(!el||$('#catalogTimeMode').value!=='COMPOSITE'){if(el)el.textContent='';return {level:'OK',text:''}}const target=compositeTarget(),sum=editingSteps.reduce((a,s)=>a+Number(s.minutes||0),0),missing=editingSteps.some(s=>!String(s.name||'').trim()||!Number(s.minutes));$('#compositeTotalLabel').textContent=minutesText(target);const diff=target-sum;$('#compositeProgress').textContent=diff===0?'Desglose completo':diff>0?`Faltan ${minutesText(diff)} por distribuir`:`Excede por ${minutesText(Math.abs(diff))}`;let out;if(!editingSteps.length)out={level:'ERROR',text:'Agregue al menos un detalle para esta actividad compuesta.'};else if(missing)out={level:'ERROR',text:'Cada detalle debe tener nombre y duración.'};else if(sum!==target)out={level:'ERROR',text:`El desglose suma ${minutesText(sum)} y debe sumar exactamente ${minutesText(target)}.`};else out={level:'OK',text:`Desglose válido: ${editingSteps.length} detalle(s), total ${minutesText(target)}.`};el.textContent=out.text;el.className='inline-alert '+out.level.toLowerCase();return out}
 function validateRuleDraft(){const el=$('#ruleValidation');if($('#catalogTimeMode').value!=='BY_SAMPLES'){el.textContent='';return}const v=validateRules(editingRules);el.textContent=v.text;el.className='inline-alert '+v.level.toLowerCase()}
-async function saveCatalog(ev){ev.preventDefault();const id=$('#catalogId').value,section=$('#catalogSection').value,name=$('#catalogName').value.trim(),family=$('#catalogFamily').value.trim(),timeMode=$('#catalogTimeMode').value,baseMinutes=section==='RECEPCION_MUESTRAS'&&timeMode==='COMPOSITE'?300:getDurationPicker();if(!section||!name)return toast('Complete sección y nombre');if(['FIXED','COMPOSITE'].includes(timeMode)&&!baseMinutes)return toast('Ingrese la duración estándar');if(timeMode==='BY_SAMPLES'){const v=validateRules(editingRules);if(v.level==='ERROR')return toast(v.text)}if(timeMode==='COMPOSITE'){const v=validateSteps();if(v.level==='ERROR')return toast(v.text)}if($('#catalogRequiresCalibration')?.checked){const v=validateCalibrationConfig();if(v.level==='ERROR')return toast(v.text)}if(sectionAllowsReagents(section)&&$('#catalogUsesReagents')?.checked){const v=validateReagents();if(v.level==='ERROR')return toast(v.text)}const all=await getAll('catalog');const duplicate=all.find(x=>x.id!==id&&x.section===section&&x.name.trim().toLowerCase()===name.toLowerCase()&&(x.family||'').trim().toLowerCase()===family.toLowerCase());if(duplicate)return toast('Ya existe el mismo elemento en esta sección y clasificación');const existing=id?all.find(x=>x.id===id):null;const rec={id:id||uid('CAT'),code:existing?.code||nextCode(section,all),section,name,family,timeMode,baseMinutes:['FIXED','COMPOSITE'].includes(timeMode)?baseMinutes:null,description:$('#catalogDescription').value.trim(),calibrationConfig:calibrationConfigFromForm(),reagentConfig:reagentConfigFromForm(),status:$('#catalogStatus').value,createdAt:existing?.createdAt||nowISO(),updatedAt:nowISO()};await put('catalog',rec);const oldRules=(await getAll('timeRules')).filter(r=>r.catalogId===rec.id);for(const r of oldRules){await del('timeRules',r.id);await queue('DELETE','timeRules',{id:r.id})}if(timeMode==='BY_SAMPLES'){const seenRuleKeys=new Set();for(const r of editingRules){const key=timeRuleKey(r);if(seenRuleKeys.has(key))continue;seenRuleKeys.add(key);const ruleRec={id:uid('TR'),catalogId:rec.id,minSamples:Number(r.minSamples),maxSamples:Number(r.maxSamples),minutes:Number(r.minutes),createdAt:nowISO(),updatedAt:nowISO()};await put('timeRules',ruleRec);await queue('CREATE','timeRules',ruleRec)}}const oldSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===rec.id);for(const st of oldSteps){await del('compositeSteps',st.id);await queue('DELETE','compositeSteps',{id:st.id})}if(timeMode==='COMPOSITE'){for(let i=0;i<editingSteps.length;i++){const st=editingSteps[i];const stepRec={id:uid('STEP'),catalogId:rec.id,order:i+1,name:String(st.name).trim(),minutes:Number(st.minutes),createdAt:nowISO(),updatedAt:nowISO()};await put('compositeSteps',stepRec);await queue('CREATE','compositeSteps',stepRec)}}await queue(id?'UPDATE':'CREATE','catalog',rec);await audit(id?'EDITAR':'CREAR','CATALOGO_MAESTRO',rec.code,`${sectionMeta(section).label}: ${name}${family?` · ${family}`:''}${timeMode==='COMPOSITE'?` · bloque ${minutesText(baseMinutes)} con ${editingSteps.length} detalles`:''}`);currentSection=section;$('#catalogDialog').close();toast(id?'Elemento actualizado':'Elemento creado');await refreshAll();renderSectionTabs();
+
+function cloneJson(v){return v==null?v:JSON.parse(JSON.stringify(v))}
+function mergeOpenPlanReagentConfig(plan,latestConfig){
+  const latest=Array.isArray(latestConfig)?cloneJson(latestConfig):[];
+  const old=Array.isArray(plan?.reagentConfig)?plan.reagentConfig:[];
+  const resultItems=Array.isArray(plan?.reagentResult?.items)?plan.reagentResult.items:[];
+  const usedIds=new Set(resultItems.map(x=>x?.reagentId).filter(Boolean));
+  const latestIds=new Set(latest.map(x=>x?.id).filter(Boolean));
+  // Si ya hubo captura parcial de un reactivo que después se retiró del catálogo,
+  // se conserva en la actividad para no romper la trazabilidad de lo ya registrado.
+  for(const r of old){
+    if(r?.id && usedIds.has(r.id) && !latestIds.has(r.id))latest.push(cloneJson(r));
+  }
+  return latest.map((r,i)=>({...r,order:i+1}));
+}
+async function propagateCatalogTechnicalConfigToOpenPlans(catalogRec){
+  const plans=await visiblePlanningRows();
+  const targets=plans.filter(p=>p.catalogId===catalogRec.id && !['REALIZADO','CANCELADO'].includes(p.status));
+  let changed=0;
+  for(const p of targets){
+    const nextCalibration=catalogRec.calibrationConfig?.enabled?cloneJson(catalogRec.calibrationConfig):null;
+    const nextReagents=mergeOpenPlanReagentConfig(p,catalogRec.reagentConfig||[]);
+    const before=JSON.stringify({c:p.calibrationConfig||null,r:p.reagentConfig||[]});
+    const after=JSON.stringify({c:nextCalibration,r:nextReagents});
+    if(before===after)continue;
+    p.calibrationConfig=nextCalibration;
+    p.reagentConfig=nextReagents;
+    p.catalogConfigSyncedAt=nowISO();
+    p.catalogConfigVersionAt=catalogRec.updatedAt;
+    p.updatedAt=nowISO();
+    await put('planning',p);
+    await queue('UPDATE','planning',p);
+    changed++;
+  }
+  if(changed){
+    await audit('ACTUALIZAR_CONFIG_TECNICA_PLANIFICADA','CATALOGO_MAESTRO',catalogRec.code,`${changed} actividad(es) PROGRAMADA(S)/EN PROCESO actualizadas con la configuración vigente de curva/reactivos`);
+  }
+  return changed;
+}
+
+async function saveCatalog(ev){ev.preventDefault();const id=$('#catalogId').value,section=$('#catalogSection').value,name=$('#catalogName').value.trim(),family=$('#catalogFamily').value.trim(),timeMode=$('#catalogTimeMode').value,baseMinutes=section==='RECEPCION_MUESTRAS'&&timeMode==='COMPOSITE'?300:getDurationPicker();if(!section||!name)return toast('Complete sección y nombre');if(['FIXED','COMPOSITE'].includes(timeMode)&&!baseMinutes)return toast('Ingrese la duración estándar');if(timeMode==='BY_SAMPLES'){const v=validateRules(editingRules);if(v.level==='ERROR')return toast(v.text)}if(timeMode==='COMPOSITE'){const v=validateSteps();if(v.level==='ERROR')return toast(v.text)}if($('#catalogRequiresCalibration')?.checked){const v=validateCalibrationConfig();if(v.level==='ERROR')return toast(v.text)}if(sectionAllowsReagents(section)&&$('#catalogUsesReagents')?.checked){const v=validateReagents();if(v.level==='ERROR')return toast(v.text)}const all=await getAll('catalog');const duplicate=all.find(x=>x.id!==id&&x.section===section&&x.name.trim().toLowerCase()===name.toLowerCase()&&(x.family||'').trim().toLowerCase()===family.toLowerCase());if(duplicate)return toast('Ya existe el mismo elemento en esta sección y clasificación');const existing=id?all.find(x=>x.id===id):null;const rec={id:id||uid('CAT'),code:existing?.code||nextCode(section,all),section,name,family,timeMode,baseMinutes:['FIXED','COMPOSITE'].includes(timeMode)?baseMinutes:null,description:$('#catalogDescription').value.trim(),calibrationConfig:calibrationConfigFromForm(),reagentConfig:reagentConfigFromForm(),status:$('#catalogStatus').value,createdAt:existing?.createdAt||nowISO(),updatedAt:nowISO()};await put('catalog',rec);const oldRules=(await getAll('timeRules')).filter(r=>r.catalogId===rec.id);for(const r of oldRules){await del('timeRules',r.id);await queue('DELETE','timeRules',{id:r.id})}if(timeMode==='BY_SAMPLES'){const seenRuleKeys=new Set();for(const r of editingRules){const key=timeRuleKey(r);if(seenRuleKeys.has(key))continue;seenRuleKeys.add(key);const ruleRec={id:uid('TR'),catalogId:rec.id,minSamples:Number(r.minSamples),maxSamples:Number(r.maxSamples),minutes:Number(r.minutes),createdAt:nowISO(),updatedAt:nowISO()};await put('timeRules',ruleRec);await queue('CREATE','timeRules',ruleRec)}}const oldSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===rec.id);for(const st of oldSteps){await del('compositeSteps',st.id);await queue('DELETE','compositeSteps',{id:st.id})}if(timeMode==='COMPOSITE'){for(let i=0;i<editingSteps.length;i++){const st=editingSteps[i];const stepRec={id:uid('STEP'),catalogId:rec.id,order:i+1,name:String(st.name).trim(),minutes:Number(st.minutes),createdAt:nowISO(),updatedAt:nowISO()};await put('compositeSteps',stepRec);await queue('CREATE','compositeSteps',stepRec)}}await queue(id?'UPDATE':'CREATE','catalog',rec);const propagated=id?await propagateCatalogTechnicalConfigToOpenPlans(rec):0;await audit(id?'EDITAR':'CREAR','CATALOGO_MAESTRO',rec.code,`${sectionMeta(section).label}: ${name}${family?` · ${family}`:''}${timeMode==='COMPOSITE'?` · bloque ${minutesText(baseMinutes)} con ${editingSteps.length} detalles`:''}`);currentSection=section;$('#catalogDialog').close();toast(id?(propagated?`Elemento actualizado · ${propagated} actividad(es) abierta(s) sincronizada(s)`:'Elemento actualizado'):'Elemento creado');await refreshAll();renderSectionTabs();
 if(plannerCatalogReturn&&!id){
   const keep=plannerCatalogReturn;plannerCatalogReturn=null;
   switchView('planificador');
