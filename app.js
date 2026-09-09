@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.21-CATALOGO-VIVO-ACTIVIDADES-ABIERTAS';
+const APP_VERSION='V1.0.5.6.23-NOTIFICACION-LIMPIA-CIERRE-SEGURO';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -940,6 +940,75 @@ async function renderExecutivePlanner(){
     ${rows||'<div class="empty-mini">Sin analistas operativos activos.</div>'}`;
 }
 async function renderDailyLoad(){if(!$('#loadCards'))return;const date=$('#planDate').value,plans=date?await planningForDate(date):[],anas=(await getAll('analysts')).filter(a=>a.status==='ACTIVO'&&isOperationalAnalyst(a)).sort((a,b)=>a.name.localeCompare(b.name,'es'));$('#loadCards').innerHTML=anas.map(a=>{const mins=plans.filter(p=>p.analystId===a.id).reduce((t,p)=>t+Number(p.durationMinutes||0),0),cap=Number(a.dailyHours||8)*60,pct=Math.round(mins/Math.max(1,cap)*100);return `<div class="load-card ${pct>100?'over':''}"><div class="load-head"><b>${escapeHtml(a.name)}</b><span>${minutesText(mins)} / ${a.dailyHours||8} h</span></div><small>${pct}% de jornada planificada</small><div class="load-bar"><i style="width:${Math.min(100,pct)}%"></i></div></div>`}).join('')||'<div class="empty"><p>Sin analistas activos.</p></div>'}
+
+// V1.0.5.6.22 · reglas inteligentes de cobertura mínima de la jornada.
+const CORE_SAMPLE_SECTIONS=new Set(['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS']);
+function normalizePlannerRuleText(v=''){return String(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()}
+function findOtHtCatalog(catalog){
+  const active=catalog.filter(x=>x.status==='ACTIVO');
+  return active.find(x=>String(x.code||'').toUpperCase()==='CAT-AL-00075')||
+    active.find(x=>{const t=normalizePlannerRuleText(`${x.name||''} ${x.family||''} ${x.description||''}`);return (t.includes('ORDEN')&&t.includes('TRABAJO'))||(t.includes('APPTELINK')&&t.includes('ERP'))||(t.includes('OT')&&t.includes('HT'));});
+}
+function plannerRuleLoad(plans,analystId){return plans.filter(p=>p.analystId===analystId&&p.status!=='CANCELADO').reduce((t,p)=>t+Number(p.durationMinutes||0),0)}
+async function prepareMandatoryPlan(section,catalogId,analystId){
+  if(!$('#planSection')||!$('#planCatalog'))return;
+  $('#planSection').value=section;
+  if($('#planActivitySearch'))$('#planActivitySearch').value='';
+  await renderPlanSelectors();
+  if(catalogId&&[...$('#planCatalog').options].some(o=>o.value===catalogId))$('#planCatalog').value=catalogId;
+  await renderAnalystOptions();
+  if(analystId&&[...$('#planAnalyst').options].some(o=>o.value===analystId))$('#planAnalyst').value=analystId;
+  await smartPlannerRecalculate();
+  if(analystId)await autoScheduleSelectedAnalyst();
+  document.querySelector('.planner-grid')?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+async function renderMandatoryPlanningAlerts(){
+  const host=$('#smartMandatoryAlerts');if(!host)return;
+  const date=$('#planDate')?.value;if(!date){host.innerHTML='';return}
+  const [plans,analysts,catalog]=await Promise.all([planningForDate(date),getAll('analysts'),getAll('catalog')]);
+  const active=analysts.filter(a=>a.status==='ACTIVO'&&isOperationalAnalyst(a));
+  const alerts=[];
+
+  // REGLA 1: cada día debe existir al menos un bloque completo de Recepción de Muestras (5 h).
+  const receptionPlans=plans.filter(p=>p.status!=='CANCELADO'&&p.section==='RECEPCION_MUESTRAS');
+  if(!receptionPlans.length){
+    const receptionCatalog=catalog.filter(x=>x.status==='ACTIVO'&&x.section==='RECEPCION_MUESTRAS').sort((a,b)=>Number(b.baseMinutes||0)-Number(a.baseMinutes||0))[0]||null;
+    const eligible=active.filter(a=>(a.competencies||[]).includes('RECEPCION_MUESTRAS')).map(a=>({a,slot:findBestWorkSlot(plans,a.id,300),load:plannerRuleLoad(plans,a.id)})).filter(x=>x.slot).sort((a,b)=>a.load-b.load||a.slot.start-b.slot.start);
+    if(!eligible.length){
+      alerts.push({level:'danger',icon:'!',title:'PROGRAMAR RECEPCIÓN · SIN BLOQUE DE 5 HORAS DISPONIBLE',text:'No existe Recepción de Muestras planificada y ningún analista competente conserva un bloque laboral completo de 5 h. La jornada necesita corrección inmediata o mover otra actividad para liberar espacio.',meta:'Cobertura obligatoria · 5 h'});
+    }else{
+      const best=eligible[0],only=eligible.length===1;
+      alerts.push({level:only?'warning':'warning',icon:'⌛',title:only?'PROGRAMAR RECEPCIÓN · ÚLTIMA OPCIÓN DISPONIBLE':'PROGRAMAR RECEPCIÓN DE MUESTRAS',text:`Aún no existe el bloque obligatorio de 5 h. ${only?'Solo queda una opción':'Hay '+eligible.length+' opciones'} con espacio completo: ${best.a.name} ${minutesToTime(best.slot.start)}–${minutesToTime(best.slot.end)}.`,meta:'Cobertura obligatoria · 5 h',action:{section:'RECEPCION_MUESTRAS',catalogId:receptionCatalog?.id||'',analystId:best.a.id,label:'Preparar Recepción'}});
+    }
+  }
+
+  // REGLA 2: quien no trabaja en Microbiología / Recepción / AASS debe reservar OT/HT al llegar a 7 h de carga.
+  const supportCatalog=findOtHtCatalog(catalog);
+  for(const a of active){
+    const own=plans.filter(p=>p.analystId===a.id&&p.status!=='CANCELADO');
+    if(own.some(p=>CORE_SAMPLE_SECTIONS.has(p.section)))continue;
+    const alreadySupport=own.some(p=>supportCatalog&&p.catalogId===supportCatalog.id)||own.some(p=>{const t=normalizePlannerRuleText(p.catalogName||'');return (t.includes('ORDEN')&&t.includes('TRABAJO'))||(t.includes('APPTELINK')&&t.includes('ERP'))||(t.includes('OT')&&t.includes('HT'));});
+    if(alreadySupport)continue;
+    const cap=Number(a.dailyHours||8)*60,load=plannerRuleLoad(plans,a.id),free=Math.max(0,cap-load);
+    if(load<420)continue;
+    const slot=findBestWorkSlot(plans,a.id,60);
+    if(!supportCatalog){
+      alerts.push({level:'danger',icon:'!',title:`PROGRAMAR OT / HT · ${a.name}`,text:`${a.name} ya tiene ${minutesText(load)} planificadas y no está asignado a Microbiología, Recepción ni AASS. No se encontró en el catálogo la actividad de OT/HT (por ejemplo “Ingreso de Órdenes de trabajo Apptelink y ERP”).`,meta:'Regla de cierre de jornada · 1 h'});
+    }else if(!slot||free<60){
+      alerts.push({level:'danger',icon:'!',title:`SIN ESPACIO PARA OT / HT · ${a.name}`,text:`${a.name} no tiene Microbiología, Recepción ni AASS y la jornada ya quedó sin un bloque libre de 1 h para OT/HT. Debe mover o reducir otra actividad antes de cerrar la planificación.`,meta:`Carga actual ${minutesText(load)} / ${minutesText(cap)}`});
+    }else{
+      alerts.push({level:'warning',icon:'⌛',title:`PROGRAMAR OT / HT · ${a.name}`,text:`${a.name} ya alcanzó ${minutesText(load)} y no tiene Microbiología, Recepción ni AASS. Reserve ahora 1 h para OT/HT antes de ocupar el último espacio disponible (${minutesToTime(slot.start)}–${minutesToTime(slot.end)}).`,meta:`Quedan ${minutesText(free)} libres`,action:{section:supportCatalog.section,catalogId:supportCatalog.id,analystId:a.id,label:'Preparar OT / HT'}});
+    }
+  }
+
+  if(!alerts.length){
+    host.innerHTML=`<div class="smart-rule-alert good"><div class="smart-rule-icon">✓</div><div class="smart-rule-copy"><small>Control automático</small><b>Cobertura mínima de jornada correcta</b><span>La planificación actual no requiere alertas de Recepción de Muestras ni de reserva OT/HT.</span></div></div>`;
+    return;
+  }
+  host.innerHTML=alerts.map((x,i)=>`<div class="smart-rule-alert ${x.level}"><div class="smart-rule-icon">${x.icon}</div><div class="smart-rule-copy"><small>${escapeHtml(x.meta||'Alerta inteligente')}</small><b>${escapeHtml(x.title)}</b><span>${escapeHtml(x.text)}</span></div>${x.action?`<div class="smart-rule-actions"><button type="button" class="btn primary compact" data-smart-rule="${i}">${escapeHtml(x.action.label)}</button></div>`:''}</div>`).join('');
+  $$('[data-smart-rule]').forEach(b=>b.onclick=()=>{const x=alerts[Number(b.dataset.smartRule)];if(x?.action)prepareMandatoryPlan(x.action.section,x.action.catalogId,x.action.analystId)});
+}
+
 async function planComments(planId){return (await getAll('planComments')).filter(c=>c.planId===planId).sort((a,b)=>a.createdAt.localeCompare(b.createdAt))}
 async function addAnalystComment(planId){
   const input=document.querySelector(`[data-comment-input="${planId}"]`),text=(input?.value||'').trim();if(!text)return toast('Escriba un comentario');
@@ -1029,12 +1098,67 @@ async function createTechnicalAlert(plan,kind,payload={}){
   await put('planComments',rec);await queue('CREATE','planComments',rec);
   return rec;
 }
+
+async function createActivityLifecycleAlert(plan,stage){
+  if(!plan||!technicalAlertActorIsAnalyst(plan))return null;
+  const isStart=stage==='INGRESO';
+  const safeId=String(plan.id||uid('PLAN')).replace(/[^a-zA-Z0-9_-]/g,'_');
+  const id=`AUTO-${isStart?'INGRESO':'FINAL'}-${safeId}`;
+  const existing=await getOne('planComments',id);
+  if(existing)return existing; // id determinístico: evita avisos duplicados por doble clic/sincronización.
+  const actorName=currentSessionUser?.name||plan.analystName||'Usuario';
+  let text='';
+  if(isStart){
+    text=`▶️ INGRESO DE ACTIVIDAD · ${plan.catalogName} · ${plan.analystName} inició a las ${formatActualStamp(plan.actualStartedAt||nowISO())}.`;
+  }else{
+    const parts=[];
+    if(plan.actualSamples!==null&&plan.actualSamples!==undefined)parts.push(`${plan.actualSamples} muestra(s)`);
+    if(plan.calibrationResult?.completed){
+      const sm=technicalAlertCurveSummary(plan,plan.calibrationResult);
+      parts.push(`CURVA: ${sm.points} punto(s) × ${sm.reps} réplica(s)${sm.stats.length?` · ${sm.stats.join(' · ')}`:''}`);
+    }
+    if(plan.reagentResult?.completed){
+      const sm=technicalAlertReagentSummary(plan.reagentResult);
+      if(sm.used.length)parts.push(`CONSUMO: ${sm.text}`);
+      if(sm.depleted.length)parts.push(`⚠️ REVISAR INVENTARIO: ${sm.depleted.map(x=>`${x.name}${x.lot?` · lote ${x.lot}`:''}`).join(', ')}`);
+    }
+    text=`✅ FINALIZACIÓN DE ACTIVIDAD · ${plan.catalogName} · ${plan.analystName} finalizó a las ${formatActualStamp(plan.actualFinishedAt||nowISO())}${parts.length?` · ${parts.join(' || ')}`:''}.`;
+  }
+  const rec={id,planId:plan.id,analystId:plan.analystId,analystName:plan.analystName,authorType:'SISTEMA',authorName:'Alerta de actividad',text,createdAt:nowISO(),threadStatus:'OPEN',readBy:[],notificationType:'ACTIVIDAD',lifecycleStage:isStart?'INGRESO':'FINALIZACION',priority:'INFO',actionRequired:'CONOCIMIENTO',autoGenerated:true,recipientRole:'JEFE',createdByRole:currentSessionUser?.role||'USUARIO',createdByName:actorName};
+  await put('planComments',rec);await queue('CREATE','planComments',rec);
+  return rec;
+}
+
+function setFinishTechnicalReadOnly(readonly){
+  const dialog=$('#finishActivityDialog');if(!dialog)return;
+  dialog.querySelectorAll('#finishCalibrationBlock input,#finishCalibrationBlock select,#finishCalibrationBlock textarea,#finishReagentBlock input,#finishReagentBlock select,#finishReagentBlock textarea,#finishActivityComment,#finishActualSamples').forEach(el=>{el.disabled=!!readonly});
+  $('#btnSaveCalibrationDraft')?.classList.toggle('hidden',!!readonly);
+  $('#btnSaveReagentDraft')?.classList.toggle('hidden',!!readonly);
+  dialog.classList.toggle('technical-readonly',!!readonly);
+}
+async function unlockCompletedTechnicalEdit(){
+  const p=await getOne('planning',$('#finishActivityPlanId')?.value);if(!p||p.status!=='REALIZADO')return;
+  const password=prompt('Ingrese la contraseña para editar una actividad finalizada:');
+  if(password===null)return;
+  if(password!=='2026')return toast('Contraseña incorrecta');
+  $('#finishTechnicalEditMode').value='1';
+  setFinishTechnicalReadOnly(false);
+  const title=$('#finishActivityTitle');if(title)title.textContent='Editar actividad finalizada';
+  $('#finishActivityHelp').textContent='Edición técnica autorizada. El estado REALIZADO y los tiempos originales no cambian.';
+  const submit=$('#finishSubmitBtn');if(submit){submit.classList.remove('hidden');submit.textContent='Guardar edición técnica'}
+  $('#btnUnlockTechnicalEdit')?.classList.add('hidden');
+  toast('Edición habilitada');
+}
+
 function communicationUserKey(){
   if(!currentSessionUser)return '';
   return currentSessionUser.role==='ANALISTA'?`ANALISTA:${currentSessionUser.analystId||currentSessionUser.id||currentSessionUser.name}`:`JEFE:${currentSessionUser.id||currentSessionUser.email||currentSessionUser.name}`;
 }
 function communicationVisibleComment(c){
   if(!currentSessionUser)return false;
+  // V1.0.5.6.23: los avisos técnicos automáticos heredados (CURVA/CONSUMO)
+  // quedan conservados en la base y trazabilidad, pero ya no saturan la campana.
+  if(c?.autoGenerated&&c?.notificationType==='TECNICA')return false;
   if(c?.recipientRole==='JEFE')return currentSessionUser.role==='JEFE';
   return currentSessionUser.role==='JEFE'||(currentSessionUser.role==='ANALISTA'&&c.analystId===currentSessionUser.analystId);
 }
@@ -1174,7 +1298,8 @@ async function startMyActivity(planId){
   p.status='EN PROCESO';p.actualStartedAt=p.actualStartedAt||nowISO();p.updatedAt=nowISO();
   await put('planning',p);await queue('UPDATE','planning',p);
   await audit('INICIAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} inició ${p.catalogName} a las ${formatActualStamp(p.actualStartedAt)}`);
-  toast(`Actividad iniciada · ${formatActualStamp(p.actualStartedAt)}`);
+  await createActivityLifecycleAlert(p,'INGRESO');
+  toast(`Actividad iniciada · ${formatActualStamp(p.actualStartedAt)} · jefe notificado`);
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
 }
 
@@ -1285,8 +1410,7 @@ async function saveCalibrationDraft(){
   p.calibrationResult=c.result;p.updatedAt=nowISO();
   await put('planning',p);await queue('UPDATE','planning',p);
   await audit('GUARDAR_CURVA_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó avance de curva de ${p.catalogName}`);
-  await createTechnicalAlert(p,'CURVA',{result:c.result,stage:'PARCIAL'});
-  toast('Lecturas de curva guardadas · jefe notificado');
+  toast('Lecturas guardadas sin finalizar · sin generar notificación');
 }
 
 
@@ -1414,8 +1538,7 @@ async function saveReagentDraft(){
   const rr=collectReagentResult(p,false);if(!rr.ok)return toast(rr.text);
   p.reagentResult=rr.result;p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p);
   await audit('GUARDAR_CONSUMO_REACTIVOS_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó consumos parciales de ${p.catalogName}`);
-  await createTechnicalAlert(p,'REACTIVOS',{result:rr.result,stage:'PARCIAL'});
-  toast('Consumos guardados · jefe notificado');
+  toast('Consumos guardados sin finalizar · sin generar notificación');
 }
 
 
@@ -1439,7 +1562,7 @@ function technicalRequirementMenuHtml(p,req){
   if(req.curve)rows.push(`<div class="tech-req-item ${doneCurve?'done':''}"><span class="tech-req-icon">${doneCurve?'✓':'1'}</span><span><b>Curva de calibración</b><small>${doneCurve?'Datos registrados':'Registrar absorbancia 1, 2 y 3 por cada punto'}</small></span></div>`);
   if(req.reagents)rows.push(`<div class="tech-req-item ${doneReagents?'done':''}"><span class="tech-req-icon">${doneReagents?'✓':'2'}</span><span><b>Reactivos / materiales</b><small>${doneReagents?'Consumos registrados':'Registrar peso final o cantidad utilizada'}</small></span></div>`);
   const button=p.status==='REALIZADO'
-    ?`<button type="button" class="btn secondary tech-req-action" data-edit-technical="${p.id}">Ver / Editar datos técnicos</button>`
+    ?`<button type="button" class="btn secondary tech-req-action" data-edit-technical="${p.id}">Ver datos técnicos</button>`
     :`<button type="button" class="btn secondary tech-req-action" data-open-technical="${p.id}">${allDone?'Revisar datos técnicos':'Registrar datos técnicos'}</button>`;
   return `<div class="tech-req-menu"><div class="tech-req-head"><div><b>Requisitos para finalizar</b><small>${allDone?'Datos técnicos completos':'Complete estos datos antes de finalizar la actividad'}</small></div><span class="tech-req-status ${allDone?'done':''}">${allDone?'COMPLETO':'PENDIENTE'}</span></div><div class="tech-req-items">${rows.join('')}</div>${button}</div>`;
 }
@@ -1474,23 +1597,34 @@ async function hydratePlanTechnicalRequirements(p){
 
 async function openTechnicalData(planId){
   let p=await getOne('planning',planId);if(!p)return;
-  if(!assertOwnPlan(p)&&currentSessionUser?.role!=='JEFE')return toast('No tiene permiso para modificar esta actividad');
+  if(!assertOwnPlan(p)&&currentSessionUser?.role!=='JEFE')return toast('No tiene permiso para consultar esta actividad');
   p=await hydratePlanTechnicalRequirements(p);
   if(!planRequiresCalibration(p)&&!planHasReagents(p))return toast('Esta actividad no tiene datos técnicos configurados');
 
+  const isDone=p.status==='REALIZADO';
   $('#finishActivityPlanId').value=p.id;
-  $('#finishTechnicalEditMode').value=p.status==='REALIZADO'?'1':'2';
-  $('#finishActivitySummary').innerHTML=`<b>${escapeHtml(p.catalogName)}</b><span>${p.status==='REALIZADO'?'Actividad REALIZADA · edición técnica':'Registro técnico previo a finalizar'}</span>`;
+  $('#finishTechnicalEditMode').value=isDone?'3':'2';
+  const title=$('#finishActivityTitle');if(title)title.textContent=isDone?'Actividad finalizada · consulta':'Registro técnico';
+  $('#finishActivitySummary').innerHTML=`<b>${escapeHtml(p.catalogName)}</b><span>${isDone?'Actividad REALIZADA · solo visualización':'Registro técnico previo a finalizar'}</span>`;
   $('#finishSamplesLabel').classList.add('hidden');
   $('#finishActualSamples').required=false;
   $('#finishActualSamples').value=p.actualSamples??'';
   $('#finishActivityComment').value='';
-  $('#finishActivityHelp').textContent=p.status==='REALIZADO'
-    ?'Puede completar o corregir los datos técnicos. El estado REALIZADO y los tiempos originales no cambian.'
-    :'Complete la curva y/o reactivos. Estos datos quedarán guardados y luego podrá finalizar la actividad.';
+  $('#finishActivityHelp').textContent=isDone
+    ?'Consulta en modo solo lectura. Para corregir datos técnicos use “Editar con contraseña”. El estado REALIZADO y los tiempos originales no cambian.'
+    :'Puede guardar avances cuantas veces necesite. Guardar sin finalizar NO genera notificaciones.';
   renderFinishCalibration(p);
   await renderFinishReagents(p);
-  const submit=$('#finishActivityForm button[type="submit"]');if(submit)submit.textContent='Guardar datos técnicos';
+  const submit=$('#finishSubmitBtn'),unlock=$('#btnUnlockTechnicalEdit');
+  if(isDone){
+    setFinishTechnicalReadOnly(true);
+    if(submit)submit.classList.add('hidden');
+    if(unlock)unlock.classList.remove('hidden');
+  }else{
+    setFinishTechnicalReadOnly(false);
+    if(submit){submit.classList.remove('hidden');submit.textContent='Guardar datos técnicos'}
+    if(unlock)unlock.classList.add('hidden');
+  }
   $('#finishActivityDialog').showModal();
 }
 
@@ -1509,7 +1643,10 @@ async function finishMyActivity(planId){
   if(needsSamples||needsCurve||needsReagents){
     $('#finishActivityPlanId').value=p.id;
     $('#finishTechnicalEditMode').value='0';
-    const _finishSubmit=$('#finishActivityForm button[type="submit"]');if(_finishSubmit)_finishSubmit.textContent='Finalizar actividad';
+    const _finishSubmit=$('#finishSubmitBtn');if(_finishSubmit){_finishSubmit.classList.remove('hidden');_finishSubmit.textContent='✓ Confirmar finalización'}
+    $('#btnUnlockTechnicalEdit')?.classList.add('hidden');
+    setFinishTechnicalReadOnly(false);
+    const _finishTitle=$('#finishActivityTitle');if(_finishTitle)_finishTitle.textContent='Finalizar actividad';
     $('#finishActivitySummary').innerHTML=`<b>${escapeHtml(p.catalogName)}</b><span>${escapeHtml(sectionMeta(p.section).label)} · ${p.startTime}–${p.endTime} · ${minutesText(p.durationMinutes)}</span>`;
     $('#finishSamplesLabel').classList.toggle('hidden',!needsSamples);
     $('#finishActualSamples').required=needsSamples;
@@ -1533,10 +1670,9 @@ async function completeActivityRecord(p,actualSamples=null,finalComment='',calib
   }
   const sampleDetail=p.actualSamples!==null&&p.actualSamples!==undefined?` · ${p.actualSamples} muestras analizadas`:'';const curveDetail=p.calibrationResult?.completed?` · curva ${p.calibrationResult.points.length} puntos × ${Number(p.calibrationResult.replicates||p.calibrationConfig?.replicates||3)} · R² ${p.calibrationResult.regression?.r2?.toFixed(6)??'—'}`:'';const reagentDetail=p.reagentResult?.completed?` · ${p.reagentResult.items.length} consumo(s) de reactivos registrados`:'';
   await audit('FINALIZAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} finalizó ${p.catalogName} a las ${formatActualStamp(p.actualFinishedAt)}${sampleDetail}${curveDetail}${reagentDetail}`);
-  if(p.calibrationResult?.completed)await createTechnicalAlert(p,'CURVA',{result:p.calibrationResult,stage:'FINAL'});
-  if(p.reagentResult?.completed)await createTechnicalAlert(p,'REACTIVOS',{result:p.reagentResult,stage:'FINAL'});
-  await createTechnicalAlert(p,'CIERRE_TECNICO',{stage:'FINAL'});
-  toast(`Actividad finalizada${sampleDetail}${(p.calibrationResult?.completed||p.reagentResult?.completed)?' · jefe notificado':''}`);
+  // Un solo aviso automático al cierre. Curva, consumos y posibles bajas se resumen dentro del mismo mensaje.
+  await createActivityLifecycleAlert(p,'FINALIZACION');
+  toast(`Actividad finalizada${sampleDetail} · jefe notificado`);
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();await renderManagementDashboard();
 }
 async function submitFinishActivity(e){
@@ -1561,6 +1697,8 @@ async function submitFinishActivity(e){
   }
   const comment=$('#finishActivityComment').value.trim();
 
+  if(mode==='3')return toast('Actividad finalizada en modo solo lectura');
+
   if(mode==='1'||mode==='2'){
     if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;
     if(reagentResult!==undefined)p.reagentResult=reagentResult;
@@ -1573,12 +1711,10 @@ async function submitFinishActivity(e){
       await put('planComments',rec);await queue('CREATE','planComments',rec);
     }
     await audit(mode==='1'?'EDITAR_DATOS_TECNICOS_POST_CIERRE':'GUARDAR_DATOS_TECNICOS_PREVIOS','MI JORNADA',p.code,`${p.technicalEditedBy} guardó datos técnicos de ${p.catalogName}`);
-    if(calibrationResult!==undefined)await createTechnicalAlert(p,'CURVA',{result:calibrationResult,stage:'FINAL'});
-    if(reagentResult!==undefined)await createTechnicalAlert(p,'REACTIVOS',{result:reagentResult,stage:'FINAL'});
     const _corrected=(p.reagentResult?.items||[]).filter(x=>x.initialWeightCorrected);
     if(_corrected.length)await audit('CORREGIR_PESO_INICIAL_REACTIVO','MI JORNADA',p.code,`${p.technicalEditedBy} corrigió peso inicial de: ${_corrected.map(x=>`${x.name} (${x.initialWeight} g)`).join(', ')}`);
     $('#finishActivityDialog').close();$('#finishTechnicalEditMode').value='0';
-    toast(mode==='1'?'Datos técnicos actualizados':'Datos técnicos guardados · ahora puede finalizar cuando corresponda');
+    toast(mode==='1'?'Datos técnicos actualizados · sin nueva notificación':'Datos técnicos guardados · sin notificar · ahora puede finalizar cuando corresponda');
     await renderMyDay();return;
   }
 
@@ -3135,13 +3271,14 @@ async function refreshPlanner(){
   await renderDailyLoad();
   await renderAgenda();
   await renderExecutivePlanner();
+  await renderMandatoryPlanningAlerts();
 }
 
 async function init(){db=await openDB();
     await purgeDeletedPlanningLocally();
   firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#reassignPlanForm').addEventListener('submit',saveReassignPlan);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogName').addEventListener('input',()=>{if($('#catalogSection').value==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration($('#catalogName').value)&&!$('#catalogId').value){$('#catalogRequiresCalibration').checked=true;updateCalibrationEditor()}});$('#catalogRequiresCalibration').addEventListener('change',updateCalibrationEditor);$('#calibrationUnit').addEventListener('input',validateCalibrationConfig);$('#calibrationReplicates').addEventListener('input',validateCalibrationConfig);if($('#btnAddCalibrationPoint'))$('#btnAddCalibrationPoint').onclick=addCalibrationPoint;if($('#catalogUsesReagents'))$('#catalogUsesReagents').addEventListener('change',updateReagentEditor);if($('#btnAddReagent'))$('#btnAddReagent').onclick=addReagent;$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
 $('#planActivitySearch').addEventListener('input',renderPlanSelectors);
-if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openCatalogFromPlanner;$('#planSamples').addEventListener('input',smartPlannerRecalculate);$('#planStart').addEventListener('input',updatePlanPreview);$('#planDate').addEventListener('change',async()=>{await smartPlannerRecalculate();await renderExecutivePlanner();if($('#bossAIResults')){$('#bossAIResults').classList.add('hidden');$('#bossAIEmpty').classList.remove('hidden')}});$('#agendaStatus').addEventListener('change',renderAgenda);if($('#btnSuggestAnalyst'))$('#btnSuggestAnalyst').onclick=suggestAnalyst;if($('#btnOptimizeDay'))$('#btnOptimizeDay').onclick=analyzeBossDay;if($('#btnSavePlan'))$('#btnSavePlan').onclick=savePlan;$('#planAnalyst').addEventListener('change',autoScheduleSelectedAnalyst);}if($('#myDayDate')){$('#myDayDate').addEventListener('change',renderMyDay);if($('#btnMyDayToday'))$('#btnMyDayToday').onclick=()=>{$('#myDayDate').value=dateToday();renderMyDay()};$('#myDayAnalyst').addEventListener('change',renderMyDay);if($('#btnRestoreBossPlan'))$('#btnRestoreBossPlan').onclick=()=>restoreBossSchedule($('#myDayDate').value,$('#myDayAnalyst').value);}if($('#dailyMonitorDate')){
+if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openCatalogFromPlanner;$('#planSamples').addEventListener('input',smartPlannerRecalculate);$('#planStart').addEventListener('input',updatePlanPreview);$('#planDate').addEventListener('change',async()=>{await smartPlannerRecalculate();await renderExecutivePlanner();await renderMandatoryPlanningAlerts();if($('#bossAIResults')){$('#bossAIResults').classList.add('hidden');$('#bossAIEmpty').classList.remove('hidden')}});$('#agendaStatus').addEventListener('change',renderAgenda);if($('#btnSuggestAnalyst'))$('#btnSuggestAnalyst').onclick=suggestAnalyst;if($('#btnOptimizeDay'))$('#btnOptimizeDay').onclick=analyzeBossDay;if($('#btnSavePlan'))$('#btnSavePlan').onclick=savePlan;$('#planAnalyst').addEventListener('change',autoScheduleSelectedAnalyst);}if($('#myDayDate')){$('#myDayDate').addEventListener('change',renderMyDay);if($('#btnMyDayToday'))$('#btnMyDayToday').onclick=()=>{$('#myDayDate').value=dateToday();renderMyDay()};$('#myDayAnalyst').addEventListener('change',renderMyDay);if($('#btnRestoreBossPlan'))$('#btnRestoreBossPlan').onclick=()=>restoreBossSchedule($('#myDayDate').value,$('#myDayAnalyst').value);}if($('#dailyMonitorDate')){
   $('#dailyMonitorDate').value=dateToday();
   $('#dailyMonitorDate').addEventListener('change',renderDailyMonitor);
   if($('#btnDailyToday'))$('#btnDailyToday').onclick=()=>{$('#dailyMonitorDate').value=dateToday();renderDailyMonitor()};
@@ -3161,7 +3298,7 @@ if($('#mgmtFrom')){
   $('#planningEditForm').addEventListener('submit',savePlanningEdit);
   $('#editPlanStart').addEventListener('input',previewPlanningEdit);
 }
-if($('#finishActivityForm'))$('#finishActivityForm').addEventListener('submit',submitFinishActivity);if($('#btnSaveCalibrationDraft'))$('#btnSaveCalibrationDraft').onclick=saveCalibrationDraft;if($('#btnSaveReagentDraft'))$('#btnSaveReagentDraft').onclick=saveReagentDraft;
+if($('#finishActivityForm'))$('#finishActivityForm').addEventListener('submit',submitFinishActivity);if($('#btnSaveCalibrationDraft'))$('#btnSaveCalibrationDraft').onclick=saveCalibrationDraft;if($('#btnSaveReagentDraft'))$('#btnSaveReagentDraft').onclick=saveReagentDraft;if($('#btnUnlockTechnicalEdit'))$('#btnUnlockTechnicalEdit').onclick=unlockCompletedTechnicalEdit;
 if($('#btnSaveConfig'))$('#btnSaveConfig').onclick=saveConfig;if($('#btnBackup'))$('#btnBackup').onclick=backup;if($('#btnReset'))$('#btnReset').onclick=resetDB;if($('#localSessionSelect'))$('#localSessionSelect').addEventListener('change',changeLocalSession);if($('#btnFirebaseLogin'))$('#btnFirebaseLogin').onclick=openFirebaseLogin;
 if($('#btnFirebaseLogout'))$('#btnFirebaseLogout').onclick=firebaseLogout;if($('#btnNotifications'))$('#btnNotifications').onclick=openCommunications;if($('#commStatusFilter'))$('#commStatusFilter').onchange=renderCommunications;if($('#btnRefreshCommunications'))$('#btnRefreshCommunications').onclick=renderCommunications;
 if($('#firebaseLoginForm')){

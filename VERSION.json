@@ -1,12 +1,12 @@
 {
   "app": "ERP Planificación NextGen",
-  "version": "V1.0.5.6.21",
+  "version": "V1.0.5.6.23",
   "channel": "firebase-integration",
   "database": "ERP_PLANIFICACION_NEXTGEN_CLEAN",
   "databaseVersion": 7,
   "firebaseProject": "inventario-psi",
   "deployment": "GitHub -> Netlify -> PWA",
-  "notes": "Corrección de alertas técnicas: visibles para el Jefe incluso durante pruebas/correcciones, destinatario JEFE y versión visible actualizada.",
+  "notes": "Notificaciones depuradas: guardar avances no notifica; una alerta al iniciar y una sola al finalizar. Actividades finalizadas quedan en solo lectura y la edición técnica requiere clave 2026.",
   "features": [
     "Firebase Authentication",
     "Controlled Initial Migration",
@@ -17,9 +17,12 @@
     "Automatic Last Profile Reuse",
     "Future Analyst Agenda",
     "Smart Communication Alerts",
-    "Technical Data Notifications",
     "Smart Inventory Review Alerts",
-    "Technical Alerts Boss Fix"
+    "Technical Alerts Boss Fix",
+    "Mandatory Reception Coverage Alert",
+    "OT/HT Last-Hour Reservation Alert",
+    "Lifecycle Notifications: Start + Final Only",
+    "Completed Activity Read-only + Password Edit"
   ],
   "architecture": "Firebase Auth UID -> Firestore profile -> Cloud-first bootstrap -> IndexedDB cache -> Live Sync",
   "sync": "Outbox retries + Firestore write verification + realtime snapshot reconciliation of deleted planning + truthful sync state",
