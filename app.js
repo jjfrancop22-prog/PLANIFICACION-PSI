@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.23-NOTIFICACION-LIMPIA-CIERRE-SEGURO';
+const APP_VERSION='V1.0.5.6.24-INVENTARIO-REACTIVOS-DINAMICO';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1414,10 +1414,31 @@ async function saveCalibrationDraft(){
 }
 
 
-function reagentContainerCycleKey(reagent,container){return `${normalizeIdentityText(reagent?.name||'')}|${normalizeIdentityText(reagent?.lot||container?.lot||'')}|${normalizeIdentityText(reagent?.unit||'')}|${container?.id||normalizeIdentityText(container?.label||'ENVASE')}`}
+function reagentContainerCycleKey(reagent,container){return `${normalizeIdentityText(reagent?.name||'')}|${normalizeIdentityText(reagent?.lot||container?.lot||'')}|${normalizeIdentityText(container?.label||'ENVASE')}|${normalizeIdentityText(container?.containerType||'FRASCO')}`}
+function sameReagentContainer(reagent,container,item,env){
+  if(normalizeIdentityText(reagent?.name||'')!==normalizeIdentityText(item?.name||''))return false;
+  const wantedLot=normalizeIdentityText(reagent?.lot||container?.lot||''),usedLot=normalizeIdentityText(item?.lot||env?.lot||'');
+  if(wantedLot!==usedLot)return false;
+  // Primero conservar la identidad exacta si el ID del envase sigue vigente.
+  if(container?.id&&env&&(env.containerId===container.id||env.id===container.id))return true;
+  // Si el catálogo fue regrabado y cambió el ID, recuperar por lote + etiqueta + tipo.
+  return normalizeIdentityText(container?.label||'ENVASE')===normalizeIdentityText(env?.label||'ENVASE') &&
+    normalizeIdentityText(container?.containerType||'FRASCO')===normalizeIdentityText(env?.containerType||'FRASCO');
+}
 async function latestConfirmedContainerRecord(reagent,container,excludePlanId=null){
-  const key=reagentContainerCycleKey(reagent,container),plans=await getAll('planning');let best=null;
-  for(const p of plans){if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;for(const item of p.reagentResult.items){if(item.mode!=='WEIGHT'||!Array.isArray(item.containers))continue;for(const env of item.containers){if(reagentContainerCycleKey({name:item.name,lot:item.lot,unit:item.unit},env)!==key)continue;const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;if(!best||stamp>best.stamp)best={plan:p,item,container:env,stamp}}}}return best;
+  const plans=await visiblePlanningRows();let best=null;
+  for(const p of plans){
+    if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;
+    for(const item of p.reagentResult.items){
+      if(item.mode!=='WEIGHT'||!Array.isArray(item.containers))continue;
+      for(const env of item.containers){
+        if(!sameReagentContainer(reagent,container,item,env))continue;
+        const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
+        if(!best||stamp>best.stamp)best={plan:p,item,container:env,stamp};
+      }
+    }
+  }
+  return best;
 }
 async function resolveContainerCurrentWeight(plan,reagent,container){
   const latest=await latestConfirmedContainerRecord(reagent,container,plan.id);
@@ -1448,7 +1469,12 @@ async function renderFinishReagents(p){
       const envCards=[];
       for(let j=0;j<containers.length;j++){
         const env=containers[j],oldEnv=oldContainers.get(env.id)||{},current=await resolveContainerCurrentWeight(p,r,env);
-        const initial=Number.isFinite(Number(oldEnv.initialWeight))?Number(oldEnv.initialWeight):(current?.weight??null),checked=oldEnv.usedInActivity===true;
+        // En una actividad nueva siempre manda el inventario confirmado más reciente.
+        // Solo se conserva un peso anterior del mismo plan cuando existe un borrador real de esa actividad.
+        const hasOwnDraft=oldEnv.usedInActivity===true||Number.isFinite(Number(oldEnv.finalWeight));
+        const initial=hasOwnDraft&&Number.isFinite(Number(oldEnv.initialWeight))?Number(oldEnv.initialWeight):(current?.weight??null),checked=oldEnv.usedInActivity===true;
+        // Un envase agotado ya no vuelve a ofrecerse en operaciones posteriores.
+        if(current?.depleted&&!hasOwnDraft)continue;
         envCards.push(`<div class="reagent-container-use ${current?.depleted?'depleted':''}">
           <div class="container-use-head"><label class="container-use-check"><input type="checkbox" data-use-container="${r.id}|${env.id}" ${checked?'checked':''}> Usar en esta actividad</label><span class="badge">${escapeHtml(env.containerType||'FRASCO')} · ${escapeHtml(env.label||`Frasco ${j+1}`)} · Lote ${escapeHtml(env.lot||r.lot||'—')}</span></div>
           ${current?.depleted?`<div class="reagent-replacement-alert"><b>Envase agotado</b><span>Ingrese el peso inicial del nuevo ${env.containerType==='SOBRE'?'sobre':'frasco'}.</span></div>`:''}
@@ -1459,14 +1485,19 @@ async function renderFinishReagents(p){
           </div><div class="reagent-used-result" data-env-result="${r.id}|${env.id}">Consumo: <strong>—</strong></div>
         </div>`);
       }
-      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${r.physicalState==='LIQUID'?`LÍQUIDO · densidad ${Number(r.density).toFixed(4)} g/mL`:'SÓLIDO'} · ${containers.length} envase(s)${(lotCounts.get(normalizeIdentityText(r.name||''))||0)>1?' · El analista puede usar este lote o cualquiera de los otros lotes activos del mismo reactivo.':''}</small></div><span class="badge">R${i+1}</span></div><div class="multi-container-list">${envCards.join('')}</div></div>`);
+      if(!envCards.length)continue;
+      parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${r.physicalState==='LIQUID'?`LÍQUIDO · densidad ${Number(r.density).toFixed(4)} g/mL`:'SÓLIDO'} · ${envCards.length} envase(s) disponible(s)${(lotCounts.get(normalizeIdentityText(r.name||''))||0)>1?' · El analista puede usar este lote o cualquiera de los otros lotes activos del mismo reactivo.':''}</small></div><span class="badge">R${i+1}</span></div><div class="multi-container-list">${envCards.join('')}</div></div>`);
     }else{
-      const latest=await latestConfirmedReagentRecord(r,p.id),stock=Number.isFinite(Number(old.stockBefore))?Number(old.stockBefore):(Number.isFinite(Number(latest?.item?.stockRemaining))?Number(latest.item.stockRemaining):Number(r.stockQuantity||0));
+      const latest=await latestConfirmedReagentRecord(r,p.id);
+      const hasOwnDraft=old.usedInActivity===true||Number(old.used)>0;
+      const currentStock=Number.isFinite(Number(latest?.item?.stockRemaining))?Number(latest.item.stockRemaining):Number(r.stockQuantity||0);
+      const stock=hasOwnDraft&&Number.isFinite(Number(old.stockBefore))?Number(old.stockBefore):currentStock;
+      if(stock<=0&&!hasOwnDraft)continue;
       const checked=old.usedInActivity===true||Number(old.used)>0;
       parts.push(`<div class="reagent-capture-card"><div class="reagent-capture-head"><div><b>${escapeHtml(r.name)} · Lote ${escapeHtml(r.lot||'—')}</b><small>${reagentModeLabel(r.mode)} · ${escapeHtml(r.unit||'unidad')}${(lotCounts.get(normalizeIdentityText(r.name||''))||0)>1?' · Lote seleccionable por el analista':''}</small></div><span class="badge">Stock ${stock} ${escapeHtml(r.unit||'unidad')}</span></div><div class="reagent-container-use"><div class="container-use-head"><label class="container-use-check"><input type="checkbox" data-use-countable="${r.id}" ${checked?'checked':''}> Usar en esta actividad</label><span class="badge">Lote ${escapeHtml(r.lot||'—')}</span></div><div class="reagent-inputs"><label>Stock disponible<input readonly data-reag-stock-before="${r.id}" value="${stock}"></label><label>Cantidad utilizada (${escapeHtml(r.unit||'unidad')})<input type="number" step="any" min="0" max="${stock}" data-reag-count="${r.id}" value="${checked?(old.used??''):''}" ${checked?'':'disabled'}></label></div><div class="reagent-used-result" data-reag-result="${r.id}">${checked?`Consumo: <strong>${old.used??'—'} ${escapeHtml(r.unit||'unidad')}</strong>`:'<strong>NO UTILIZADO</strong> en esta actividad.'}</div></div></div>`);
     }
   }
-  $('#finishReagentRows').innerHTML=parts.join('');
+  $('#finishReagentRows').innerHTML=parts.length?parts.join(''):'<div class="inline-alert info"><b>Sin inventario disponible.</b> Los reactivos/envases agotados se retiraron automáticamente de esta actividad.</div>';
   $$('[data-use-container]').forEach(ch=>ch.onchange=()=>{const f=$(`[data-env-final="${ch.dataset.useContainer}"]`);if(f)f.disabled=!ch.checked;updateReagentCalculations(p)});
   $$('[data-use-countable]').forEach(ch=>ch.onchange=()=>{const f=$(`[data-reag-count="${ch.dataset.useCountable}"]`);if(f){f.disabled=!ch.checked;if(!ch.checked)f.value='';}updateReagentCalculations(p)});
   $$('[data-env-new-initial]').forEach(el=>el.oninput=()=>{const x=$(`[data-env-initial="${el.dataset.envNewInitial}"]`);if(x)x.value=el.value;updateReagentCalculations(p)});
@@ -1660,10 +1691,43 @@ async function finishMyActivity(planId){
   }
   await completeActivityRecord(p,null,'');
 }
+async function applyConfirmedReagentInventoryToCatalog(p){
+  if(!p?.reagentResult?.items?.length)return;
+  const catalog=await getOne('catalog',p.catalogId);
+  if(!catalog||!Array.isArray(catalog.reagentConfig))return;
+  let changed=false;
+  const results=new Map(p.reagentResult.items.map(x=>[x.reagentId,x]));
+  catalog.reagentConfig=catalog.reagentConfig.map(r=>{
+    const item=results.get(r.id);if(!item||item.notUsed||item.usedInActivity===false)return r;
+    const next=JSON.parse(JSON.stringify(r));
+    if(next.mode==='COUNT'&&Number.isFinite(Number(item.stockRemaining))){
+      next.stockQuantity=Math.max(0,Number(item.stockRemaining));
+      next.inventoryStatus=next.stockQuantity<=0?'AGOTADO':'ACTIVO';
+      changed=true;
+    }
+    if(next.mode==='WEIGHT'&&Array.isArray(next.containers)&&Array.isArray(item.containers)){
+      next.containers=next.containers.map(env=>{
+        const hit=item.containers.find(x=>(x.containerId||x.id)===env.id)||item.containers.find(x=>normalizeIdentityText(x.label||'')===normalizeIdentityText(env.label||'')&&normalizeIdentityText(x.containerType||'FRASCO')===normalizeIdentityText(env.containerType||'FRASCO'));
+        if(!hit)return env;
+        const final=Number(hit.finalWeight);changed=true;
+        return {...env,initialWeight:Number.isFinite(final)?final:env.initialWeight,status:hit.depleted?'AGOTADO':'ACTIVO'};
+      });
+      const active=next.containers.filter(x=>x.status!=='AGOTADO');
+      next.inventoryStatus=active.length?'ACTIVO':'AGOTADO';
+    }
+    return next;
+  });
+  if(!changed)return;
+  catalog.updatedAt=nowISO();
+  await put('catalog',catalog);await queue('UPDATE','catalog',catalog);
+}
+
 async function completeActivityRecord(p,actualSamples=null,finalComment='',calibrationResult=undefined,reagentResult=undefined){
   p.status='REALIZADO';p.actualFinishedAt=nowISO();p.updatedAt=nowISO();
   if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;if(reagentResult!==undefined)p.reagentResult=reagentResult;
   await put('planning',p);await queue('UPDATE','planning',p);
+  // Confirmar el saldo como inventario vivo: el siguiente uso parte del peso/stock final real.
+  await applyConfirmedReagentInventoryToCatalog(p);
   if(finalComment){
     const comment={id:uid('COM'),planId:p.id,analystId:p.analystId,authorName:p.analystName,text:finalComment,createdAt:nowISO()};
     await put('planComments',comment);await queue('CREATE','planComments',comment);
