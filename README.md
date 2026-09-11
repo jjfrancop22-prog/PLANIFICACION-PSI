@@ -2,7 +2,7 @@
 
 - Exige visualmente al menos un bloque diario de **Recepción de Muestras (5 h)**.
 - Advierte cuando solo queda una opción de 5 h y genera alerta crítica si ya no existe espacio continuo de trabajo suficiente.
-- Para analistas sin Microbiología, Recepción ni AASS, al llegar a **7 h planificadas** recomienda reservar la última hora para **OT/HT**.
+- Para cada analista sin Microbiología, Recepción ni AASS, muestra de inmediato una alerta para programar **“Programación de HT e ingresos de datos de ensayos”**. La alerta se omite cuando una sola actividad ocupa toda la jornada (por ejemplo, Vacaciones 8 h).
 - Si la jornada ya no conserva 1 h disponible, muestra una alerta crítica para reorganizar.
 - Los botones de la alerta preparan la actividad y analista en el Planificador; nunca crean una planificación sin aprobación del jefe.
 

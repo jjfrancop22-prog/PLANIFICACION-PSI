@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.24-INVENTARIO-REACTIVOS-DINAMICO';
+const APP_VERSION='V1.0.5.6.25-COBERTURA-RECEPCION-PROGRAMACION';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -944,10 +944,22 @@ async function renderDailyLoad(){if(!$('#loadCards'))return;const date=$('#planD
 // V1.0.5.6.22 · reglas inteligentes de cobertura mínima de la jornada.
 const CORE_SAMPLE_SECTIONS=new Set(['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS']);
 function normalizePlannerRuleText(v=''){return String(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()}
-function findOtHtCatalog(catalog){
+function findProgrammingCatalog(catalog){
   const active=catalog.filter(x=>x.status==='ACTIVO');
-  return active.find(x=>String(x.code||'').toUpperCase()==='CAT-AL-00075')||
-    active.find(x=>{const t=normalizePlannerRuleText(`${x.name||''} ${x.family||''} ${x.description||''}`);return (t.includes('ORDEN')&&t.includes('TRABAJO'))||(t.includes('APPTELINK')&&t.includes('ERP'))||(t.includes('OT')&&t.includes('HT'));});
+  // Actividad solicitada por Calidad: "Programación de HT e ingresos de datos de ensayos".
+  // Primero se fija por código conocido y luego por texto para conservar compatibilidad
+  // si el catálogo fue migrado o el nombre fue corregido posteriormente.
+  return active.find(x=>String(x.code||'').toUpperCase()==='CAT-AL-00056')||
+    active.find(x=>{
+      const t=normalizePlannerRuleText(`${x.name||''} ${x.family||''} ${x.description||''}`);
+      return t.includes('PROGRAMACION')&&(
+        t.includes('HT')||
+        (t.includes('INGRES')&&t.includes('DATOS')&&t.includes('ENSAY'))
+      );
+    });
+}
+function isFullDaySingleActivity(own,capMinutes){
+  return own.some(p=>Number(p.durationMinutes||0)>=capMinutes);
 }
 function plannerRuleLoad(plans,analystId){return plans.filter(p=>p.analystId===analystId&&p.status!=='CANCELADO').reduce((t,p)=>t+Number(p.durationMinutes||0),0)}
 async function prepareMandatoryPlan(section,catalogId,analystId){
@@ -982,27 +994,39 @@ async function renderMandatoryPlanningAlerts(){
     }
   }
 
-  // REGLA 2: quien no trabaja en Microbiología / Recepción / AASS debe reservar OT/HT al llegar a 7 h de carga.
-  const supportCatalog=findOtHtCatalog(catalog);
+  // REGLA 2: si un analista no tiene Microbiología / Recepción / AASS,
+  // debe quedar visible la actividad de Programación de HT e ingreso de datos.
+  // Excepción: una sola actividad ocupa toda su jornada (p. ej. Vacaciones 8 h),
+  // porque ese día el analista no realizará ensayos ni requiere esta reserva.
+  const programmingCatalog=findProgrammingCatalog(catalog);
   for(const a of active){
     const own=plans.filter(p=>p.analystId===a.id&&p.status!=='CANCELADO');
     if(own.some(p=>CORE_SAMPLE_SECTIONS.has(p.section)))continue;
-    const alreadySupport=own.some(p=>supportCatalog&&p.catalogId===supportCatalog.id)||own.some(p=>{const t=normalizePlannerRuleText(p.catalogName||'');return (t.includes('ORDEN')&&t.includes('TRABAJO'))||(t.includes('APPTELINK')&&t.includes('ERP'))||(t.includes('OT')&&t.includes('HT'));});
-    if(alreadySupport)continue;
-    const cap=Number(a.dailyHours||8)*60,load=plannerRuleLoad(plans,a.id),free=Math.max(0,cap-load);
-    if(load<420)continue;
-    const slot=findBestWorkSlot(plans,a.id,60);
-    if(!supportCatalog){
-      alerts.push({level:'danger',icon:'!',title:`PROGRAMAR OT / HT · ${a.name}`,text:`${a.name} ya tiene ${minutesText(load)} planificadas y no está asignado a Microbiología, Recepción ni AASS. No se encontró en el catálogo la actividad de OT/HT (por ejemplo “Ingreso de Órdenes de trabajo Apptelink y ERP”).`,meta:'Regla de cierre de jornada · 1 h'});
-    }else if(!slot||free<60){
-      alerts.push({level:'danger',icon:'!',title:`SIN ESPACIO PARA OT / HT · ${a.name}`,text:`${a.name} no tiene Microbiología, Recepción ni AASS y la jornada ya quedó sin un bloque libre de 1 h para OT/HT. Debe mover o reducir otra actividad antes de cerrar la planificación.`,meta:`Carga actual ${minutesText(load)} / ${minutesText(cap)}`});
+
+    const cap=Number(a.dailyHours||8)*60;
+    if(isFullDaySingleActivity(own,cap))continue;
+
+    const alreadyProgramming=own.some(p=>programmingCatalog&&p.catalogId===programmingCatalog.id)||own.some(p=>{
+      const t=normalizePlannerRuleText(`${p.catalogName||''} ${p.activityName||''} ${p.name||''}`);
+      return t.includes('PROGRAMACION')&&(t.includes('HT')||(t.includes('INGRES')&&t.includes('DATOS')&&t.includes('ENSAY')));
+    });
+    if(alreadyProgramming)continue;
+
+    const load=plannerRuleLoad(plans,a.id),free=Math.max(0,cap-load);
+    const duration=Math.max(30,Number(programmingCatalog?.baseMinutes||60));
+    const slot=findBestWorkSlot(plans,a.id,duration);
+
+    if(!programmingCatalog){
+      alerts.push({level:'danger',icon:'!',title:`PROGRAMAR HT / INGRESO DE DATOS · ${a.name}`,text:`${a.name} no tiene Microbiología, Recepción de Muestras ni AASS. No se encontró activa en el catálogo la actividad “Programación de HT e ingresos de datos de ensayos” (CAT-AL-00056).`,meta:'Cobertura de analista · actividad requerida'});
+    }else if(!slot||free<duration){
+      alerts.push({level:'danger',icon:'!',title:`SIN ESPACIO PARA PROGRAMACIÓN · ${a.name}`,text:`${a.name} no tiene Microbiología, Recepción de Muestras ni AASS y tampoco tiene programada “${programmingCatalog.name}”. La jornada no conserva un bloque libre de ${minutesText(duration)}; mueva o ajuste otra actividad.`,meta:`Carga actual ${minutesText(load)} / ${minutesText(cap)}`});
     }else{
-      alerts.push({level:'warning',icon:'⌛',title:`PROGRAMAR OT / HT · ${a.name}`,text:`${a.name} ya alcanzó ${minutesText(load)} y no tiene Microbiología, Recepción ni AASS. Reserve ahora 1 h para OT/HT antes de ocupar el último espacio disponible (${minutesToTime(slot.start)}–${minutesToTime(slot.end)}).`,meta:`Quedan ${minutesText(free)} libres`,action:{section:supportCatalog.section,catalogId:supportCatalog.id,analystId:a.id,label:'Preparar OT / HT'}});
+      alerts.push({level:'warning',icon:'⌛',title:`PROGRAMAR HT / INGRESO DE DATOS · ${a.name}`,text:`${a.name} no está asignado a Microbiología, Recepción de Muestras ni AASS. Programe “${programmingCatalog.name}” en el bloque disponible ${minutesToTime(slot.start)}–${minutesToTime(slot.end)}.`,meta:`Cobertura de analista · ${minutesText(duration)}`,action:{section:programmingCatalog.section,catalogId:programmingCatalog.id,analystId:a.id,label:'Programar actividad'}});
     }
   }
 
   if(!alerts.length){
-    host.innerHTML=`<div class="smart-rule-alert good"><div class="smart-rule-icon">✓</div><div class="smart-rule-copy"><small>Control automático</small><b>Cobertura mínima de jornada correcta</b><span>La planificación actual no requiere alertas de Recepción de Muestras ni de reserva OT/HT.</span></div></div>`;
+    host.innerHTML=`<div class="smart-rule-alert good"><div class="smart-rule-icon">✓</div><div class="smart-rule-copy"><small>Control automático</small><b>Cobertura mínima de jornada correcta</b><span>La planificación actual cumple la cobertura de Recepción de Muestras y Programación de HT / ingreso de datos.</span></div></div>`;
     return;
   }
   host.innerHTML=alerts.map((x,i)=>`<div class="smart-rule-alert ${x.level}"><div class="smart-rule-icon">${x.icon}</div><div class="smart-rule-copy"><small>${escapeHtml(x.meta||'Alerta inteligente')}</small><b>${escapeHtml(x.title)}</b><span>${escapeHtml(x.text)}</span></div>${x.action?`<div class="smart-rule-actions"><button type="button" class="btn primary compact" data-smart-rule="${i}">${escapeHtml(x.action.label)}</button></div>`:''}</div>`).join('');

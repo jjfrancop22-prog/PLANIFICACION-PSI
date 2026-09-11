@@ -1,12 +1,12 @@
 {
   "app": "ERP Planificación NextGen",
-  "version": "V1.0.5.6.23",
+  "version": "V1.0.5.6.25",
   "channel": "firebase-integration",
   "database": "ERP_PLANIFICACION_NEXTGEN_CLEAN",
   "databaseVersion": 7,
   "firebaseProject": "inventario-psi",
   "deployment": "GitHub -> Netlify -> PWA",
-  "notes": "Notificaciones depuradas: guardar avances no notifica; una alerta al iniciar y una sola al finalizar. Actividades finalizadas quedan en solo lectura y la edición técnica requiere clave 2026.",
+  "notes": "Cobertura inteligente de jornada: mantiene Recepción de Muestras obligatoria y reemplaza la antigua reserva OT/HT por una alerta inmediata de Programación de HT e ingresos de datos de ensayos para cada analista sin Microbiología, Recepción ni AASS; exime jornadas cubiertas por una sola actividad de jornada completa (p. ej. Vacaciones 8 h).",
   "features": [
     "Firebase Authentication",
     "Controlled Initial Migration",
@@ -20,9 +20,10 @@
     "Smart Inventory Review Alerts",
     "Technical Alerts Boss Fix",
     "Mandatory Reception Coverage Alert",
-    "OT/HT Last-Hour Reservation Alert",
+    "Mandatory Analyst Programming Coverage Alert",
     "Lifecycle Notifications: Start + Final Only",
-    "Completed Activity Read-only + Password Edit"
+    "Completed Activity Read-only + Password Edit",
+    "Dynamic Reagent Inventory"
   ],
   "architecture": "Firebase Auth UID -> Firestore profile -> Cloud-first bootstrap -> IndexedDB cache -> Live Sync",
   "sync": "Outbox retries + Firestore write verification + realtime snapshot reconciliation of deleted planning + truthful sync state",
