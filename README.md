@@ -46,3 +46,12 @@
 - Los avisos técnicos automáticos heredados se conservan en la base para trazabilidad, pero dejan de mostrarse en la campana para evitar saturación.
 - Una actividad **REALIZADA** abre sus datos técnicos en **solo lectura**. Para corregirlos se requiere **Editar con contraseña** y clave `2026`.
 - La edición posterior no reabre la actividad, no cambia tiempos originales y no genera una nueva notificación automática.
+
+
+## V1.0.5.6.26 · Comunicaciones inteligentes
+- Centro de Comunicaciones separado por Apertura/Cierre, Datos técnicos y Conversaciones.
+- La finalización de actividad ya no mezcla consumos/curvas en el aviso de cierre.
+- Se genera un aviso técnico independiente y agrupado al confirmar finalización.
+- Reactivos por peso muestran consumo y peso final de cada envase; contables muestran saldo final.
+- Guardar sin finalizar continúa sin generar notificación.
+- Con la aplicación abierta, una notificación entrante aparece como tarjeta emergente tipo mensajería.
