@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.26-COMUNICACIONES-INTELIGENTES';
+const APP_VERSION='V1.0.5.6.27-MI-JORNADA-ESTABLE-CHROME';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1231,7 +1231,7 @@ async function refreshNotificationBadge(){
   if(!$('#notificationBadge'))return;
   const key=communicationUserKey();if(!key){$('#notificationBadge').classList.add('hidden');return}
   const threads=await communicationThreads();let n=0;
-  threads.forEach(t=>t.items.forEach(c=>{if(communicationUnread(c,key))n++}));
+  threads.forEach(t=>{const visible=t.items.filter(c=>c.notificationType!=='SISTEMA');if(visible.some(c=>communicationUnread(c,key))||(!t.closed&&communicationPriority({...t,items:visible}).rank>=4))n++});
   $('#notificationBadge').textContent=String(n);$('#notificationBadge').classList.toggle('hidden',n===0);$('#btnNotifications')?.classList.toggle('has-unread',n>0);
 }
 async function syncCommentReadReceipt(commentId,keys){
@@ -1288,19 +1288,50 @@ async function markThreadRead(planId){
   }
   return changed;
 }
+let selectedCommunicationPlanId='';
+function communicationPriority(t){
+  const visible=t.items.filter(c=>c.notificationType!=='SISTEMA');
+  const last=visible[visible.length-1]||t.last||{};
+  const unread=visible.some(c=>communicationUnread(c));
+  const action=visible.some(c=>c.actionRequired&&c.actionRequired!=='CONOCIMIENTO');
+  const technical=visible.some(c=>communicationCategory(c)==='TECNICA');
+  if(!t.closed&&(action||String(last.priority||'').toUpperCase()==='ALTA'))return {rank:4,label:'REQUIERE ACCIÓN',icon:'🔴',cls:'critical'};
+  if(!t.closed&&unread)return {rank:3,label:'NUEVO',icon:'🟠',cls:'new'};
+  if(!t.closed)return {rank:2,label:technical?'REVISAR DATOS':'EN SEGUIMIENTO',icon:'🔵',cls:'follow'};
+  return {rank:1,label:'COMPLETADO',icon:'🟢',cls:'done'};
+}
+function communicationTechnicalSummary(text=''){
+  const clean=String(text).replace(/^🧪\s*DATOS TÉCNICOS CONFIRMADOS\s*·?\s*/i,'');
+  const picks=[];
+  for(const rx of [/R²\s*[-:=]?\s*[\d.,]+/i,/\d+\s*punto\(s\)\s*x\s*\d+\s*réplica\(s\)/i,/PESO\s*\/\s*SALDO\s*FINAL[^|]*/i,/VOLUMEN\s*FINAL[^|]*/i,/INVENTARIO:[^|]*/i]){const m=clean.match(rx);if(m&&!picks.includes(m[0]))picks.push(m[0].trim())}
+  return picks.slice(0,3).join(' · ')||clean.slice(0,145)+(clean.length>145?'…':'');
+}
+function communicationCounts(t,key){
+  const items=t.items.filter(c=>c.notificationType!=='SISTEMA');
+  return {events:items.length,messages:items.filter(c=>communicationCategory(c)==='CONVERSACION').length,technical:items.filter(c=>communicationCategory(c)==='TECNICA').length,unread:items.filter(c=>communicationUnread(c,key)).length};
+}
 async function renderCommunications(){
   if(!$('#communicationsList'))return;
-  const filter=$('#commStatusFilter')?.value||'OPEN', typeFilter=$('#commTypeFilter')?.value||'ALL', key=communicationUserKey();let ts=await communicationThreads();
-  const allThreads=[...ts], unreadCount=allThreads.reduce((n,t)=>n+t.items.filter(c=>communicationUnread(c,key)).length,0), openCount=allThreads.filter(t=>!t.closed).length, closedCount=allThreads.filter(t=>t.closed).length;
-  if($('#commSummary'))$('#commSummary').innerHTML=`<button type="button" data-comm-filter="UNREAD" class="comm-kpi ${unreadCount?'hot':''}"><b>${unreadCount}</b><span>Nuevos</span></button><button type="button" data-comm-filter="OPEN" class="comm-kpi"><b>${openCount}</b><span>Pendientes</span></button><button type="button" data-comm-filter="CLOSED" class="comm-kpi"><b>${closedCount}</b><span>Atendidos</span></button>`;
-  if(filter==='UNREAD')ts=ts.filter(t=>t.items.some(c=>communicationUnread(c,key)));
-  if(filter==='OPEN')ts=ts.filter(t=>!t.closed);if(filter==='CLOSED')ts=ts.filter(t=>t.closed);
-  ts=ts.map(t=>({...t,displayItems:typeFilter==='ALL'?t.items:t.items.filter(c=>communicationCategory(c)===typeFilter)})).filter(t=>t.displayItems.length);
-  if(!ts.length){$('#communicationsList').innerHTML=`<div class="comm-empty"><span>🔔</span><b>${filter==='UNREAD'?'No hay mensajes nuevos':'Sin notificaciones en esta categoría'}</b><small>Las aperturas/cierres, los datos técnicos y las conversaciones se organizan por separado para evitar saturación.</small></div>`;$$('[data-comm-filter]').forEach(b=>b.onclick=()=>{$('#commStatusFilter').value=b.dataset.commFilter;renderCommunications()});return}
-  $('#communicationsList').innerHTML=ts.map(t=>{const p=t.p||{}, analyst=p.analystName||t.items[0]?.analystName||'Analista', unread=t.displayItems.filter(c=>communicationUnread(c,key)).length;return `<article class="comm-thread ${t.closed?'closed':''} ${unread?'unread':''}"><div class="comm-head"><div><div class="comm-title-line"><b>${escapeHtml(p.catalogName||'Actividad')}</b>${unread?`<span class="comm-unread-pill">${unread} nuevo${unread>1?'s':''}</span>`:''}</div><small>${escapeHtml(analyst)} · ${escapeHtml(p.date||'')} ${p.startTime?`· ${p.startTime}`:''}</small></div><span class="comm-state">${t.closed?'ATENDIDO':'PENDIENTE'}</span></div><div class="comm-messages">${t.displayItems.map(c=>{const meta=communicationCategoryMeta(c);return `<div class="comm-message ${c.authorType==='JEFE'?'boss':'analyst'} ${communicationUnread(c,key)?'new':''} comm-${meta.className}"><div class="comm-message-meta"><span class="comm-type-pill ${meta.className}">${meta.icon} ${escapeHtml(meta.label)}</span><small>${fmtDate(c.createdAt)}</small></div><div class="comm-message-body"><b>${escapeHtml(c.authorName||c.author||'Usuario')}</b><div>${escapeHtml(c.text)}</div></div></div>`}).join('')}</div><div class="comm-reply"><input data-comm-reply="${t.planId}" placeholder="Escribir respuesta..."/><button class="btn primary compact" data-comm-send="${t.planId}">Responder</button>${currentSessionUser.role==='JEFE'?`<button class="btn secondary compact" data-comm-close="${t.planId}">${t.closed?'Reabrir':'✓ Marcar atendido'}</button>`:''}</div></article>`}).join('');
-  $$('[data-comm-send]').forEach(b=>b.onclick=()=>replyCommunication(b.dataset.commSend));$$('[data-comm-close]').forEach(b=>b.onclick=()=>toggleCommunicationClosed(b.dataset.commClose));$$('[data-comm-filter]').forEach(b=>b.onclick=()=>{$('#commStatusFilter').value=b.dataset.commFilter;renderCommunications()});
-  for(const t of ts)await markThreadRead(t.planId);
-  await refreshNotificationBadge();
+  const filter=$('#commStatusFilter')?.value||'OPEN', typeFilter=$('#commTypeFilter')?.value||'ALL', key=communicationUserKey();
+  let all=(await communicationThreads()).map(t=>({...t,items:t.items.filter(c=>c.notificationType!=='SISTEMA')})).filter(t=>t.items.length);
+  all.forEach(t=>t.priority=communicationPriority(t));
+  all.sort((a,b)=>b.priority.rank-a.priority.rank||(b.last?.createdAt||'').localeCompare(a.last?.createdAt||''));
+  const needs=all.filter(t=>!t.closed&&t.priority.rank>=3).length, open=all.filter(t=>!t.closed).length, technical=all.filter(t=>!t.closed&&t.items.some(c=>communicationCategory(c)==='TECNICA')).length, closed=all.filter(t=>t.closed).length;
+  if($('#commSummary'))$('#commSummary').innerHTML=`<button type="button" data-comm-filter="UNREAD" class="comm-kpi ${needs?'hot':''}"><b>${needs}</b><span>Requieren atención</span></button><button type="button" data-comm-filter="OPEN" class="comm-kpi"><b>${open}</b><span>En seguimiento</span></button><button type="button" data-comm-type="TECNICA" class="comm-kpi"><b>${technical}</b><span>Datos técnicos</span></button><button type="button" data-comm-filter="CLOSED" class="comm-kpi"><b>${closed}</b><span>Completados</span></button>`;
+  let ts=all;
+  if(filter==='UNREAD')ts=ts.filter(t=>!t.closed&&(t.priority.rank>=3||t.items.some(c=>communicationUnread(c,key))));
+  if(filter==='OPEN')ts=ts.filter(t=>!t.closed); if(filter==='CLOSED')ts=ts.filter(t=>t.closed);
+  if(typeFilter!=='ALL')ts=ts.filter(t=>t.items.some(c=>communicationCategory(c)===typeFilter));
+  if(!selectedCommunicationPlanId||!ts.some(t=>t.planId===selectedCommunicationPlanId))selectedCommunicationPlanId=ts[0]?.planId||'';
+  const selected=ts.find(t=>t.planId===selectedCommunicationPlanId);
+  const cards=ts.map(t=>{const p=t.p||{},c=communicationCounts(t,key),pr=t.priority,last=t.items[t.items.length-1],meta=communicationCategoryMeta(last);return `<button type="button" class="comm-inbox-card ${t.planId===selectedCommunicationPlanId?'selected':''} ${c.unread?'unread':''}" data-comm-select="${t.planId}"><span class="comm-priority ${pr.cls}">${pr.icon} ${pr.label}</span><b>${escapeHtml(p.catalogName||'Actividad')}</b><small>${escapeHtml(p.analystName||t.items[0]?.analystName||'Analista')} · ${escapeHtml(p.date||'')}</small><span class="comm-preview">${meta.icon} ${escapeHtml(communicationCategory(last)==='TECNICA'?communicationTechnicalSummary(last.text):String(last.text||'').slice(0,110))}</span><span class="comm-card-counts"><em>${c.events} eventos</em>${c.messages?`<em>💬 ${c.messages}</em>`:''}${c.technical?`<em>🧪 ${c.technical}</em>`:''}${c.unread?`<strong>${c.unread} nuevo${c.unread>1?'s':''}</strong>`:''}</span></button>`}).join('');
+  let detail=`<div class="comm-empty"><span>🔔</span><b>Sin asuntos en este filtro</b><small>Pruebe otra categoría o revise los asuntos completados.</small></div>`;
+  if(selected){const p=selected.p||{},c=communicationCounts(selected,key),pr=selected.priority;const timeline=selected.items.map((x,i)=>{const m=communicationCategoryMeta(x),tech=communicationCategory(x)==='TECNICA';return `<div class="comm-timeline-item ${m.className} ${communicationUnread(x,key)?'new':''}"><span class="comm-timeline-dot">${m.icon}</span><div><div class="comm-message-meta"><span class="comm-type-pill ${m.className}">${escapeHtml(m.label)}</span><small>${fmtDate(x.createdAt)}</small></div><b>${escapeHtml(x.authorName||x.author||'Sistema')}</b>${tech?`<div class="comm-tech-summary">${escapeHtml(communicationTechnicalSummary(x.text))}</div><details><summary>Ver datos técnicos completos</summary><div class="comm-full-text">${escapeHtml(x.text)}</div></details>`:`<div class="comm-full-text">${escapeHtml(x.text)}</div>`}</div></div>`}).join('');detail=`<section class="comm-detail"><header><div><span class="comm-priority ${pr.cls}">${pr.icon} ${pr.label}</span><h3>${escapeHtml(p.catalogName||'Actividad')}</h3><p>${escapeHtml(p.analystName||selected.items[0]?.analystName||'Analista')} · ${escapeHtml(p.date||'')} ${p.startTime?`· ${p.startTime}`:''}</p></div><div class="comm-detail-stats"><span>${c.events}<small>eventos</small></span><span>${c.messages}<small>mensajes</small></span><span>${c.technical}<small>técnicos</small></span></div></header><div class="comm-timeline">${timeline}</div><footer class="comm-reply"><input data-comm-reply="${selected.planId}" placeholder="Escribir comentario o respuesta..."/><button class="btn primary compact" data-comm-send="${selected.planId}">Responder</button>${currentSessionUser.role==='JEFE'?`<button class="btn secondary compact" data-comm-close="${selected.planId}">${selected.closed?'Reabrir':'✓ Marcar atendido'}</button>`:''}</footer></section>`;}
+  $('#communicationsList').innerHTML=`<div class="comm-pro-layout"><aside class="comm-inbox">${cards||'<div class="comm-inbox-empty">Sin asuntos</div>'}</aside><main class="comm-detail-wrap">${detail}</main></div>`;
+  $$('[data-comm-select]').forEach(b=>b.onclick=async()=>{selectedCommunicationPlanId=b.dataset.commSelect;await markThreadRead(selectedCommunicationPlanId);await renderCommunications()});
+  $$('[data-comm-send]').forEach(b=>b.onclick=()=>replyCommunication(b.dataset.commSend)); $$('[data-comm-close]').forEach(b=>b.onclick=()=>toggleCommunicationClosed(b.dataset.commClose));
+  $$('[data-comm-filter]').forEach(b=>b.onclick=()=>{$('#commStatusFilter').value=b.dataset.commFilter;renderCommunications()}); $$('[data-comm-type]').forEach(b=>b.onclick=()=>{$('#commTypeFilter').value=b.dataset.commType;renderCommunications()});
+  if(selected)await markThreadRead(selected.planId); await refreshNotificationBadge();
 }
 async function openCommunications(){await renderCommunications();$('#notificationsDialog').showModal()}
 async function replyCommunication(planId){
@@ -1309,7 +1340,7 @@ async function replyCommunication(planId){
   await put('planComments',rec);await queue('CREATE','planComments',rec);await audit('RESPONDER','COMUNICACIONES',p.code,`${name}: ${text}`);input.value='';await renderCommunications();await renderMyDay();await refreshNotificationBadge();toast('Respuesta enviada');
 }
 async function toggleCommunicationClosed(planId){
-  const ts=await communicationThreads(),t=ts.find(x=>x.planId===planId);if(!t)return;const p=t.p||await getOne('planning',planId);const rec={id:uid('COM'),planId,analystId:p?.analystId,analystName:p?.analystName,authorType:'JEFE',authorName:currentSessionUser.name||'Administración',text:t.closed?'Conversación reabierta.':'✓ Novedad marcada como atendida.',createdAt:nowISO(),threadStatus:t.closed?'OPEN':'CLOSED',readBy:[communicationUserKey()]};await put('planComments',rec);await queue('CREATE','planComments',rec);await renderCommunications();await refreshNotificationBadge();
+  const ts=await communicationThreads(),t=ts.find(x=>x.planId===planId);if(!t)return;const p=t.p||await getOne('planning',planId);const closing=!t.closed;const rec={id:uid('COM'),planId,analystId:p?.analystId,analystName:p?.analystName,authorType:'JEFE',authorName:currentSessionUser.name||'Administración',text:closing?'Asunto marcado como atendido.':'Asunto reabierto.',createdAt:nowISO(),threadStatus:closing?'CLOSED':'OPEN',readBy:[communicationUserKey()],notificationType:'SISTEMA',recipientRole:'JEFE',autoGenerated:true};await put('planComments',rec);await queue('CREATE','planComments',rec);await audit(closing?'ATENDER':'REABRIR','COMUNICACIONES',p?.code||planId,rec.text);await renderCommunications();await refreshNotificationBadge();
 }
 
 async function changeAnalystPlanStatus(planId,status){
@@ -1946,6 +1977,18 @@ async function renderUpcomingAgenda(analystId,selectedDate){
 
 async function renderMyDay(){
   if(!$('#myDayCards'))return;
+  // Preserva el estado visual de Mi Jornada durante sincronizaciones/re-renderizados.
+  // En Chrome un snapshot de Firebase podía reconstruir el DOM mientras el analista
+  // hacía scroll, abría el desglose o escribía un comentario, cerrando <details>,
+  // perdiendo el foco y provocando un salto de pantalla.
+  const _myDayUi={scrollX:window.scrollX,scrollY:window.scrollY,open:new Set(),focusKey:'',focusValue:'',selectionStart:null,selectionEnd:null};
+  $$('#myDayCards details[data-ui-key]').forEach(d=>{if(d.open)_myDayUi.open.add(d.dataset.uiKey)});
+  const _activeEl=document.activeElement;
+  if(_activeEl?.matches?.('[data-comment-input]')){
+    _myDayUi.focusKey=_activeEl.dataset.commentInput||'';
+    _myDayUi.focusValue=_activeEl.value||'';
+    _myDayUi.selectionStart=_activeEl.selectionStart;_myDayUi.selectionEnd=_activeEl.selectionEnd;
+  }
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
   const plans=(await visiblePlanningRows()).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
   $('#myDayEmpty').classList.toggle('hidden',plans.length>0);
@@ -2011,10 +2054,10 @@ async function renderMyDay(){
         </div>
         
         ${p.notes?`<div class="boss-note"><b>⚑ Instrucción del jefe</b><span>${escapeHtml(p.notes)}</span></div>`:''}
-        ${ss.length?`<details class="myday-breakdown compact-breakdown"><summary>Ver desglose · ${ss.length} subactividades</summary><div>${ss.map(x=>`<span>• ${escapeHtml(x.name)} · ${minutesText(x.minutes)}</span>`).join('')}</div></details>`:''}
+        ${ss.length?`<details class="myday-breakdown compact-breakdown" data-ui-key="breakdown-${p.id}"><summary>Ver desglose · ${ss.length} subactividades</summary><div>${ss.map(x=>`<span>• ${escapeHtml(x.name)} · ${minutesText(x.minutes)}</span>`).join('')}</div></details>`:''}
         ${technicalRequirementMenuHtml(p,_req)}
         <div class="myday-actions-row">${action}</div>${actual}
-        <details class="comment-thread compact-comments" ${comments.length?'open':''}>
+        <details class="comment-thread compact-comments" data-ui-key="comments-${p.id}" ${comments.length?'open':''}>
           <summary>💬 Comentarios / novedades (${comments.length})</summary>
           <div class="comment-body">
             ${comments.length?comments.map(c=>`<div class="comment-item"><b>${escapeHtml(c.authorName)}</b><small>${fmtDate(c.createdAt)}</small><div>${escapeHtml(c.text)}</div></div>`).join(''):'<div class="myday-meta">Sin comentarios todavía.</div>'}
@@ -2024,6 +2067,16 @@ async function renderMyDay(){
       </div>
     </article>`;
   }).join('');
+  // Restaura exactamente lo que el usuario tenía abierto antes del refresco.
+  // Los comentarios con historial siguen abiertos por defecto solo en la primera carga.
+  if(_myDayUi.open.size){
+    $$('#myDayCards details[data-ui-key]').forEach(d=>{d.open=_myDayUi.open.has(d.dataset.uiKey)});
+  }
+  if(_myDayUi.focusKey){
+    const _input=document.querySelector(`[data-comment-input="${CSS.escape(_myDayUi.focusKey)}"]`);
+    if(_input){_input.value=_myDayUi.focusValue;_input.focus({preventScroll:true});try{_input.setSelectionRange(_myDayUi.selectionStart,_myDayUi.selectionEnd)}catch(_){}}
+  }
+  window.scrollTo({left:_myDayUi.scrollX,top:_myDayUi.scrollY,behavior:'instant'});
   $$('[data-start-activity]').forEach(el=>el.onclick=()=>startMyActivity(el.dataset.startActivity));
   $$('[data-finish-activity]').forEach(el=>el.onclick=()=>finishMyActivity(el.dataset.finishActivity));$$('[data-open-technical]').forEach(b=>b.onclick=()=>openTechnicalData(b.dataset.openTechnical));$$('[data-edit-technical]').forEach(b=>b.onclick=()=>editCompletedTechnicalData(b.dataset.editTechnical));
   $$('[data-move-up]').forEach(el=>el.onclick=()=>moveMyActivity(el.dataset.moveUp,-1));

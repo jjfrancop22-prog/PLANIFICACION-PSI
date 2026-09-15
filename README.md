@@ -55,3 +55,7 @@
 - Reactivos por peso muestran consumo y peso final de cada envase; contables muestran saldo final.
 - Guardar sin finalizar continúa sin generar notificación.
 - Con la aplicación abierta, una notificación entrante aparece como tarjeta emergente tipo mensajería.
+
+
+## V1.0.5.6.28
+Centro de Comunicaciones PRO integrado sobre la base V1.0.5.6.27 MI JORNADA ESTABLE CHROME. Conserva la corrección de scroll/foco/desglose/comentarios y añade bandeja inteligente agrupada por actividad.
