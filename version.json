@@ -1,4 +1,8 @@
 {
-  "version": "V1.0.5.6.28",
-  "build": "COMUNICACIONES-PRO-CHROME"
+  "version": "V1.0.5.6.29",
+  "build": "COMUNICACIONES-PRO-CHROME",
+  "notes": "Corrige falsos estados ERROR de sincronización en Chrome/PWA: tras un error transitorio del cliente, verifica el estado real en Firestore y autocierra la Outbox si el cambio ya fue aplicado. Conserva Comunicaciones PRO y Mi Jornada Chrome estable.",
+  "features": [
+    "Sync auto-verification: prevents false ERROR when Firestore already applied the change"
+  ]
 }

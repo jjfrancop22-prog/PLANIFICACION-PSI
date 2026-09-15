@@ -409,13 +409,46 @@ async function flushOutbox(showToast=true){
         await put('outbox',item);
         sent++;
       }catch(err){
-        item.status='ERROR';
+        // Algunos Chrome/PWA pueden perder la respuesta de confirmación aunque
+        // Firestore sí haya aplicado la escritura. Antes de pintar ERROR, leer
+        // el documento y comprobar el resultado real para evitar falsos rojos.
+        let confirmedDespiteClientError=false;
+        try{
+          const payload=sanitizeCloudObject(item.payload||{});
+          const id=payload.id||item.recordId||item.id;
+          const ref=doc(firebaseBridge.db,item.entity,id);
+          const check=await getDoc(ref);
+          if(item.type==='DELETE'){
+            confirmedDespiteClientError=!check.exists();
+          }else if(check.exists()){
+            const cloud=check.data()||{};
+            const ignored=new Set(['_cloudUpdatedAt','readBy']);
+            const keys=Object.keys(payload).filter(k=>!ignored.has(k));
+            confirmedDespiteClientError=keys.every(k=>{
+              const a=payload[k],b=cloud[k];
+              if(a&&typeof a==='object')return JSON.stringify(a)===JSON.stringify(b);
+              return String(a??'')===String(b??'');
+            });
+          }
+        }catch(verifyErr){
+          console.warn('No se pudo verificar el cambio tras error del cliente',verifyErr);
+        }
         item.attempts=Number(item.attempts||0)+1;
-        item.lastError=String(err?.message||err);
-        await put('outbox',item);
-        failed++;
-        // No abortar el lote completo: continuar con otros registros.
-        console.error('Outbox item falló',item.entity,item.recordId||item.payload?.id,err);
+        if(confirmedDespiteClientError){
+          item.status='SINCRONIZADO';
+          item.syncedAt=nowISO();
+          item.lastError=null;
+          await put('outbox',item);
+          sent++;
+          console.info('Outbox confirmado por lectura cloud tras error transitorio',item.entity,item.recordId||item.payload?.id);
+        }else{
+          item.status='ERROR';
+          item.lastError=String(err?.message||err);
+          await put('outbox',item);
+          failed++;
+          // No abortar el lote completo: continuar con otros registros.
+          console.error('Outbox item falló',item.entity,item.recordId||item.payload?.id,err);
+        }
       }
     }
 
