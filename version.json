@@ -1,9 +1,9 @@
 {
-  "version": "V1.0.5.6.43-CARTAS-RECEPCION-IA-PRO",
+  "version": "V1.0.5.6.44-CARTAS-RECEPCION-IA-PRO",
   "build": "COMUNICACIONES-PRO-CHROME",
   "notes": "Corrige caché PWA heredada y estado visual SINCRONIZANDO pegado; mantiene Carta DBO5 Westgard IA, factores por rango e inventario vivo.",
   "features": [
-    "PWA cache V1.0.5.6.43 + watchdog visual de sincronización de 12 s",
+    "PWA cache V1.0.5.6.44 + watchdog visual de sincronización de 12 s",
     "Sync auto-verification: prevents false ERROR when Firestore already applied the change",
     "Global live inventory by reagent + lot; depleted lots hidden automatically",
     "DBO5: factores de corrección automáticos por rango (T° y HR) con trazabilidad"
