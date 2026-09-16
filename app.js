@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.40-CARTAS-RECEPCION-IA-PRO';
+const APP_VERSION='V1.0.5.6.41-CARTAS-RECEPCION-IA-PRO';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=8;
 const SECTIONS=[
@@ -56,6 +56,9 @@ function timeToMinutes(t){if(!t||!t.includes(':'))return 0;const [h,m]=t.split('
 function minutesToTime(m){m=((Number(m)||0)%1440+1440)%1440;return `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`}
 
 const FIREBASE_SYNC_STORES=['catalog','timeRules','compositeSteps','analysts','planning','planComments','controlChartEntries','controlChartConfig'];
+const OUTBOX_MAX_AUTO_RETRIES=3;
+function friendlySyncError(err){const raw=String(err?.code||err?.message||err||'Error desconocido');if(/permission-denied|Missing or insufficient permissions/i.test(raw))return 'PERMISOS FIRESTORE: las reglas publicadas no permiten esta operación';if(/unauthenticated/i.test(raw))return 'SESIÓN: vuelva a iniciar sesión';if(/unavailable|network|offline/i.test(raw))return 'CONEXIÓN: Firestore no está disponible temporalmente';return raw;}
+function isPermanentSyncError(err){return /permission-denied|Missing or insufficient permissions|invalid-argument|failed-precondition/i.test(String(err?.code||err?.message||err||''));}
 const firebaseBridge={
   configured:false,ready:false,busy:false,db:null,mods:null,unsubs:[],lastError:null,lastSyncAt:null,
   app:null,auth:null,authMods:null,authReady:false,authUser:null,authUnsub:null,flushTimer:null,flushRequested:false
@@ -467,7 +470,10 @@ async function flushOutbox(showToast=true){
           console.info('Outbox confirmado por lectura cloud tras error transitorio',item.entity,item.recordId||item.payload?.id);
         }else{
           item.status='ERROR';
-          item.lastError=String(err?.message||err);
+          item.lastError=friendlySyncError(err);
+          item.errorCode=String(err?.code||'');
+          item.lastAttemptAt=nowISO();
+          item.permanentError=isPermanentSyncError(err);
           await put('outbox',item);
           failed++;
           // No abortar el lote completo: continuar con otros registros.
@@ -480,8 +486,9 @@ async function flushOutbox(showToast=true){
     if(open.length){
       firebaseBridge.lastError=open[0]?.lastError||`${open.length} cambio(s) pendientes`;
       setSyncStateVisualOnly(failed?'ERROR':'PENDIENTE',`${open.length} cambio(s) sin confirmar`);
-      firebaseBridge.flushRequested=true;
-      scheduleOutboxFlush(2500);
+      const retryable=open.some(x=>x.status==='PENDIENTE'||(!x.permanentError&&Number(x.attempts||0)<OUTBOX_MAX_AUTO_RETRIES));
+      firebaseBridge.flushRequested=retryable;
+      if(retryable)scheduleOutboxFlush(5000);
       if(showToast)toast(`${open.length} cambio(s) siguen pendientes`);
       return false;
     }

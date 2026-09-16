@@ -1,5 +1,5 @@
 {
-  "version": "V1.0.5.6.40-CARTAS-RECEPCION-IA-PRO",
+  "version": "V1.0.5.6.41-CARTAS-RECEPCION-IA-PRO",
   "build": "COMUNICACIONES-PRO-CHROME",
   "notes": "Corrige caché PWA heredada y estado visual SINCRONIZANDO pegado; mantiene Carta DBO5 Westgard IA, factores por rango e inventario vivo.",
   "features": [
