@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f4c81" />
   <title>ERP Planificación NextGen</title>
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="stylesheet" href="styles.css?v=6.33.25.10.4" />
+  <link rel="stylesheet" href="styles.css?v=6.33.25.10.5" />
 </head>
 <body>
 <div class="app-shell">
@@ -25,7 +25,7 @@
       <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
       <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
     </nav>
-    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.4-NOTIFICACIONES-SISTEMA · Firebase Auth</small></div>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.5-CARGA-HISTORICA-UNIVERSAL · Firebase Auth</small></div>
   </aside>
 
   <main class="main">
@@ -179,7 +179,7 @@
     <section id="view-cartas-control" class="view">
       <div class="card cc-hero">
         <div class="section-head"><div><span class="eyebrow">CALIDAD · FIREBASE MULTI-PC</span><h3>📈 Gestión de Cartas de Control</h3><p>Seguimiento técnico mensual, tendencias, límites ambientales y vigilancia estadística explicable.</p></div><button class="btn secondary" id="btnRefreshControlCharts" type="button">↻ Actualizar</button></div>
-        <div class="cc-filters"><label>Carta<select id="ccChartSelect"></select></label><label>Mes<input id="ccMonth" type="month"></label><button class="btn secondary" id="btnCcCurrentMonth" type="button">Mes actual</button></div>
+        <div class="cc-filters"><label>Carta<select id="ccChartSelect"></select></label><label>Mes<input id="ccMonth" type="month"></label><button class="btn secondary" id="btnCcCurrentMonth" type="button">Mes actual</button><button class="btn primary hidden" id="btnCcHistorical" type="button">＋ Cargar histórico</button></div>
       </div>
       <div id="ccEmpty" class="card empty hidden"><div class="empty-icon">📈</div><h4>Sin registros para este período</h4><p>Los controles registrados por los analistas aparecerán aquí desde Firebase.</p></div>
       <div id="ccDashboard">
@@ -195,6 +195,8 @@
         <section class="card"><div class="section-head"><div><h3>Trazabilidad del período</h3><p>Seleccione un registro para revisar lectura, corrección, responsable, resultado y reglas.</p></div><span id="ccCount" class="muted"></span></div><div class="table-wrap"><table><thead id="ccHistoryHead"><tr><th>Fecha/hora</th><th>Responsable</th><th>T corregida</th><th>HR corregida</th><th>Ambiental</th><th>Estadístico</th><th>Reglas</th><th>Detalle</th></tr></thead><tbody id="ccHistoryBody"></tbody></table></div><div id="ccPointDetail" class="cc-point-detail hidden"></div></section>
       </div>
     </section>
+
+    <dialog id="ccHistoricalDialog" class="modal cc-historical-dialog"><div class="modal-body"><div class="section-head"><div><span class="eyebrow">CALIDAD · TRAZABILIDAD</span><h3 id="ccHistTitle">Carga histórica</h3><p id="ccHistSubtitle"></p></div><button class="icon-btn" type="button" onclick="document.getElementById('ccHistoricalDialog').close()">×</button></div><input id="ccHistChartId" type="hidden"><input id="ccHistMonth" type="hidden"><input id="ccHistKind" type="hidden"><div class="alert info"><b>Histórico manual 2026:</b> solo se guardan las fechas marcadas. No genera notificaciones ni modifica el cumplimiento diario. Los registros quedan identificados como HISTÓRICO MANUAL y se sincronizan con Firestore.</div><div class="table-wrap cc-hist-table"><table><thead id="ccHistHead"></thead><tbody id="ccHistBody"></tbody></table></div><div class="modal-actions"><button class="btn secondary" type="button" onclick="document.getElementById('ccHistoricalDialog').close()">Cancelar</button><button class="btn primary" id="btnSaveHistoricalMonth" type="button">Guardar mes seleccionado</button></div></div></dialog>
 
     <section id="view-gestion" class="view">
       <div class="card management-hero">
@@ -696,7 +698,7 @@
 
 <div id="toast" class="toast"></div>
 <script src="firebase-config.js"></script>
-<script src="app.js?v=6.33.25.10.4"></script>
+<script src="app.js?v=6.33.25.10.5"></script>
 
 <script>
 (function(){
