@@ -26,6 +26,8 @@ service cloud.firestore {
       allow read, create: if activeUser();
       allow update, delete: if isBoss();
     }
+    match /controlChartEntries/{id} { allow read, create, update: if activeUser(); allow delete: if isBoss(); }
+    match /controlChartConfig/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /audit/{id} {
       allow read: if isBoss();
       allow create: if activeUser();
