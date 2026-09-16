@@ -1,27 +1,47 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function userDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
-    function role() { return signedIn() ? userDoc().data.role : null; }
-    function analystId() { return signedIn() ? userDoc().data.analystId : null; }
-
-    match /users/{uid} {
-      allow read: if signedIn() && (request.auth.uid == uid || role() == 'JEFE');
-      allow write: if signedIn() && role() == 'JEFE';
+    function userProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
+    function activeUser() { return signedIn() && userProfile().data.status == 'ACTIVO'; }
+    function isBoss() { return activeUser() && userProfile().data.role == 'JEFE'; }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isBoss());
+      allow create, update, delete: if isBoss();
+    }
+    match /catalog/{id} { allow read: if activeUser(); allow write: if isBoss(); }
+    match /timeRules/{id} { allow read: if activeUser(); allow write: if isBoss(); }
+    match /compositeSteps/{id} { allow read: if activeUser(); allow write: if isBoss(); }
+    match /analysts/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /planning/{id} {
-      allow read: if signedIn() && (role() == 'JEFE' || resource.data.analystId == analystId());
-      allow create, update, delete: if signedIn() && role() == 'JEFE';
+      allow read: if activeUser();
+      allow create, delete: if isBoss();
+      allow update: if activeUser();
     }
     match /planComments/{id} {
-      allow read: if signedIn();
-      allow create: if signedIn();
-      allow update, delete: if signedIn() && role() == 'JEFE';
+      allow read, create: if activeUser();
+      allow update, delete: if isBoss();
     }
-    match /{collection}/{id} {
-      allow read: if signedIn();
-      allow write: if signedIn() && role() == 'JEFE';
+    // Cartas de Control: configuración exclusiva de JEFE; registros para usuarios activos.
+    match /controlChartDefs/{id} {
+      allow read: if activeUser();
+      allow create, update, delete: if isBoss();
     }
+    match /controlChartRecords/{id} {
+      allow read, create: if activeUser();
+      allow update: if activeUser();
+      allow delete: if isBoss();
+    }
+    match /audit/{id} {
+      allow read: if isBoss();
+      allow create: if activeUser();
+      allow update, delete: if false;
+    }
+    match /config/{id} { allow read, write: if isBoss(); }
+    match /{document=**} { allow read, write: if false; }
   }
 }

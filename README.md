@@ -59,3 +59,8 @@
 
 ## V1.0.5.6.28
 Centro de Comunicaciones PRO integrado sobre la base V1.0.5.6.27 MI JORNADA ESTABLE CHROME. Conserva la corrección de scroll/foco/desglose/comentarios y añade bandeja inteligente agrupada por actividad.
+
+## V1.0.5.6.33 — Motor Cartas Firebase
+Esta fase agrega la infraestructura universal de Cartas de Control por actividad + método. No agrega todavía DBO5/pH/Conductividad: primero se valida multi-PC.
+LOCAL recomendado: `python3 -m http.server 8082`.
+Para Firestore, publique `firestore.rules` antes de probar las colecciones nuevas.

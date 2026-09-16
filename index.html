@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="theme-color" content="#0f4c81" />
   <title>ERP Planificación NextGen</title>
-  <link rel="manifest" href="manifest.webmanifest?v=644" />
-  <link rel="stylesheet" href="styles.css?v=644" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
 <div class="app-shell">
@@ -25,7 +25,7 @@
       <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
       <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
     </nav>
-    <div class="sidebar-footer"><div class="sync-pill">● SISTEMA ACTIVO</div><small>Planificación NextGen</small></div>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.9-PH-IA-FIREBASE · Firebase Auth</small></div>
   </aside>
 
   <main class="main">
@@ -55,8 +55,8 @@
 
     <section id="view-inicio" class="view active">
       <div class="hero card">
-        <div><span class="eyebrow">V1.0.5.6.44 · SISTEMA ACTUALIZADO</span><h2>Catálogo y planificación en una sola base</h2><p>El Catálogo Maestro, los analistas y la planificación trabajan sobre una sola base sincronizada y con trazabilidad.</p></div>
-        <div class="hero-status"><span>Estado</span><strong>SISTEMA CONECTADO</strong><small>Sincronización y trazabilidad activas</small></div>
+        <div><span class="eyebrow">V1.0.5.6.31-INVENTARIO-INTELIGENTE-VIVO · FIREBASE AUTH + SESIÓN REAL</span><h2>Catálogo y planificación en una sola base</h2><p>El Catálogo Maestro, los analistas y la planificación permanecen en la misma base local. Firebase Authentication + Firestore con confirmación de escritura, Outbox y sincronización en tiempo real.</p></div>
+        <div class="hero-status"><span>Estado</span><strong>FIREBASE CONFIGURADO</strong><small>Proyecto inventario-psi · Auth + Firestore validados</small></div>
       </div>
       <div class="stats-grid">
         <article class="card stat"><span>Catálogo activo</span><strong id="statCatalog">0</strong><small>actividades/ensayos</small></article>
@@ -145,7 +145,7 @@
           <div><h3>Mi Jornada</h3><p>Vista flexible: el analista puede priorizar actividades pendientes; el sistema recalcula los horarios sin alterar duración ni trazabilidad.</p><button type="button" class="btn secondary compact restore-boss-plan" id="btnRestoreBossPlan">↺ Restaurar orden del jefe</button></div>
           <div class="filters analyst-day-filters"><label>Fecha<div class="date-inline"><input id="myDayDate" type="date"/><button class="btn secondary compact" id="btnMyDayToday" type="button">Hoy</button></div></label><label>Analista<select id="myDayAnalyst"></select></label></div>
         </div>
-        <div id="myDaySummary" class="myday-summary"></div>
+        <div id="myDaySummary" class="myday-summary"></div><section id="myDayControlCharts" class="card myday-control-charts hidden"></section>
       </div>
       <div id="myDayEmpty" class="card empty"><div class="empty-icon">☑</div><h4>Sin actividades para esta jornada</h4><p>Seleccione fecha y analista.</p></div>
       <div id="myDayCards" class="myday-cards"></div><div id="myDayRecent" class="card myday-recent"></div>
@@ -173,6 +173,26 @@
             <div id="dailyAnalystBoards" class="daily-analyst-boards"></div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section id="view-cartas-control" class="view">
+      <div class="card cc-hero">
+        <div class="section-head"><div><span class="eyebrow">CALIDAD · FIREBASE MULTI-PC</span><h3>📈 Gestión de Cartas de Control</h3><p>Seguimiento técnico mensual, tendencias, límites ambientales y vigilancia estadística explicable.</p></div><button class="btn secondary" id="btnRefreshControlCharts" type="button">↻ Actualizar</button></div>
+        <div class="cc-filters"><label>Carta<select id="ccChartSelect"></select></label><label>Mes<input id="ccMonth" type="month"></label><button class="btn secondary" id="btnCcCurrentMonth" type="button">Mes actual</button></div>
+      </div>
+      <div id="ccEmpty" class="card empty hidden"><div class="empty-icon">📈</div><h4>Sin registros para este período</h4><p>Los controles registrados por los analistas aparecerán aquí desde Firebase.</p></div>
+      <div id="ccDashboard">
+        <div id="ccKpis" class="cc-kpis"></div>
+        <div class="cc-grid">
+          <section class="card cc-chart-card"><div class="section-head"><div><h3 id="ccChart1Title">Temperatura corregida</h3><p id="ccChart1Desc">Media, ±1s, ±2s, ±3s y límites técnicos 17–23 °C.</p></div><span id="ccTempState" class="badge">—</span></div><div id="ccTempChart" class="cc-svg-chart"></div></section>
+          <section class="card cc-chart-card"><div class="section-head"><div><h3 id="ccChart2Title">Humedad corregida</h3><p id="ccChart2Desc">Media, ±1s, ±2s, ±3s y límites técnicos 20–80 %HR.</p></div><span id="ccHumState" class="badge">—</span></div><div id="ccHumChart" class="cc-svg-chart"></div></section>
+        <section id="ccChart3Card" class="card cc-chart-card hidden"><div class="section-head"><div><h3 id="ccChart3Title">Control pH 10.00</h3><p id="ccChart3Desc"></p></div><span id="ccChart3State" class="badge">—</span></div><div id="ccChart3" class="cc-svg-chart"></div></section></div>
+        <div class="cc-grid cc-bottom-grid">
+          <section class="card"><div class="section-head"><div><h3>✦ IA · Análisis del período</h3><p>Interpretación explicable; no modifica criterios ni decisiones de Calidad.</p></div></div><div id="ccAi" class="cc-ai"></div></section>
+          <section class="card"><div class="section-head"><div><h3>Reglas estadísticas</h3><p>Westgard/Shewhart y tendencias detectadas en el período.</p></div></div><div id="ccRules" class="cc-rules"></div></section>
+        </div>
+        <section class="card"><div class="section-head"><div><h3>Trazabilidad del período</h3><p>Seleccione un registro para revisar lectura, corrección, responsable, resultado y reglas.</p></div><span id="ccCount" class="muted"></span></div><div class="table-wrap"><table><thead id="ccHistoryHead"><tr><th>Fecha/hora</th><th>Responsable</th><th>T corregida</th><th>HR corregida</th><th>Ambiental</th><th>Estadístico</th><th>Reglas</th><th>Detalle</th></tr></thead><tbody id="ccHistoryBody"></tbody></table></div><div id="ccPointDetail" class="cc-point-detail hidden"></div></section>
       </div>
     </section>
 
@@ -228,57 +248,6 @@
       </div>
     </section>
 
-
-    <section id="view-cartas-control" class="view cc-pro-view">
-      <div class="card cc-selector-card">
-        <div class="section-head"><div><span class="eyebrow">RECEPCIÓN DE MUESTRAS · CARTAS EXCLUSIVAS DEL ÁREA</span><h2>Cartas inteligentes de control</h2><p>Seleccione el control que realizará. Cada carta conserva sus propios criterios, niveles, línea base y análisis IA.</p></div></div>
-        <div class="cc-selector-grid">
-          <button type="button" class="cc-select active" data-cc-type="DBO5_ENV"><b>🌡️ DBO5</b><span>Condiciones ambientales</span><small>Temperatura · Humedad · correcciones</small></button>
-          <button type="button" class="cc-select" data-cc-type="PH_EI345"><b>🧪 pH · EI-345</b><span>Control multipunto</span><small>pH 4.00 · 7.00 · 10.00 · criterio ±0.10</small></button>
-          <button type="button" class="cc-select" data-cc-type="COND_EI104"><b>⚡ Conductividad · EI-104</b><span>Control multipunto</span><small>84 µS/cm · 1413 µS/cm · 12.88 mS/cm</small></button>
-        </div>
-      </div>
-      <div id="ccDboPanel">
-      <div class="control-hero card cc-pro-hero">
-        <div><span class="eyebrow">RECEPCIÓN DE MUESTRAS · CONTROL AMBIENTAL</span><h2>📈 Carta inteligente de control · DBO5</h2><p>Control ambiental y estadístico en una sola vista. La IA interpreta señales, pero conserva siempre la lectura original y la trazabilidad.</p></div>
-        <div class="control-status" id="ccOverallStatus"><span>Estado integral</span><strong>SIN DATOS</strong><small>Ingrese el primer registro</small></div>
-      </div>
-      <div class="cc-pro-status-grid">
-        <article class="card cc-status-card"><span>🌡️ Cumplimiento ambiental</span><strong id="ccAmbientStatus">SIN DATOS</strong><small id="ccAmbientDetail">Temperatura y humedad corregidas</small></article>
-        <article class="card cc-status-card"><span>📊 Control estadístico</span><strong id="ccStatStatus">ESTABLECIENDO BASE</strong><small id="ccStatDetail">Shewhart / Westgard</small></article>
-        <article class="card cc-status-card ai"><span>✦ IA · diagnóstico</span><strong id="ccAiHeadline">LISTO PARA ANALIZAR</strong><small id="ccAiHeadlineDetail">La explicación se actualiza con cada registro.</small></article>
-      </div>
-      <div class="control-kpis" id="ccKpis"></div>
-
-      <div class="cc-pro-main-grid">
-        <div class="card cc-today-card"><div class="section-head"><div><h3>Control de hoy</h3><p>Ingrese únicamente las lecturas. El sistema selecciona el factor, corrige y evalúa automáticamente.</p></div></div>
-          <form id="ccEntryForm" class="cc-entry-grid"><label>Fecha<input id="ccDate" type="date" required></label><label>Hora<input id="ccTime" type="time" required></label><label>Temp. leída (°C)<input id="ccTemp" type="number" step="0.1" required></label><label>HR leída (%)<input id="ccHr" type="number" step="0.1" required></label><label class="full">Observaciones<input id="ccObs" placeholder="Opcional"></label><button class="btn primary full" type="submit">✦ Evaluar y guardar control</button></form>
-          <div id="ccLiveEvaluation" class="cc-live-eval cc-eval-pro">Ingrese temperatura y humedad para evaluar.</div>
-        </div>
-        <div class="card cc-ai-panel"><div class="section-head"><div><h3>✦ IA · Análisis del proceso</h3><p>Interpreta cumplimiento, señales Westgard, desplazamientos y tendencias sin modificar criterios.</p></div></div><div id="ccAi" class="cc-ai"></div></div>
-      </div>
-
-      <div class="card cc-chart-card"><div class="section-head"><div><h3>Carta mensual inteligente</h3><p>Visualice comportamiento, límites técnicos y señales estadísticas del período.</p></div><div class="filters"><input id="ccMonth" type="month"></div></div><div id="ccChart" class="cc-chart"></div></div>
-
-      <details class="card cc-quality-config"><summary><span>⚙️ Configuración de Calidad</span><small>Criterios, instrumentos, factores de corrección y reglas estadísticas</small></summary><div class="cc-quality-inner">
-        <div class="section-head"><div><h3>Parámetros y criterios técnicos</h3><p>Configuración trazable. No forma parte del registro diario del analista.</p></div><button type="button" class="btn secondary" id="btnCcSaveConfig">Guardar configuración</button></div>
-        <div class="cc-config-grid"><label>Área / Sala<input id="ccArea" value="Instrumental"></label><label>Termohigrómetro<input id="ccThermo" value="EI-270"></label><label>Data Logger<input id="ccLogger" value="PF-09"></label><label>Temp. mín (°C)<input id="ccTempMin" type="number" step="0.1" value="17"></label><label>Temp. máx (°C)<input id="ccTempMax" type="number" step="0.1" value="23"></label><label>HR mín (%)<input id="ccHrMin" type="number" step="0.1" value="20"></label><label>HR máx (%)<input id="ccHrMax" type="number" step="0.1" value="80"></label></div>
-        <div class="cc-factor-config"><div><h4>Factor de corrección · Temperatura</h4><p>El factor se selecciona automáticamente por rango.</p><div id="ccTempFactors"></div></div><div><h4>Factor de corrección · Humedad</h4><p>Una lectura sin rango definido se bloquea para evitar correcciones inventadas.</p><div id="ccHrFactors"></div></div></div>
-        <div class="cc-stat-config"><div class="section-head"><div><h3>Shewhart / Westgard</h3><p>La evaluación estadística es independiente del cumplimiento ambiental.</p></div></div><div class="cc-config-grid"><label>Base estadística<select id="ccStatMode"><option value="AUTO">Automática con histórico</option><option value="TARGET">Media y DE establecidas por Calidad</option></select></label><label>Mínimo histórico<input id="ccStatMinN" type="number" min="5" max="50" value="10"></label><label>Media T° objetivo (opcional)<input id="ccTempMean" type="number" step="0.01" placeholder="Automática"></label><label>DE T° objetivo (opcional)<input id="ccTempSd" type="number" step="0.01" min="0" placeholder="Automática"></label><label>Media HR objetivo (opcional)<input id="ccHrMean" type="number" step="0.01" placeholder="Automática"></label><label>DE HR objetivo (opcional)<input id="ccHrSd" type="number" step="0.01" min="0" placeholder="Automática"></label></div><div class="cc-rule-grid"><label><input id="ccRule12s" type="checkbox" checked> 1₂s · advertencia &gt; ±2s</label><label><input id="ccRule13s" type="checkbox" checked> 1₃s · fuera de control &gt; ±3s</label><label><input id="ccRule22s" type="checkbox" checked> 2₂s · 2 consecutivos &gt; ±2s</label><label><input id="ccRuleR4s" type="checkbox" checked> R₄s · separación &gt; 4s</label><label><input id="ccRule7x" type="checkbox" checked> 7x · desplazamiento</label><label><input id="ccRule7t" type="checkbox" checked> 7T · tendencia</label></div><div class="cc-live-eval"><b>Interpretación:</b> ±1s es zona esperada; 1₂s advierte. 1₃s, 2₂s y R₄s requieren revisión. 7x y 7T detectan patrones.</div></div>
-      </div></details>
-
-      <div class="card"><div class="section-head"><div><h3>Historial y trazabilidad</h3><p>Lectura original → factor aplicado → resultado corregido → estado. Los datos originales no se eliminan por el análisis.</p></div></div><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Hora</th><th>T° leída</th><th>Factor T°</th><th>T° corregida</th><th>HR leída</th><th>Factor HR</th><th>HR corregida</th><th>Estado</th><th>Responsable</th><th>Observación</th></tr></thead><tbody id="ccBody"></tbody></table></div></div>
-      </div>
-      <div id="ccMultiPanel" class="hidden">
-        <div class="control-hero card cc-pro-hero"><div><span class="eyebrow">RECEPCIÓN DE MUESTRAS · CONTROL ANALÍTICO</span><h2 id="ccMultiTitle">Carta inteligente</h2><p id="ccMultiDesc">Control multipunto con evaluación técnica y estadística independiente por nivel.</p></div><div class="control-status" id="ccMultiOverall"><span>Estado integral</span><strong>SIN DATOS</strong><small>Ingrese el primer control</small></div></div>
-        <div class="cc-pro-status-grid"><article class="card cc-status-card"><span>✓ Criterio técnico</span><strong id="ccMultiTech">SIN DATOS</strong><small id="ccMultiTechDetail">Evaluación de todos los niveles</small></article><article class="card cc-status-card"><span>📊 Control estadístico</span><strong id="ccMultiStat">ESTABLECIENDO BASE</strong><small id="ccMultiStatDetail">Por nivel, sin mezclar concentraciones</small></article><article class="card cc-status-card ai"><span>✦ IA · diagnóstico</span><strong id="ccMultiAiHead">LISTO</strong><small id="ccMultiAiDetail">Explicará cada señal detectada.</small></article></div>
-        <div class="cc-pro-main-grid"><div class="card cc-today-card"><div class="section-head"><div><h3>Control de hoy</h3><p>Ingrese las tres lecturas. El sistema calcula error, criterio y estado global automáticamente.</p></div></div><form id="ccMultiForm" class="cc-entry-grid"><label>Fecha<input id="ccMultiDate" type="date" required></label><label>Hora<input id="ccMultiTime" type="time" required></label><label id="ccMultiL1Label">Nivel 1<input id="ccMultiL1" type="number" step="0.001" required></label><label id="ccMultiL2Label">Nivel 2<input id="ccMultiL2" type="number" step="0.001" required></label><label id="ccMultiL3Label">Nivel 3<input id="ccMultiL3" type="number" step="0.001" required></label><label class="full">Observaciones<input id="ccMultiObs" placeholder="Opcional"></label><button class="btn primary full" type="submit">✦ Evaluar y guardar control</button></form><div id="ccMultiPreview" class="cc-live-eval cc-eval-pro">Ingrese las tres lecturas para evaluar.</div></div><div class="card cc-ai-panel"><div class="section-head"><div><h3>✦ IA · Análisis del proceso</h3><p>Evalúa cada nivel de forma independiente y explica tendencias, desplazamientos y reglas activas.</p></div></div><div id="ccMultiAi" class="cc-ai"></div></div></div>
-        <div class="card cc-chart-card"><div class="section-head"><div><h3>Carta mensual por niveles</h3><p>Media, ±1s, ±2s, ±3s y reglas Shewhart/Westgard para cada nivel.</p></div><div class="filters"><input id="ccMultiMonth" type="month"></div></div><div id="ccMultiChart" class="cc-chart"></div></div>
-        <details class="card cc-quality-config"><summary><span>⚙️ Configuración de Calidad</span><small>Valores objetivo, criterio técnico y reglas estadísticas</small></summary><div class="cc-quality-inner"><div class="section-head"><div><h3 id="ccMultiCfgTitle">Criterios</h3><p>Los valores provienen de sus cartas Excel y pueden actualizarse con trazabilidad.</p></div><button type="button" class="btn secondary" id="btnCcMultiSaveConfig">Guardar configuración</button></div><div class="cc-config-grid"><label>Área / Sala<input id="ccMultiArea"></label><label>Código de equipo<input id="ccMultiEquipment"></label><label>Criterio<input id="ccMultiCriterion" type="number" step="0.001"></label><label>Mínimo histórico<input id="ccMultiMinN" type="number" min="5" max="50" value="10"></label><label>Objetivo nivel 1<input id="ccMultiTarget1" type="number" step="0.001"></label><label>Objetivo nivel 2<input id="ccMultiTarget2" type="number" step="0.001"></label><label>Objetivo nivel 3<input id="ccMultiTarget3" type="number" step="0.001"></label></div><div class="cc-rule-grid"><label><input id="ccMRule12s" type="checkbox" checked> 1₂s · advertencia</label><label><input id="ccMRule13s" type="checkbox" checked> 1₃s · crítico</label><label><input id="ccMRule22s" type="checkbox" checked> 2₂s · consecutivos</label><label><input id="ccMRuleR4s" type="checkbox" checked> R₄s · dispersión</label><label><input id="ccMRule7x" type="checkbox" checked> 7x · desplazamiento</label><label><input id="ccMRule7t" type="checkbox" checked> 7T · tendencia</label></div></div></details>
-        <div class="card"><div class="section-head"><div><h3>Historial y trazabilidad</h3><p>Resultado original, error, evaluación por nivel, responsable y observación.</p></div></div><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Nivel 1</th><th>Error</th><th>Nivel 2</th><th>Error</th><th>Nivel 3</th><th>Error</th><th>Estado</th><th>Responsable</th><th>Observación</th></tr></thead><tbody id="ccMultiBody"></tbody></table></div></div>
-      </div>
-    </section>
-
     <section id="view-catalogo" class="view">
       <div class="section-tabs" id="sectionTabs"></div>
       <div class="card">
@@ -323,6 +292,14 @@
         <div class="card danger-zone"><h3>Datos locales</h3><p>El reinicio elimina únicamente la base local de esta línea de desarrollo.</p><button class="btn danger" id="btnReset">Reiniciar base local</button></div>
       </div>
     
+      <div class="card control-chart-engine-card">
+        <div class="section-head"><div><span class="eyebrow">NÚCLEO 6.33.9 · FIREBASE MULTI-PC · DBO5 + pH IA</span><h3>📈 Motor universal de Cartas de Control</h3><p>Configure cada carta por actividad/área y método. La definición se sincroniza entre computadoras mediante el mismo Firestore + Outbox + tiempo real del ERP.</p></div><button class="btn primary" id="btnNewControlChart" type="button" onclick="openControlChartDef().catch(e=>{console.error(e);alert('No se pudo abrir la carta: '+e.message)})">+ Nueva carta</button></div>
+        <div class="sync-settings-grid"><div><small>Cartas configuradas</small><strong id="chartEngineTotal">0</strong></div><div><small>Fuente compartida</small><strong id="chartEngineCloud">ESPERANDO SESIÓN</strong></div><div><small>Regla de acceso</small><strong>ACTIVIDAD ASIGNADA</strong></div><div><small>Datos locales</small><strong>CACHÉ / OUTBOX</strong></div></div>
+        <div class="inline-alert info"><b>Arquitectura:</b> Calidad crea la carta una sola vez. El analista la verá únicamente cuando tenga asignada la actividad correspondiente. Los criterios y campos específicos se agregarán sobre esta definición sin romper la sincronización.</div>
+        <div id="controlChartDefsEmpty" class="empty compact"><h4>Aún no hay cartas configuradas</h4><p>Primero pruebe la sincronización creando una carta de prueba.</p></div>
+        <div class="table-wrap"><table><thead><tr><th>Carta</th><th>Actividad / área</th><th>Método</th><th>Estado</th><th>Acción</th></tr></thead><tbody id="controlChartDefsBody"></tbody></table></div>
+      </div>
+
       <div class="card auth-settings-card">
         <div class="section-head">
           <div><h3>🔐 Firebase Authentication</h3><p>Sesión real por correo/contraseña y vínculo automático con el usuario ERP.</p></div>
@@ -374,6 +351,15 @@
   </div>
   <div class="inline-alert info">El sistema conserva la actividad original y recalcula la hora final según su duración. Si detecta un cruce, puede buscar automáticamente el primer espacio disponible.</div>
   <div class="dialog-actions"><button type="button" class="btn secondary" data-close="reassignPlanDialog">Cancelar</button><button class="btn primary" value="default">Guardar cambio</button></div>
+</form></dialog>
+
+<dialog id="controlChartDefDialog"><form method="dialog" id="controlChartDefForm" onsubmit="saveControlChartDef(event)">
+  <div class="dialog-head"><div><h3>Configurar Carta de Control</h3><p>La carta queda vinculada a una actividad y, cuando corresponda, a un ensayo/método ya configurado en el ERP.</p></div><button type="button" class="icon-btn" data-close="controlChartDefDialog">×</button></div>
+  <input type="hidden" id="chartDefId"/>
+  <div class="form-grid"><label>Nombre de la carta<input id="chartDefName" required placeholder="Ej. Control DBO5"/></label><label>Actividad / área<select id="chartDefSection" required></select></label><label>Ensayo / método configurado<select id="chartDefMethodSelect" required><option value="">Seleccione…</option></select></label><label class="hidden">Método manual<input id="chartDefMethod" required placeholder="Ej. Fósforo Total / NTK / SST"/></label><label>Estado<select id="chartDefStatus"><option>ACTIVO</option><option>INACTIVO</option></select></label></div>
+  <label>Observaciones<textarea id="chartDefNotes" rows="3" placeholder="Alcance, equipo o notas de Calidad"></textarea></label>
+  <div class="inline-alert info">Acceso automático: el analista podrá usar esta carta únicamente si tiene asignada la actividad/área correspondiente.</div>
+  <div class="dialog-actions"><button type="button" class="btn secondary" data-close="controlChartDefDialog">Cancelar</button><button class="btn primary" value="default">Guardar y sincronizar</button></div>
 </form></dialog>
 
 <dialog id="notificationsDialog" class="communications-dialog">
@@ -526,6 +512,33 @@
 </form></dialog>
 
 
+
+<dialog id="dbo5ControlDialog" class="modal dbo5-modal"><form method="dialog" id="dbo5ControlForm" class="dialog-card dbo5-dialog-card">
+  <div class="dialog-head"><div><span class="eyebrow">CARTA DE CONTROL · DBO5</span><h3>Condiciones ambientales · Recepción de Muestras</h3><p>Registro técnico con corrección automática, cumplimiento ambiental y vigilancia estadística.</p></div><button type="button" class="icon-btn" data-close="dbo5ControlDialog">×</button></div>
+  <input type="hidden" id="dbo5ChartId"><input type="hidden" id="dbo5AnalystId"><input type="hidden" id="dbo5Date">
+  <div class="dbo5-kpis"><div><small>Área / sala</small><b>Instrumental</b></div><div><small>Termohigrómetro</small><b>EI-270</b></div><div><small>Data Logger</small><b>PF-09</b></div><div><small>Criterio</small><b>17–23 °C · 20–80 %HR</b></div></div>
+  <div class="dbo5-grid">
+    <section class="dbo5-panel"><h4>Control de hoy</h4><div class="form-grid">
+      <label>Fecha<input id="dbo5InputDate" type="date" required></label><label>Hora<input id="dbo5Time" type="time" required></label>
+      <label>Temperatura leída (°C)<input id="dbo5TempRaw" type="number" step="0.01" required placeholder="Ej. 20.50"></label>
+      <label>Humedad leída (%HR)<input id="dbo5HumRaw" type="number" step="0.01" required placeholder="Ej. 55.0"></label>
+      <label class="full">Observaciones<textarea id="dbo5Notes" rows="2" placeholder="Condición, novedad o acción tomada..."></textarea></label>
+    </div><div id="dbo5Preview" class="dbo5-preview"></div><button type="submit" class="btn primary full-btn">Guardar control DBO5</button></section>
+    <section class="dbo5-panel"><h4>IA · Diagnóstico del proceso</h4><div id="dbo5Ai" class="dbo5-ai">Ingrese las lecturas para obtener el diagnóstico técnico.</div><div class="dbo5-legend"><span>±1s zona esperada</span><span>1_2s advertencia</span><span>1_3s / 2_2s / R_4s / 7x / 7T vigilancia</span></div></section>
+  </div>
+  <section class="dbo5-panel"><div class="dbo5-history-head"><div><h4>Historial y control estadístico</h4><small>La estadística se establece con mínimo 10 registros. Antes de ello se informa FASE DE ESTABLECIMIENTO.</small></div><span id="dbo5HistoryCount" class="badge">0 registros</span></div><div id="dbo5Stats" class="dbo5-stats"></div><div class="table-wrap"><table><thead><tr><th>Fecha/hora</th><th>Responsable</th><th>T leída</th><th>Factor</th><th>T corregida</th><th>HR leída</th><th>Factor</th><th>HR corregida</th><th>Ambiental</th><th>Estadístico</th></tr></thead><tbody id="dbo5HistoryBody"></tbody></table></div></section>
+  <div class="dialog-actions"><button type="button" class="btn secondary" data-close="dbo5ControlDialog">Cerrar</button></div>
+</form></dialog>
+
+<dialog id="phControlDialog" class="modal dbo5-modal"><form method="dialog" id="phControlForm" class="dialog-card dbo5-dialog-card">
+  <div class="dialog-head"><div><span class="eyebrow">CARTA DE CONTROL · pH · CC-0001</span><h3>Control multipunto · Recepción de Muestras</h3><p>pHmetro EI-345 · verificación en pH 4.00, 7.00 y 10.00 con criterio ±0.10 pH.</p></div><button type="button" class="icon-btn" data-close="phControlDialog">×</button></div>
+  <input type="hidden" id="phChartId"><input type="hidden" id="phAnalystId">
+  <div class="dbo5-kpis"><div><small>Equipo</small><b>pHmetro EI-345</b></div><div><small>Niveles</small><b>4.00 · 7.00 · 10.00</b></div><div><small>Criterio por nivel</small><b>±0.10 pH</b></div><div><small>Resultado global</small><b>Los 3 deben cumplir</b></div></div>
+  <div class="dbo5-grid"><section class="dbo5-panel"><h4>Control de hoy</h4><div class="form-grid"><label>Fecha<input id="phInputDate" type="date" required></label><label>Hora<input id="phTime" type="time" required></label><label>Lectura patrón pH 4.00<input id="phRead4" type="number" step="0.001" required placeholder="Ej. 4.02"></label><label>Lectura patrón pH 7.00<input id="phRead7" type="number" step="0.001" required placeholder="Ej. 6.98"></label><label>Lectura patrón pH 10.00<input id="phRead10" type="number" step="0.001" required placeholder="Ej. 10.04"></label><label class="full">Observaciones<textarea id="phNotes" rows="2" placeholder="Condición, lote de buffer, novedad o acción tomada..."></textarea></label></div><div id="phPreview" class="dbo5-preview ph-preview"></div><button type="submit" class="btn primary full-btn">Guardar control pH</button></section><section class="dbo5-panel"><h4>IA · Diagnóstico multipunto</h4><div id="phAi" class="dbo5-ai">Ingrese las tres lecturas para evaluar el control.</div><div class="dbo5-legend"><span>Error = |lectura − nominal|</span><span>Criterio ≤ 0.10 pH</span><span>Estadística independiente por nivel</span><span>1_2s · 1_3s · 2_2s · R_4s · 7x · 7T</span></div></section></div>
+  <section class="dbo5-panel"><div class="dbo5-history-head"><div><h4>Historial y control estadístico</h4><small>Cada nivel pH 4.00 / 7.00 / 10.00 mantiene su propia media, desviación y reglas. Mínimo 10 registros.</small></div><span id="phHistoryCount" class="badge">0 registros</span></div><div id="phStats" class="dbo5-stats ph-stats"></div><div class="table-wrap"><table><thead><tr><th>Fecha/hora</th><th>Responsable</th><th>pH 4</th><th>Error</th><th>pH 7</th><th>Error</th><th>pH 10</th><th>Error</th><th>Resultado</th><th>Estadístico</th></tr></thead><tbody id="phHistoryBody"></tbody></table></div></section>
+  <div class="dialog-actions"><button type="button" class="btn secondary" data-close="phControlDialog">Cerrar</button></div>
+</form></dialog>
+
 <div id="pwaUpdateBar" class="pwa-update-bar hidden" role="status" aria-live="polite">
   <div class="pwa-update-copy">
     <b id="pwaUpdateTitle">Nueva versión disponible</b>
@@ -535,8 +548,8 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="firebase-config.js?v=644"></script>
-<script src="app.js?v=644"></script>
+<script src="firebase-config.js"></script>
+<script src="app.js?v=6.33.9"></script>
 
 <script>
 (function(){

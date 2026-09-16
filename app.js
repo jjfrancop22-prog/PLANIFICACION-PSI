@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.44-CARTAS-RECEPCION-SYNC-MULTIPC';
+const APP_VERSION='V1.0.5.6.33.9-PH-IA-FIREBASE';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=8;
 const SECTIONS=[
@@ -24,7 +24,7 @@ function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show'
 function sectionMeta(id){return SECTIONS.find(s=>s.id===id)||SECTIONS[0]}
 function fmtDate(v){try{return new Intl.DateTimeFormat('es-EC',{dateStyle:'short',timeStyle:'short'}).format(new Date(v))}catch{return v}}
 function minutesText(m){const n=Number(m||0);if(!n)return '—';const h=Math.floor(n/60),min=n%60;return h&&min?`${h} h ${min} min`:h?`${h} h`:`${min} min`}
-function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB_NAME,DB_VERSION);r.onupgradeneeded=e=>{const d=e.target.result;if(!d.objectStoreNames.contains('catalog')){const s=d.createObjectStore('catalog',{keyPath:'id'});s.createIndex('section','section');s.createIndex('status','status')}if(!d.objectStoreNames.contains('timeRules')){const s=d.createObjectStore('timeRules',{keyPath:'id'});s.createIndex('catalogId','catalogId')}if(!d.objectStoreNames.contains('compositeSteps')){const s=d.createObjectStore('compositeSteps',{keyPath:'id'});s.createIndex('catalogId','catalogId')}if(!d.objectStoreNames.contains('analysts')){const s=d.createObjectStore('analysts',{keyPath:'id'});s.createIndex('status','status')}if(!d.objectStoreNames.contains('audit')){const s=d.createObjectStore('audit',{keyPath:'id'});s.createIndex('createdAt','createdAt')}if(!d.objectStoreNames.contains('outbox'))d.createObjectStore('outbox',{keyPath:'id'});if(!d.objectStoreNames.contains('config'))d.createObjectStore('config',{keyPath:'key'});if(!d.objectStoreNames.contains('planning')){const s=d.createObjectStore('planning',{keyPath:'id'});s.createIndex('date','date');s.createIndex('analystId','analystId');s.createIndex('status','status')}if(!d.objectStoreNames.contains('planComments')){const s=d.createObjectStore('planComments',{keyPath:'id'});s.createIndex('planId','planId');s.createIndex('analystId','analystId');s.createIndex('createdAt','createdAt')}if(!d.objectStoreNames.contains('dailySamples')){const s=d.createObjectStore('dailySamples',{keyPath:'id'});s.createIndex('date','date');s.createIndex('section','section');s.createIndex('status','status')}if(!d.objectStoreNames.contains('users')){const s=d.createObjectStore('users',{keyPath:'id'});s.createIndex('role','role');s.createIndex('analystId','analystId');s.createIndex('status','status')}if(!d.objectStoreNames.contains('controlChartEntries')){const s=d.createObjectStore('controlChartEntries',{keyPath:'id'});s.createIndex('date','date');s.createIndex('chartType','chartType')}if(!d.objectStoreNames.contains('controlChartConfig'))d.createObjectStore('controlChartConfig',{keyPath:'key'});};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB_NAME,DB_VERSION);r.onupgradeneeded=e=>{const d=e.target.result;if(!d.objectStoreNames.contains('catalog')){const s=d.createObjectStore('catalog',{keyPath:'id'});s.createIndex('section','section');s.createIndex('status','status')}if(!d.objectStoreNames.contains('timeRules')){const s=d.createObjectStore('timeRules',{keyPath:'id'});s.createIndex('catalogId','catalogId')}if(!d.objectStoreNames.contains('compositeSteps')){const s=d.createObjectStore('compositeSteps',{keyPath:'id'});s.createIndex('catalogId','catalogId')}if(!d.objectStoreNames.contains('analysts')){const s=d.createObjectStore('analysts',{keyPath:'id'});s.createIndex('status','status')}if(!d.objectStoreNames.contains('audit')){const s=d.createObjectStore('audit',{keyPath:'id'});s.createIndex('createdAt','createdAt')}if(!d.objectStoreNames.contains('outbox'))d.createObjectStore('outbox',{keyPath:'id'});if(!d.objectStoreNames.contains('config'))d.createObjectStore('config',{keyPath:'key'});if(!d.objectStoreNames.contains('planning')){const s=d.createObjectStore('planning',{keyPath:'id'});s.createIndex('date','date');s.createIndex('analystId','analystId');s.createIndex('status','status')}if(!d.objectStoreNames.contains('planComments')){const s=d.createObjectStore('planComments',{keyPath:'id'});s.createIndex('planId','planId');s.createIndex('analystId','analystId');s.createIndex('createdAt','createdAt')}if(!d.objectStoreNames.contains('dailySamples')){const s=d.createObjectStore('dailySamples',{keyPath:'id'});s.createIndex('date','date');s.createIndex('section','section');s.createIndex('status','status')}if(!d.objectStoreNames.contains('users')){const s=d.createObjectStore('users',{keyPath:'id'});s.createIndex('role','role');s.createIndex('analystId','analystId');s.createIndex('status','status')}if(!d.objectStoreNames.contains('controlChartDefs')){const s=d.createObjectStore('controlChartDefs',{keyPath:'id'});s.createIndex('section','section');s.createIndex('status','status')}if(!d.objectStoreNames.contains('controlChartRecords')){const s=d.createObjectStore('controlChartRecords',{keyPath:'id'});s.createIndex('chartId','chartId');s.createIndex('analystId','analystId');s.createIndex('createdAt','createdAt')}};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 function store(name,mode='readonly'){return db.transaction(name,mode).objectStore(name)}
 function getAll(name){return new Promise((resolve,reject)=>{const r=store(name).getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 function getOne(name,key){return new Promise((resolve,reject)=>{const r=store(name).get(key);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
@@ -55,32 +55,14 @@ function dateToday(){const d=new Date();return `${d.getFullYear()}-${String(d.ge
 function timeToMinutes(t){if(!t||!t.includes(':'))return 0;const [h,m]=t.split(':').map(Number);return h*60+m}
 function minutesToTime(m){m=((Number(m)||0)%1440+1440)%1440;return `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`}
 
-const FIREBASE_SYNC_STORES=['catalog','timeRules','compositeSteps','analysts','planning','planComments','controlChartEntries','controlChartConfig'];
+const FIREBASE_SYNC_STORES=['catalog','timeRules','compositeSteps','analysts','planning','planComments','controlChartDefs','controlChartRecords'];
+// 6.33.4: Cartas usan colecciones propias; el núcleo estable conserva sus colecciones originales.
+function cloudCollectionFor(storeName){return storeName}
+function cloudPayloadFor(storeName,payload){return sanitizeCloudObject(payload||{})}
+function cloudDocBelongsToStore(storeName,data={}){return true}
 const firebaseBridge={
   configured:false,ready:false,busy:false,db:null,mods:null,unsubs:[],lastError:null,lastSyncAt:null,
   app:null,auth:null,authMods:null,authReady:false,authUser:null,authUnsub:null,flushTimer:null,flushRequested:false
-}
-
-// V1.0.5.6.36: watchdog visual. Un estado SINCRONIZANDO no puede quedar pegado
-// indefinidamente por una respuesta perdida de Chrome/PWA.
-let syncVisualWatchdog=null;
-function armSyncVisualWatchdog(){
-  if(syncVisualWatchdog)clearTimeout(syncVisualWatchdog);
-  syncVisualWatchdog=setTimeout(async()=>{
-    syncVisualWatchdog=null;
-    try{
-      const out=await getAll('outbox');
-      const errors=out.filter(x=>x.status==='ERROR');
-      const pending=out.filter(x=>x.status==='PENDIENTE');
-      if(errors.length)setSyncStateVisualOnly('ERROR',`${errors.length} cambio(s) requieren revisión`);
-      else if(pending.length)setSyncStateVisualOnly('PENDIENTE',`${pending.length} cambio(s) por confirmar`);
-      else if(firebaseBridge.ready&&firebaseBridge.authUser){
-        firebaseBridge.busy=false;
-        setSyncStateVisualOnly('SINCRONIZADO','Sin cambios pendientes');
-      }
-      else if(!navigator.onLine)setSyncStateVisualOnly('LOCAL','Sin conexión · cambios protegidos');
-    }catch(e){console.warn('Watchdog de sincronización',e)}
-  },12000);
 }
 
 function monthStartISO(dateStr=dateToday()){
@@ -93,8 +75,6 @@ function firebaseConfigValid(){
   return !!(cfg.apiKey&&cfg.projectId&&cfg.appId);
 }
 function setSyncState(state,detail=''){
-  if(String(state).toUpperCase()==='SINCRONIZANDO')armSyncVisualWatchdog();
-  else if(syncVisualWatchdog){clearTimeout(syncVisualWatchdog);syncVisualWatchdog=null;}
   const dot=$('#syncDot'),label=$('#syncLabel'),desc=$('#syncDetail');
   if(dot)dot.className=`sync-dot ${state.toLowerCase()}`;
   if(label)label.textContent=state;
@@ -114,10 +94,18 @@ async function refreshSyncUI(){
     $('#syncConfigBadge').textContent=firebaseBridge.ready?'CONECTADO':'LOCAL';
     $('#syncConfigBadge').className=`sync-config-badge ${firebaseBridge.ready?'connected':''}`;
   }
-  // No permitir que un snapshot remoto pinte SINCRONIZADO si todavía hay cambios locales abiertos.
+  // 6.33.5: separar el estado del núcleo ERP de los pendientes exclusivos de Cartas.
+  // Un permiso faltante de Cartas no debe hacer creer que todo Firebase dejó de funcionar.
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy){
-    if(errors.length)setSyncStateVisualOnly('ERROR',`${errors.length} cambio(s) con error`);
-    else if(pending.length)setSyncStateVisualOnly('PENDIENTE',`${pending.length} cambio(s) por confirmar`);
+    const chartOpen=[...pending,...errors].filter(x=>x.entity==='controlChartDefs'||x.entity==='controlChartRecords');
+    const coreOpen=[...pending,...errors].filter(x=>x.entity!=='controlChartDefs'&&x.entity!=='controlChartRecords');
+    if(coreOpen.length){
+      const coreErrors=coreOpen.filter(x=>x.status==='ERROR');
+      setSyncStateVisualOnly(coreErrors.length?'ERROR':'PENDIENTE',`${coreOpen.length} cambio(s) del ERP sin confirmar`);
+    }else if(chartOpen.length){
+      const permission=chartOpen.some(x=>/permission|insufficient/i.test(String(x.lastError||'')));
+      setSyncStateVisualOnly('PARCIAL',permission?`ERP conectado · Cartas pendientes: ${chartOpen.length} (permisos Firebase)`:`ERP conectado · Cartas pendientes: ${chartOpen.length}`);
+    }
   }
 }
 function setSyncStateVisualOnly(state,detail=''){
@@ -126,21 +114,7 @@ function setSyncStateVisualOnly(state,detail=''){
   if(label)label.textContent=state;
   if(desc)desc.textContent=detail||'';
 }
-async function normalizeLegacyChartOutbox(){ /* 6.44: cartas vuelven a sincronización Firestore */ }
-
-async function migrateLocalControlChartsToCloud(){
-  if(!firebaseBridge.ready||!firebaseBridge.authUser)return;
-  const marker=await getOne('config','controlChartsCloudMigration644');
-  if(marker?.value)return;
-  const entries=await getAll('controlChartEntries');
-  const configs=await getAll('controlChartConfig');
-  for(const rec of entries)await queue('UPSERT','controlChartEntries',rec);
-  for(const cfg of configs)await queue('UPSERT','controlChartConfig',{...cfg,id:cfg.key});
-  await put('config',{key:'controlChartsCloudMigration644',value:true,migratedAt:nowISO(),entries:entries.length,configs:configs.length});
-  if(entries.length||configs.length)await flushOutbox(false);
-}
 async function initFirebaseBridge(){
-  await normalizeLegacyChartOutbox();
   firebaseBridge.configured=firebaseConfigValid();
   refreshAuthUI();
   if(!firebaseBridge.configured){
@@ -235,10 +209,13 @@ async function reconcilePlanningAgainstCloud(cloudIds){
 async function pullFirebaseStore(storeName){
   if(!firebaseBridge.ready||!FIREBASE_SYNC_STORES.includes(storeName))return 0;
   const {collection,getDocs}=firebaseBridge.mods;
-  const snap=await getDocs(collection(firebaseBridge.db,storeName));
+  const physical=cloudCollectionFor(storeName);
+  const snap=await getDocs(collection(firebaseBridge.db,physical));
   let count=0;
   for(const d of snap.docs){
-    await applyCloudRecord(storeName,d.id,d.data());
+    const data=d.data();
+    if(!cloudDocBelongsToStore(storeName,data))continue;
+    await applyCloudRecord(storeName,d.id,data);
     count++;
   }
   if(storeName==='planning'){
@@ -340,8 +317,8 @@ async function initialControlledMigration(){
       const rows=await getAll(storeName);
       for(const row of rows){
         if(!row?.id)continue;
-        const payload=sanitizeCloudObject({...row,_cloudUpdatedAt:nowISO()});
-        batch.set(doc(firebaseBridge.db,storeName,row.id),payload,{merge:true});
+        const payload=cloudPayloadFor(storeName,{...row,_cloudUpdatedAt:nowISO()});
+        batch.set(doc(firebaseBridge.db,cloudCollectionFor(storeName),row.id),payload,{merge:true});
         ops++;
         uploaded++;
         if(ops>=400)await commitBatch();
@@ -417,9 +394,9 @@ async function flushOutbox(showToast=true){
           continue;
         }
 
-        const payload=sanitizeCloudObject(item.payload||{});
+        const payload=cloudPayloadFor(item.entity,item.payload||{});
         const id=payload.id||item.recordId||item.id;
-        const ref=doc(firebaseBridge.db,item.entity,id);
+        const ref=doc(firebaseBridge.db,cloudCollectionFor(item.entity),id);
 
         if(item.type==='DELETE'){
           await deleteDoc(ref);
@@ -452,9 +429,9 @@ async function flushOutbox(showToast=true){
         // el documento y comprobar el resultado real para evitar falsos rojos.
         let confirmedDespiteClientError=false;
         try{
-          const payload=sanitizeCloudObject(item.payload||{});
+          const payload=cloudPayloadFor(item.entity,item.payload||{});
           const id=payload.id||item.recordId||item.id;
-          const ref=doc(firebaseBridge.db,item.entity,id);
+          const ref=doc(firebaseBridge.db,cloudCollectionFor(item.entity),id);
           const check=await getDoc(ref);
           if(item.type==='DELETE'){
             confirmedDespiteClientError=!check.exists();
@@ -509,6 +486,7 @@ async function flushOutbox(showToast=true){
   }finally{
     firebaseBridge.busy=false;
     await refreshSyncUI();
+    try{await renderControlChartEngine()}catch(e){console.warn('Estado visual de Cartas pendiente',e)}
     if(firebaseBridge.flushRequested)scheduleOutboxFlush(400);
   }
 }
@@ -520,7 +498,7 @@ function shouldAcceptCloud(local,remote){
 }
 async function applyCloudRecord(storeName,id,data){
   if(!FIREBASE_SYNC_STORES.includes(storeName))return;
-  const clean=storeName==='controlChartConfig'?{...data,key:data.key||id}:{...data,id:data.id||id};delete clean._cloudUpdatedAt;
+  const clean={...data,id:data.id||id};delete clean._cloudUpdatedAt;delete clean._erpEntity;
   // Si este equipo ya eliminó una planificación, una lectura atrasada de Firestore
   // no puede resucitarla mientras se confirma el DELETE remoto.
   if(storeName==='planning' && await isPlanningDeleted(clean.id)){
@@ -561,9 +539,12 @@ function startRealtimeSync(){
   const {collection,onSnapshot}=firebaseBridge.mods;
   FIREBASE_SYNC_STORES.forEach(storeName=>{
     let listenerReady=false;
-    const unsub=onSnapshot(collection(firebaseBridge.db,storeName),async snap=>{
+    const physical=cloudCollectionFor(storeName);
+    const unsub=onSnapshot(collection(firebaseBridge.db,physical),async snap=>{
       let changed=false, incomingComments=[];
       for(const ch of snap.docChanges()){
+        const chData=ch.doc.data()||{};
+        if(!cloudDocBelongsToStore(storeName,chData))continue;
         if(ch.type==='removed'){
           const pending=(await getAll('outbox')).some(x=>
             x.entity===storeName &&
@@ -574,7 +555,7 @@ function startRealtimeSync(){
           changed=true;
           continue;
         }
-        await applyCloudRecord(storeName,ch.doc.id,ch.doc.data());changed=true;
+        await applyCloudRecord(storeName,ch.doc.id,chData);changed=true;
         if(storeName==='planComments'&&listenerReady&&ch.type==='added')incomingComments.push({...ch.doc.data(),id:ch.doc.id});
       }
       // En planning no basta con procesar docChanges(): si este equipo estuvo
@@ -595,7 +576,6 @@ function startRealtimeSync(){
         if(active==='mi-jornada')await renderMyDay();
         else if(active==='planificador')await refreshPlanner();
         else if(active==='gestion')await renderManagementDashboard();
-        else if(active==='cartas-control')await renderSelectedReceptionChart();
         if(storeName==='planComments'){
           await refreshNotificationBadge();
           const newest=incomingComments.filter(c=>communicationVisibleComment(c)&&!isOwnCommunication(c)).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0];
@@ -604,7 +584,14 @@ function startRealtimeSync(){
       }
       listenerReady=true;
     },err=>{
-      firebaseBridge.lastError=String(err?.message||err);setSyncState('ERROR','Escucha en tiempo real interrumpida');
+      firebaseBridge.lastError=`${storeName}: ${String(err?.message||err)}`;
+      console.error('Listener Firestore',storeName,err);
+      if(storeName==='controlChartDefs'||storeName==='controlChartRecords'){
+        setSyncStateVisualOnly('PARCIAL',`ERP conectado · Cartas sin permiso en Firestore`);
+        refreshSyncUI();
+      }else{
+        setSyncState('ERROR',`Escucha interrumpida · ${storeName}`);
+      }
     });
     firebaseBridge.unsubs.push(unsub);
   });
@@ -2118,6 +2105,31 @@ async function renderUpcomingAgenda(analystId,selectedDate){
 }
 
 
+async function controlChartsAvailableForAssignment(date,analystId){
+  if(!date||!analystId)return [];
+  const [defs,plans,steps]=await Promise.all([getAll('controlChartDefs'),visiblePlanningRows(),getAll('compositeSteps')]);
+  const assigned=plans.filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO');
+  return defs.filter(d=>d.status==='ACTIVO'&&assigned.some(p=>{
+    if(p.section!==d.section)return false;
+    // Recepción habilita todas sus cartas al analista que tenga el bloque asignado.
+    if(d.section==='RECEPCION_MUESTRAS')return true;
+    const method=normalizeIdentityText(d.methodName||'');
+    if(!method)return true;
+    if(normalizeIdentityText(p.catalogName||'')===method)return true;
+    // AASS/Microbiología pueden vincular una carta a una subactividad del bloque compuesto.
+    return steps.some(st=>st.catalogId===p.catalogId&&normalizeIdentityText(st.name||'')===method);
+  })).sort((a,b)=>String(a.section).localeCompare(String(b.section))||String(a.name).localeCompare(String(b.name),'es'));
+}
+async function renderMyDayControlCharts(date,analystId){
+  const box=$('#myDayControlCharts');if(!box)return;
+  if(!analystId){box.classList.add('hidden');box.innerHTML='';return;}
+  const defs=await controlChartsAvailableForAssignment(date,analystId);
+  if(!defs.length){box.classList.add('hidden');box.innerHTML='';return;}
+  box.classList.remove('hidden');
+  box.innerHTML=`<div class="myday-chart-head"><div><span class="eyebrow">CARTAS DE CONTROL HABILITADAS</span><h3>Controles vinculados a la jornada</h3><p>Se muestran automáticamente según la actividad y el ensayo/método asignado al analista.</p></div><span class="myday-chart-count">${defs.length}</span></div><div class="myday-chart-grid">${defs.map(d=>`<article class="myday-chart-card" data-control-chart-id="${d.id}"><div><small>${escapeHtml(sectionMeta(d.section).label)}</small><b>${escapeHtml(d.name)}</b><span>${escapeHtml(d.methodName||'Método general')}</span></div><div class="myday-chart-ready">${(isDBO5Chart(d)||isPHChart(d))?'ABRIR CONTROL':'HABILITADA'}</div></article>`).join('')}</div>`;
+  $$('[data-control-chart-id]',box).forEach(el=>el.onclick=async()=>{const d=defs.find(x=>x.id===el.dataset.controlChartId);if(isDBO5Chart(d))await openDBO5Control(d,date,analystId);else if(isPHChart(d))await openPHControl(d,date,analystId);else toast('El formato técnico de esta carta se implementará en la siguiente fase');});
+}
+
 async function renderMyDay(){
   if(!$('#myDayCards'))return;
   // Preserva el estado visual de Mi Jornada durante sincronizaciones/re-renderizados.
@@ -2133,6 +2145,7 @@ async function renderMyDay(){
     _myDayUi.selectionStart=_activeEl.selectionStart;_myDayUi.selectionEnd=_activeEl.selectionEnd;
   }
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
+  await renderMyDayControlCharts(date,analystId);
   const plans=(await visiblePlanningRows()).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
   $('#myDayEmpty').classList.toggle('hidden',plans.length>0);
   const a=(await getAll('analysts')).find(x=>x.id===analystId);
@@ -3216,10 +3229,144 @@ async function analyzeData(render=true){const [cat,rules,steps,ana]=await Promis
   return findings}
 async function renderAudit(){let data=await getAll('audit');data.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));$('#auditEmpty').classList.toggle('hidden',data.length>0);$('#auditTableWrap').classList.toggle('hidden',data.length===0);$('#auditBody').innerHTML=data.map(x=>`<tr><td>${fmtDate(x.createdAt)}</td><td>${escapeHtml(x.user||'')}</td><td><b>${x.action}</b></td><td>${x.module}</td><td>${x.recordId}</td><td>${escapeHtml(x.detail||'')}</td></tr>`).join('')}
 async function loadConfig(){$('#cfgLab').value=(await getOne('config','labName'))?.value||'';$('#cfgUser').value=(await getOne('config','defaultUser'))?.value||'';$('#cfgDayHours').value=(await getOne('config','dayHours'))?.value||8}
+
+async function controlChartMethodOptions(section){
+  const catalog=(await getAll('catalog')).filter(x=>x.status==='ACTIVO'&&x.section===section);
+  const steps=await getAll('compositeSteps');
+  const rows=[];
+  for(const c of catalog){
+    rows.push({id:`CAT:${c.id}`,name:c.name,source:'CATALOGO',catalogId:c.id,label:c.family?`${c.name} · ${c.family}`:c.name});
+    if(['AASS','MICROBIOLOGIA','RECEPCION_MUESTRAS'].includes(section)){
+      for(const st of steps.filter(x=>x.catalogId===c.id)) rows.push({id:`STEP:${c.id}:${st.id}`,name:st.name,source:'SUBACTIVIDAD',catalogId:c.id,stepId:st.id,label:`${st.name} · ${c.name}`});
+    }
+  }
+  const seen=new Set();return rows.filter(x=>{const k=normalizeIdentityText(x.name);if(seen.has(k))return false;seen.add(k);return true});
+}
+async function refreshChartMethodOptions(selected=''){
+  const sel=$('#chartDefMethodSelect'), custom=$('#chartDefMethod');if(!sel||!custom)return;
+  const section=$('#chartDefSection').value, opts=await controlChartMethodOptions(section);
+  sel.innerHTML='<option value="">Seleccione ensayo / método configurado…</option>'+opts.map(x=>`<option value="${escapeHtml(x.id)}" data-name="${escapeHtml(x.name)}">${escapeHtml(x.label)}</option>`).join('')+'<option value="CUSTOM">Otro / método manual…</option>';
+  const match=opts.find(x=>normalizeIdentityText(x.name)===normalizeIdentityText(selected));
+  if(match){sel.value=match.id;custom.value=match.name;custom.closest('label').classList.add('hidden')}else if(selected){sel.value='CUSTOM';custom.value=selected;custom.closest('label').classList.remove('hidden')}else{custom.value='';custom.closest('label').classList.add('hidden')}
+}
+async function dedupeControlChartDefs(){
+  const all=(await getAll('controlChartDefs')).sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')));
+  const seen=new Map();let removed=0;
+  for(const d of all){const key=`${d.section}|${normalizeIdentityText(d.methodName)}`;if(!seen.has(key)){seen.set(key,d);continue}await del('controlChartDefs',d.id);await queue('DELETE','controlChartDefs',{id:d.id});removed++}
+  return removed;
+}
+async function renderControlChartEngine(){
+  const host=$('#controlChartDefsBody'), empty=$('#controlChartDefsEmpty');if(!host)return;
+  await dedupeControlChartDefs();
+  const defs=(await getAll('controlChartDefs')).sort((a,b)=>String(a.section).localeCompare(String(b.section))||String(a.name).localeCompare(String(b.name)));
+  host.innerHTML=defs.map(d=>`<tr><td><b>${escapeHtml(d.name)}</b><small class="table-sub">${escapeHtml(d.code||d.id)}</small></td><td>${escapeHtml(sectionMeta(d.section).label)}</td><td>${escapeHtml(d.methodName||'—')}</td><td><span class="badge">${escapeHtml(d.status||'ACTIVO')}</span></td><td><button class="btn secondary small" data-chart-edit="${d.id}">Editar</button> <button class="btn secondary small" data-chart-toggle="${d.id}">${d.status==='INACTIVO'?'Activar':'Desactivar'}</button></td></tr>`).join('');
+  if(empty)empty.classList.toggle('hidden',defs.length>0);$$('[data-chart-edit]').forEach(b=>b.onclick=()=>openControlChartDef(b.dataset.chartEdit));$$('[data-chart-toggle]').forEach(b=>b.onclick=()=>toggleControlChartDef(b.dataset.chartToggle));
+  const total=$('#chartEngineTotal');if(total)total.textContent=String(defs.length);const cloud=$('#chartEngineCloud');if(cloud){const ob=await getAll('outbox'),cc=ob.filter(x=>(x.entity==='controlChartDefs'||x.entity==='controlChartRecords')&&(x.status==='PENDIENTE'||x.status==='ERROR'));const ce=cc.filter(x=>x.status==='ERROR');cloud.textContent=ce.length?`ERROR · ${ce.length}`:cc.length?`PENDIENTE · ${cc.length}`:firebaseBridge.ready&&firebaseBridge.authUser?'FIRESTORE SINCRONIZADO':'ESPERANDO SESIÓN';cloud.title=ce[0]?.lastError||'';}
+}
+function fillChartSectionOptions(){const sel=$('#chartDefSection');if(!sel)return;sel.innerHTML=SECTIONS.map(x=>`<option value="${x.id}">${escapeHtml(x.label)}</option>`).join('')}
+async function openControlChartDef(id=''){
+  fillChartSectionOptions();const d=id?await getOne('controlChartDefs',id):null;
+  $('#chartDefId').value=d?.id||'';$('#chartDefName').value=d?.name||'';$('#chartDefSection').value=d?.section||'RECEPCION_MUESTRAS';$('#chartDefStatus').value=d?.status||'ACTIVO';$('#chartDefNotes').value=d?.notes||'';
+  await refreshChartMethodOptions(d?.methodName||'');
+  const dlg=$('#controlChartDefDialog');if(!dlg)throw new Error('No se encontró el formulario de Carta de Control');if(typeof dlg.showModal==='function'){if(!dlg.open)dlg.showModal()}else{dlg.setAttribute('open','');dlg.style.display='block'}
+}
+async function saveControlChartDef(ev){
+  ev.preventDefault();if(currentSessionUser?.role!=='JEFE')return toast('Solo JEFE puede configurar cartas de control');
+  const id=$('#chartDefId').value,name=$('#chartDefName').value.trim(),section=$('#chartDefSection').value,methodName=$('#chartDefMethod').value.trim();if(!name||!section||!methodName)return toast('Complete carta, actividad/área y ensayo/método');
+  const all=await getAll('controlChartDefs'),existing=id?all.find(x=>x.id===id):null,duplicate=all.find(x=>x.id!==id&&x.section===section&&normalizeIdentityText(x.methodName)===normalizeIdentityText(methodName));if(duplicate)return toast('Esta carta ya existe. Use Editar; no se creará un duplicado.');
+  const rec={id:id||uid('CCD'),code:existing?.code||`CC-${String(all.length+1).padStart(4,'0')}`,name,section,methodName,status:$('#chartDefStatus').value,notes:$('#chartDefNotes').value.trim(),accessRule:'ACTIVIDAD_ASIGNADA',schemaVersion:2,createdAt:existing?.createdAt||nowISO(),updatedAt:nowISO()};
+  await put('controlChartDefs',rec);await queue(id?'UPDATE':'CREATE','controlChartDefs',rec);await audit(id?'EDITAR':'CREAR','CARTAS_CONTROL_CONFIG',rec.code,`${sectionMeta(section).label} · ${methodName}`);$('#controlChartDefDialog').close();toast(id?'Carta actualizada':'Carta creada y enviada a Firebase');await renderControlChartEngine();
+}
+async function toggleControlChartDef(id){
+  if(currentSessionUser?.role!=='JEFE')return toast('Solo JEFE puede configurar cartas de control');
+  const d=await getOne('controlChartDefs',id);if(!d)return;d.status=d.status==='INACTIVO'?'ACTIVO':'INACTIVO';d.updatedAt=nowISO();await put('controlChartDefs',d);await queue('UPDATE','controlChartDefs',d);await audit('CAMBIAR_ESTADO','CARTAS_CONTROL_CONFIG',d.code,d.status);await renderControlChartEngine();
+}
 async function saveConfig(){const lab=$('#cfgLab').value.trim(),user=$('#cfgUser').value.trim(),dayHours=Number($('#cfgDayHours').value||8);await put('config',{key:'labName',value:lab});await put('config',{key:'defaultUser',value:user});await put('config',{key:'dayHours',value:dayHours});await audit('CONFIGURAR','SISTEMA','CONFIG','Configuración general actualizada');toast('Configuración guardada');await refreshAll()}
-async function backup(){const data={app:'ERP_PLANIFICACION_NEXTGEN',version:APP_VERSION,exportedAt:nowISO(),catalog:await getAll('catalog'),timeRules:await getAll('timeRules'),compositeSteps:await getAll('compositeSteps'),analysts:await getAll('analysts'),audit:await getAll('audit'),outbox:await getAll('outbox'),config:await getAll('config'),planning:await getAll('planning'),planComments:await getAll('planComments'),controlChartEntries:await getAll('controlChartEntries'),controlChartConfig:await getAll('controlChartConfig')};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`RESPALDO_ERP_PLANIFICACION_${APP_VERSION}_${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);await audit('EXPORTAR','SISTEMA','BACKUP','Respaldo general exportado');toast('Respaldo generado');await refreshAll()}
-async function resetDB(){if(!confirm('Esto eliminará catálogo, reglas, analistas y trazabilidad locales de esta versión. ¿Continuar?'))return;await Promise.all(['catalog','timeRules','compositeSteps','analysts','audit','outbox','config','planning','planComments','controlChartEntries','controlChartConfig'].map(clearStore));toast('Base local reiniciada');await loadConfig();await refreshAll()}
-async function refreshAll(){await Promise.all([renderDashboard(),renderCatalog(),renderAnalysts(),renderAudit(),analyzeData(true),renderMyDayAnalysts(),renderManagementFilters(),refreshNotificationBadge()]);if($('#planDate'))await refreshPlanner();if($('#myDayDate'))await renderMyDay()}
+
+function isDBO5Chart(d){return !!d && (normalizeIdentityText(d.methodName||'').includes('dbo5')||normalizeIdentityText(d.name||'').includes('dbo5'));}
+function isPHChart(d){if(!d)return false;const n=normalizeIdentityText(d.name||''),m=normalizeIdentityText(d.methodName||'');return n.includes('control de ph')||n.includes('carta de control de ph')||m==='ph'||m.includes('phmetro')||m.includes('ph metro');}
+function phRecords(chartId){return getAll('controlChartRecords').then(rows=>rows.filter(r=>r.chartId===chartId&&r.controlType==='PH_MULTIPUNTO').sort((a,b)=>String(a.measuredAt).localeCompare(String(b.measuredAt))));}
+function phPoint(reading,nominal){const r=Number(reading),n=Number(nominal),error=Math.abs(r-n);return {nominal:n,reading:r,error,ok:error<=0.10};}
+async function openPHControl(def,date,analystId){const dlg=$('#phControlDialog');if(!dlg)return toast('Formato pH no disponible');$('#phChartId').value=def.id;$('#phAnalystId').value=analystId||'';$('#phInputDate').value=date||dateToday();$('#phTime').value=new Date().toTimeString().slice(0,5);['4','7','10'].forEach(x=>{$('#phRead'+x).value=''});$('#phNotes').value='';$('#phPreview').innerHTML='';await renderPH(def.id);if(typeof dlg.showModal==='function')dlg.showModal();else dlg.setAttribute('open','');}
+function previewPH(){const vals=[['4',4],['7',7],['10',10]],box=$('#phPreview');if(!box)return;const pts=vals.map(([id,n])=>{const el=$('#phRead'+id),v=Number(el?.value);return el?.value!==''&&Number.isFinite(v)?phPoint(v,n):null});if(pts.every(x=>!x)){box.innerHTML='';return}box.innerHTML=pts.map((x,i)=>x?`<div class="dbo5-result ${x.ok?'ok':'bad'}"><b>pH ${[4,7,10][i].toFixed(2)}: ${x.reading.toFixed(2)}</b><br>Error absoluto ${x.error.toFixed(2)} pH · criterio ±0.10 · ${x.ok?'CUMPLE':'NO CUMPLE'}</div>`:`<div class="dbo5-result"><b>pH ${[4,7,10][i].toFixed(2)}</b><br>Pendiente de lectura</div>`).join('');}
+async function savePHControl(e){e.preventDefault();const chartId=$('#phChartId').value,analystId=$('#phAnalystId').value,date=$('#phInputDate').value,time=$('#phTime').value;const p4=phPoint($('#phRead4').value,4),p7=phPoint($('#phRead7').value,7),p10=phPoint($('#phRead10').value,10);if([p4,p7,p10].some(p=>!Number.isFinite(p.reading)))return toast('Complete las tres lecturas de pH');const analysts=await getAll('analysts'),a=analysts.find(x=>x.id===analystId),existing=await phRecords(chartId);const series={4:[...existing.map(r=>Number(r.p4?.reading)),p4.reading],7:[...existing.map(r=>Number(r.p7?.reading)),p7.reading],10:[...existing.map(r=>Number(r.p10?.reading)),p10.reading]};const w={4:dbo5Westgard(series[4]),7:dbo5Westgard(series[7]),10:dbo5Westgard(series[10])};const global=p4.ok&&p7.ok&&p10.ok?'CUMPLE':'NO CUMPLE',stat=existing.length+1<10?'ESTABLECIMIENTO':Object.values(w).some(x=>x.state==='FUERA DE CONTROL')?'FUERA DE CONTROL':Object.values(w).some(x=>x.state==='ADVERTENCIA')?'ADVERTENCIA':'EN CONTROL';const rules=Object.entries(w).flatMap(([k,v])=>(v.rules||[]).map(x=>`pH${k}:${x}`));const rec={id:uid('CCR'),chartId,controlType:'PH_MULTIPUNTO',section:'RECEPCION_MUESTRAS',methodName:'pH',equipment:'EI-345',analystId,analystName:a?.name||firebaseBridge?.authUser?.email||'Usuario',measuredAt:`${date}T${time}:00`,p4,p7,p10,criterion:{type:'ABS_ERROR',limit:0.10,unit:'pH'},overallResult:global,statisticalState:stat,statisticalRules:rules,notes:$('#phNotes').value.trim(),schemaVersion:1,createdAt:nowISO(),updatedAt:nowISO()};await put('controlChartRecords',rec);await queue('CREATE','controlChartRecords',rec);await audit('REGISTRAR','CARTA_CONTROL_PH',rec.id,`${global} · 4=${p4.reading.toFixed(2)} · 7=${p7.reading.toFixed(2)} · 10=${p10.reading.toFixed(2)}`);toast('Control pH guardado y enviado a Firebase');['4','7','10'].forEach(x=>{$('#phRead'+x).value=''});$('#phNotes').value='';$('#phPreview').innerHTML='';await renderPH(chartId);}
+async function renderPH(chartId){const rows=await phRecords(chartId),body=$('#phHistoryBody');if(!body)return;$('#phHistoryCount').textContent=`${rows.length} registros`;const keys=[['p4','pH 4.00'],['p7','pH 7.00'],['p10','pH 10.00']],stats=$('#phStats');stats.innerHTML=keys.map(([k,label])=>{const vals=rows.map(r=>Number(r[k]?.reading)).filter(Number.isFinite),w=dbo5Westgard(vals);return `<div><small>${label} media ± s</small><b>${vals.length?mean(vals).toFixed(3)+' ± '+sd(vals).toFixed(3):'—'}</b><span>${rows.length<10?'FASE DE ESTABLECIMIENTO':w.state}</span></div>`}).join('');body.innerHTML=rows.slice().reverse().map(r=>`<tr><td>${escapeHtml(String(r.measuredAt||'').replace('T',' ').slice(0,16))}</td><td>${escapeHtml(r.analystName||'—')}</td><td>${r.p4.reading.toFixed(2)}</td><td>${r.p4.error.toFixed(2)}</td><td>${r.p7.reading.toFixed(2)}</td><td>${r.p7.error.toFixed(2)}</td><td>${r.p10.reading.toFixed(2)}</td><td>${r.p10.error.toFixed(2)}</td><td><span class="badge">${r.overallResult}</span></td><td>${escapeHtml(r.statisticalState||'ESTABLECIMIENTO')}</td></tr>`).join('')||'<tr><td colspan="10">Sin registros todavía.</td></tr>';const ai=$('#phAi');if(!rows.length)ai.innerHTML='<b>IA:</b> Aún no existen registros de pH. El primer control iniciará la trazabilidad multipunto.';else{const last=rows.at(-1),bad=[['4.00',last.p4],['7.00',last.p7],['10.00',last.p10]].filter(x=>!x[1].ok).map(x=>x[0]);ai.innerHTML=`<b>IA · Diagnóstico:</b> El último control multipunto <b>${last.overallResult}</b>. ${bad.length?'Fuera de criterio en pH '+bad.join(', ')+'.':'Los tres niveles cumplen ±0.10 pH.'} ${rows.length<10?`Hay ${rows.length} de 10 registros mínimos; cada nivel permanece en fase de establecimiento.`:`Estado estadístico global: <b>${last.statisticalState}</b>.`} La IA no modifica el criterio de aceptación.`;}}
+function dbo5TempFactor(v){if(v>=16&&v<18)return .21;if(v>=18&&v<21)return .13;if(v>=21&&v<=24)return .11;return null;}
+function dbo5HumFactor(v){if(v>=20&&v<65)return 8.1;if(v>=65&&v<=90)return 7.1;return null;}
+function mean(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0} function sd(a){if(a.length<2)return 0;const m=mean(a);return Math.sqrt(a.reduce((q,x)=>q+(x-m)**2,0)/(a.length-1));}
+function dbo5Westgard(vals){if(vals.length<10)return {state:'ESTABLECIMIENTO',rules:[]};const base=vals.slice(0,-1).length>=10?vals.slice(0,-1):vals, m=mean(base),s=sd(base);if(!s)return {state:'SIN VARIACIÓN',rules:[]};const z=vals.map(x=>(x-m)/s),r=[];const last=z.at(-1);if(Math.abs(last)>=3)r.push('1_3s');else if(Math.abs(last)>=2)r.push('1_2s');if(z.length>=2&&Math.abs(z.at(-1))>=2&&Math.abs(z.at(-2))>=2&&Math.sign(z.at(-1))===Math.sign(z.at(-2)))r.push('2_2s');if(z.length>=2&&Math.abs(z.at(-1)-z.at(-2))>=4)r.push('R_4s');if(z.length>=7){const q=z.slice(-7);if(q.every(x=>x>0)||q.every(x=>x<0))r.push('7x');const raw=vals.slice(-7);if(raw.every((x,i)=>!i||x>raw[i-1])||raw.every((x,i)=>!i||x<raw[i-1]))r.push('7T');}return {state:r.some(x=>x!=='1_2s')?'FUERA DE CONTROL':r.length?'ADVERTENCIA':'EN CONTROL',rules:r,m,s};}
+function dbo5Calc(t,h){const tf=dbo5TempFactor(t),hf=dbo5HumFactor(h);if(tf===null||hf===null)return {valid:false,tf,hf};const tc=t+tf,hc=h+hf;return {valid:true,tf,hf,tc,hc,tempOk:tc>=17&&tc<=23,humOk:hc>=20&&hc<=80};}
+async function dbo5Records(chartId){return (await getAll('controlChartRecords')).filter(r=>r.chartId===chartId&&r.controlType==='DBO5_AMBIENTAL').sort((a,b)=>String(a.measuredAt).localeCompare(String(b.measuredAt)));}
+async function openDBO5Control(def,date,analystId){const dlg=$('#dbo5ControlDialog');if(!dlg)return toast('Formato DBO5 no disponible');$('#dbo5ChartId').value=def.id;$('#dbo5AnalystId').value=analystId||'';$('#dbo5Date').value=date||dateToday();$('#dbo5InputDate').value=date||dateToday();$('#dbo5Time').value=new Date().toTimeString().slice(0,5);$('#dbo5TempRaw').value='';$('#dbo5HumRaw').value='';$('#dbo5Notes').value='';await renderDBO5(def.id);if(typeof dlg.showModal==='function')dlg.showModal();else dlg.setAttribute('open','');}
+async function renderDBO5(chartId){const rows=await dbo5Records(chartId),body=$('#dbo5HistoryBody');if(!body)return;const tv=rows.map(r=>Number(r.tempCorrected)),hv=rows.map(r=>Number(r.humCorrected)),tw=dbo5Westgard(tv),hw=dbo5Westgard(hv);$('#dbo5HistoryCount').textContent=`${rows.length} registros`;const stats=$('#dbo5Stats');if(rows.length<10)stats.innerHTML=`<div><small>Estado estadístico</small><b>FASE DE ESTABLECIMIENTO</b></div><div><small>Datos requeridos</small><b>${rows.length}/10</b></div><div><small>Temperatura</small><b>—</b></div><div><small>Humedad</small><b>—</b></div>`;else stats.innerHTML=`<div><small>Temperatura media ± s</small><b>${mean(tv).toFixed(2)} ± ${sd(tv).toFixed(2)} °C</b></div><div><small>Estado T</small><b>${tw.state}</b></div><div><small>Humedad media ± s</small><b>${mean(hv).toFixed(2)} ± ${sd(hv).toFixed(2)} %</b></div><div><small>Estado HR</small><b>${hw.state}</b></div>`;body.innerHTML=rows.slice().reverse().map(r=>`<tr><td>${escapeHtml(r.measuredAt?.replace('T',' ').slice(0,16)||'')}</td><td>${escapeHtml(r.analystName||r.analystId||'—')}</td><td>${Number(r.tempRaw).toFixed(2)}</td><td>+${Number(r.tempFactor).toFixed(2)}</td><td>${Number(r.tempCorrected).toFixed(2)}</td><td>${Number(r.humRaw).toFixed(2)}</td><td>+${Number(r.humFactor).toFixed(1)}</td><td>${Number(r.humCorrected).toFixed(1)}</td><td><span class="badge">${r.environmentalResult}</span></td><td>${escapeHtml(r.statisticalState||'ESTABLECIMIENTO')}</td></tr>`).join('')||'<tr><td colspan="10">Sin registros todavía.</td></tr>';const ai=$('#dbo5Ai');if(!rows.length)ai.innerHTML='<b>IA:</b> Aún no existen registros. El primer control establecerá la trazabilidad ambiental.';else{const last=rows.at(-1),alerts=[...(tw.rules||[]).map(x=>'T '+x),...(hw.rules||[]).map(x=>'HR '+x)];ai.innerHTML=`<b>IA · Diagnóstico:</b> El último control ambiental <b>${last.environmentalResult}</b>. ${rows.length<10?`Hay ${rows.length} de 10 registros mínimos; la carta permanece en fase de establecimiento y no se declara control estadístico.`:`Temperatura: ${tw.state}. Humedad: ${hw.state}.${alerts.length?' Reglas detectadas: '+alerts.join(', ')+'.':' No se detectan reglas de alarma.'}`} La IA no modifica los criterios de aceptación.`;}}
+function previewDBO5(){const t=Number($('#dbo5TempRaw')?.value),h=Number($('#dbo5HumRaw')?.value),box=$('#dbo5Preview');if(!box||!Number.isFinite(t)||!Number.isFinite(h))return;const c=dbo5Calc(t,h);if(!c.valid){box.innerHTML=`<div class="dbo5-result bad"><b>Lectura fuera de tabla de corrección</b><br>No se inventará un factor. Temperatura válida para corrección: 16–24 °C; HR: 20–90 %.</div>`;return;}box.innerHTML=`<div class="dbo5-result ${c.tempOk?'ok':'bad'}"><b>Temperatura corregida: ${c.tc.toFixed(2)} °C</b><br>${t.toFixed(2)} + ${c.tf.toFixed(2)} · criterio 17–23 °C · ${c.tempOk?'CUMPLE':'NO CUMPLE'}</div><div class="dbo5-result ${c.humOk?'ok':'bad'}"><b>Humedad corregida: ${c.hc.toFixed(1)} %HR</b><br>${h.toFixed(1)} + ${c.hf.toFixed(1)} · criterio 20–80 % · ${c.humOk?'CUMPLE':'NO CUMPLE'}</div>`;}
+async function saveDBO5Control(e){e.preventDefault();const chartId=$('#dbo5ChartId').value,analystId=$('#dbo5AnalystId').value,t=Number($('#dbo5TempRaw').value),h=Number($('#dbo5HumRaw').value),c=dbo5Calc(t,h);if(!c.valid)return toast('Lectura fuera de los rangos configurados de corrección');const analysts=await getAll('analysts'),a=analysts.find(x=>x.id===analystId),date=$('#dbo5InputDate').value,time=$('#dbo5Time').value,existing=await dbo5Records(chartId),tmpT=[...existing.map(r=>Number(r.tempCorrected)),c.tc],tmpH=[...existing.map(r=>Number(r.humCorrected)),c.hc],tw=dbo5Westgard(tmpT),hw=dbo5Westgard(tmpH),env=c.tempOk&&c.humOk?'CUMPLE':'NO CUMPLE',stat=existing.length+1<10?'ESTABLECIMIENTO':(tw.state==='FUERA DE CONTROL'||hw.state==='FUERA DE CONTROL'?'FUERA DE CONTROL':tw.state==='ADVERTENCIA'||hw.state==='ADVERTENCIA'?'ADVERTENCIA':'EN CONTROL');const rec={id:uid('CCR'),chartId,controlType:'DBO5_AMBIENTAL',section:'RECEPCION_MUESTRAS',methodName:'DBO5',area:'Instrumental',thermohygrometer:'EI-270',dataLogger:'PF-09',analystId,analystName:a?.name||firebaseBridge?.authUser?.email||'Usuario',measuredAt:`${date}T${time}:00`,tempRaw:t,tempFactor:c.tf,tempCorrected:c.tc,humRaw:h,humFactor:c.hf,humCorrected:c.hc,tempCriterion:{min:17,max:23},humCriterion:{min:20,max:80},environmentalResult:env,statisticalState:stat,statisticalRules:[...(tw.rules||[]).map(x=>'T:'+x),...(hw.rules||[]).map(x=>'HR:'+x)],notes:$('#dbo5Notes').value.trim(),schemaVersion:1,createdAt:nowISO(),updatedAt:nowISO()};await put('controlChartRecords',rec);await queue('CREATE','controlChartRecords',rec);await audit('REGISTRAR','CARTA_CONTROL_DBO5',rec.id,`${env} · T ${c.tc.toFixed(2)} °C · HR ${c.hc.toFixed(1)} %`);toast('Control DBO5 guardado y enviado a Firebase');$('#dbo5TempRaw').value='';$('#dbo5HumRaw').value='';$('#dbo5Notes').value='';$('#dbo5Preview').innerHTML='';await renderDBO5(chartId);}
+
+
+function ccMonthNow(){return new Date().toISOString().slice(0,7)}
+function ccFmtDate(v){if(!v)return '—';const d=new Date(v);return Number.isNaN(d.getTime())?String(v).slice(0,16):d.toLocaleString('es-EC',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}
+function ccRuleDetails(vals, labels){
+  if(vals.length<10)return vals.map((v,i)=>({i,label:labels[i],rules:[]}));
+  const out=[];
+  for(let i=0;i<vals.length;i++){
+    const prefix=vals.slice(0,i+1), w=dbo5Westgard(prefix);
+    out.push({i,label:labels[i],rules:w.rules||[]});
+  }
+  return out;
+}
+function ccSvgLine(rows,key,unit,technicalMin,technicalMax){
+  if(!rows.length)return '<div class="cc-no-data">Sin datos</div>';
+  const vals=rows.map(r=>Number(r[key])).filter(Number.isFinite),m=mean(vals),s=sd(vals);
+  const lines=[{v:m,t:'Media'},{v:m+s,t:'+1s'},{v:m-s,t:'−1s'},{v:m+2*s,t:'+2s'},{v:m-2*s,t:'−2s'},{v:m+3*s,t:'+3s'},{v:m-3*s,t:'−3s'},{v:technicalMin,t:'Límite mín.'},{v:technicalMax,t:'Límite máx.'}];
+  const all=[...vals,...lines.map(x=>x.v)],lo=Math.min(...all),hi=Math.max(...all),pad=Math.max((hi-lo)*.08,.2),min=lo-pad,max=hi+pad;
+  const W=900,H=330,L=54,R=18,T=18,B=50,px=i=>L+(W-L-R)*(rows.length===1?.5:i/(rows.length-1)),py=v=>T+(H-T-B)*(1-(v-min)/(max-min||1));
+  const grid=[0,.25,.5,.75,1].map(q=>{const v=min+(max-min)*q,y=py(v);return `<line x1="${L}" y1="${y}" x2="${W-R}" y2="${y}" class="cc-gridline"/><text x="${L-8}" y="${y+4}" text-anchor="end" class="cc-axis">${v.toFixed(unit==='°C'?1:0)}</text>`}).join('');
+  const ref=lines.map((x,i)=>`<line x1="${L}" y1="${py(x.v)}" x2="${W-R}" y2="${py(x.v)}" class="cc-ref cc-ref-${i<7?'stat':'tech'}"/><text x="${W-R-4}" y="${py(x.v)-3}" text-anchor="end" class="cc-ref-label">${x.t}</text>`).join('');
+  const pts=rows.map((r,i)=>`${px(i)},${py(Number(r[key]))}`).join(' ');
+  const circles=rows.map((r,i)=>`<circle cx="${px(i)}" cy="${py(Number(r[key]))}" r="5" class="cc-point"><title>${ccFmtDate(r.measuredAt)} · ${Number(r[key]).toFixed(2)} ${unit}</title></circle>`).join('');
+  const labels=rows.map((r,i)=>i===0||i===rows.length-1||rows.length<=8?`<text x="${px(i)}" y="${H-22}" text-anchor="middle" class="cc-axis">${String(r.measuredAt||'').slice(8,10)}</text>`:'').join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tendencia ${unit}">${grid}${ref}<polyline points="${pts}" class="cc-series"/>${circles}${labels}<text x="${W/2}" y="${H-5}" text-anchor="middle" class="cc-axis">Día del mes</text></svg>`;
+}
+async function renderControlChartsManagement(){
+  if(currentSessionUser?.role!=='JEFE')return;
+  const defs=(await getAll('controlChartDefs')).filter(d=>d.status==='ACTIVO'&&(isDBO5Chart(d)||isPHChart(d)));
+  const sel=$('#ccChartSelect');if(!sel)return;
+  const prior=sel.value;sel.innerHTML=defs.map(d=>`<option value="${d.id}">${escapeHtml(d.name)} · ${escapeHtml(d.methodName||'')}</option>`).join('');if(prior&&defs.some(d=>d.id===prior))sel.value=prior;
+  if(!$('#ccMonth').value)$('#ccMonth').value=ccMonthNow();
+  if(!defs.length){$('#ccEmpty').classList.remove('hidden');$('#ccDashboard').classList.add('hidden');return;}
+  const def=defs.find(d=>d.id===(sel.value||defs[0].id))||defs[0],chartId=def.id,month=$('#ccMonth').value||ccMonthNow();
+  if(isPHChart(def))return renderPHManagement(def,month);
+  $('#ccChart3Card').classList.add('hidden');$('#ccChart1Title').textContent='Temperatura corregida';$('#ccChart1Desc').textContent='Media, ±1s, ±2s, ±3s y límites técnicos 17–23 °C.';$('#ccChart2Title').textContent='Humedad corregida';$('#ccChart2Desc').textContent='Media, ±1s, ±2s, ±3s y límites técnicos 20–80 %HR.';
+  const all=await dbo5Records(chartId),rows=all.filter(r=>String(r.measuredAt||'').startsWith(month));
+  $('#ccCount').textContent=`${rows.length} registros · ${month}`;$('#ccHistoryHead').innerHTML='<tr><th>Fecha/hora</th><th>Responsable</th><th>T corregida</th><th>HR corregida</th><th>Ambiental</th><th>Estadístico</th><th>Reglas</th><th>Detalle</th></tr>';
+  if(!rows.length){$('#ccEmpty').classList.remove('hidden');$('#ccDashboard').classList.add('hidden');return;}$('#ccEmpty').classList.add('hidden');$('#ccDashboard').classList.remove('hidden');
+  const tv=rows.map(r=>Number(r.tempCorrected)),hv=rows.map(r=>Number(r.humCorrected)),tw=dbo5Westgard(tv),hw=dbo5Westgard(hv),comp=rows.filter(r=>r.environmentalResult==='CUMPLE').length,pct=100*comp/rows.length;
+  const prevDate=new Date(month+'-01T00:00:00');prevDate.setMonth(prevDate.getMonth()-1);const pm=`${prevDate.getFullYear()}-${String(prevDate.getMonth()+1).padStart(2,'0')}`,prev=all.filter(r=>String(r.measuredAt||'').startsWith(pm));const prevPct=prev.length?100*prev.filter(r=>r.environmentalResult==='CUMPLE').length/prev.length:null;
+  $('#ccKpis').innerHTML=`<div><small>Controles</small><b>${rows.length}</b><span>${month}</span></div><div><small>Cumplimiento ambiental</small><b>${pct.toFixed(1)}%</b><span>${comp}/${rows.length} cumplen</span></div><div><small>Temperatura media ± s</small><b>${mean(tv).toFixed(2)} ± ${sd(tv).toFixed(2)} °C</b><span>mín ${Math.min(...tv).toFixed(2)} · máx ${Math.max(...tv).toFixed(2)}</span></div><div><small>Humedad media ± s</small><b>${mean(hv).toFixed(1)} ± ${sd(hv).toFixed(1)} %</b><span>mín ${Math.min(...hv).toFixed(1)} · máx ${Math.max(...hv).toFixed(1)}</span></div>`;
+  $('#ccTempState').textContent=tw.state;$('#ccHumState').textContent=hw.state;$('#ccTempChart').innerHTML=ccSvgLine(rows,'tempCorrected','°C',17,23);$('#ccHumChart').innerHTML=ccSvgLine(rows,'humCorrected','%HR',20,80);
+  const tr=ccRuleDetails(tv,rows.map(r=>r.measuredAt)),hr=ccRuleDetails(hv,rows.map(r=>r.measuredAt));const events=[];tr.forEach(x=>x.rules.forEach(rule=>events.push({kind:'Temperatura',rule,date:x.label})));hr.forEach(x=>x.rules.forEach(rule=>events.push({kind:'Humedad',rule,date:x.label})));
+  $('#ccRules').innerHTML=events.length?events.slice().reverse().map(e=>`<div class="cc-rule"><b>${escapeHtml(e.rule)}</b><span>${e.kind} · ${ccFmtDate(e.date)}</span></div>`).join(''):`<div class="cc-ok">No se detectan reglas de alarma en el período.</div>`;
+  const trend=prevPct===null?'Sin período anterior comparable':`${pct>=prevPct?'Mejora/estable':'Disminución'} frente a ${pm}: ${prevPct.toFixed(1)}% → ${pct.toFixed(1)}%`;
+  $('#ccAi').innerHTML=`<b>Diagnóstico mensual:</b> ${pct===100?'Todos los controles cumplen los límites ambientales definidos.':`${rows.length-comp} control(es) no cumplen los límites ambientales.`} ${rows.length<10?'El período permanece en FASE DE ESTABLECIMIENTO para interpretación estadística.':`Temperatura: <b>${tw.state}</b>. Humedad: <b>${hw.state}</b>.`} ${events.length?`Se identificaron <b>${events.length}</b> activaciones de reglas; revise los puntos señalados y su trazabilidad.`:'No se observan activaciones de reglas en los puntos evaluados.'}<br><br><b>Tendencia:</b> ${trend}.<br><small>La IA es asistiva: los criterios 17–23 °C y 20–80 %HR y las reglas configuradas no se modifican automáticamente.</small>`;
+  $('#ccHistoryBody').innerHTML=rows.slice().reverse().map(r=>`<tr><td>${ccFmtDate(r.measuredAt)}</td><td>${escapeHtml(r.analystName||'—')}</td><td>${Number(r.tempCorrected).toFixed(2)} °C</td><td>${Number(r.humCorrected).toFixed(1)} %</td><td><span class="badge">${r.environmentalResult}</span></td><td>${escapeHtml(r.statisticalState||'—')}</td><td>${escapeHtml((r.statisticalRules||[]).join(', ')||'—')}</td><td><button class="btn secondary compact" type="button" onclick="showCcPoint('${r.id}')">Ver</button></td></tr>`).join('');
+}
+function phSvgRows(rows,key){return rows.map(r=>({...r,phValue:Number(r[key]?.reading)}));}
+async function renderPHManagement(def,month){
+  $('#ccChart3Card').classList.remove('hidden');$('#ccChart1Title').textContent='Control pH 4.00';$('#ccChart1Desc').textContent='Lectura, media, ±1s, ±2s, ±3s y criterio técnico 3.90–4.10.';$('#ccChart2Title').textContent='Control pH 7.00';$('#ccChart2Desc').textContent='Lectura, media, ±1s, ±2s, ±3s y criterio técnico 6.90–7.10.';$('#ccChart3Title').textContent='Control pH 10.00';$('#ccChart3Desc').textContent='Lectura, media, ±1s, ±2s, ±3s y criterio técnico 9.90–10.10.';
+  const all=await phRecords(def.id),rows=all.filter(r=>String(r.measuredAt||'').startsWith(month));$('#ccCount').textContent=`${rows.length} registros · ${month}`;$('#ccHistoryHead').innerHTML='<tr><th>Fecha/hora</th><th>Responsable</th><th>pH 4</th><th>pH 7</th><th>pH 10</th><th>Resultado</th><th>Estadístico</th><th>Detalle</th></tr>';
+  if(!rows.length){$('#ccEmpty').classList.remove('hidden');$('#ccDashboard').classList.add('hidden');return;}$('#ccEmpty').classList.add('hidden');$('#ccDashboard').classList.remove('hidden');
+  const vals=k=>rows.map(r=>Number(r[k]?.reading)),v4=vals('p4'),v7=vals('p7'),v10=vals('p10'),w4=dbo5Westgard(v4),w7=dbo5Westgard(v7),w10=dbo5Westgard(v10),comp=rows.filter(r=>r.overallResult==='CUMPLE').length,pct=100*comp/rows.length;
+  $('#ccKpis').innerHTML=`<div><small>Controles</small><b>${rows.length}</b><span>${month}</span></div><div><small>Cumplimiento multipunto</small><b>${pct.toFixed(1)}%</b><span>${comp}/${rows.length} cumplen los 3 niveles</span></div><div><small>Error máximo observado</small><b>${Math.max(...rows.flatMap(r=>[r.p4.error,r.p7.error,r.p10.error])).toFixed(3)} pH</b><span>criterio ≤ 0.10 pH</span></div><div><small>Equipo</small><b>EI-345</b><span>pH 4.00 · 7.00 · 10.00</span></div>`;
+  $('#ccTempState').textContent=rows.length<10?'ESTABLECIMIENTO':w4.state;$('#ccHumState').textContent=rows.length<10?'ESTABLECIMIENTO':w7.state;$('#ccChart3State').textContent=rows.length<10?'ESTABLECIMIENTO':w10.state;$('#ccTempChart').innerHTML=ccSvgLine(phSvgRows(rows,'p4'),'phValue','pH',3.90,4.10);$('#ccHumChart').innerHTML=ccSvgLine(phSvgRows(rows,'p7'),'phValue','pH',6.90,7.10);$('#ccChart3').innerHTML=ccSvgLine(phSvgRows(rows,'p10'),'phValue','pH',9.90,10.10);
+  const events=[];[['pH 4.00',v4],['pH 7.00',v7],['pH 10.00',v10]].forEach(([kind,v])=>ccRuleDetails(v,rows.map(r=>r.measuredAt)).forEach(x=>x.rules.forEach(rule=>events.push({kind,rule,date:x.label}))));$('#ccRules').innerHTML=events.length?events.slice().reverse().map(e=>`<div class="cc-rule"><b>${escapeHtml(e.rule)}</b><span>${e.kind} · ${ccFmtDate(e.date)}</span></div>`).join(''):`<div class="cc-ok">No se detectan reglas de alarma en los tres niveles.</div>`;
+  const failed=rows.length-comp;$('#ccAi').innerHTML=`<b>Diagnóstico mensual pH:</b> ${failed?`${failed} control(es) no cumplieron el criterio multipunto ±0.10 pH.`:'Todos los controles del período cumplen simultáneamente pH 4.00, 7.00 y 10.00.'} ${rows.length<10?'Cada nivel permanece en FASE DE ESTABLECIMIENTO hasta completar 10 registros.':`Estados: pH 4 <b>${w4.state}</b>, pH 7 <b>${w7.state}</b>, pH 10 <b>${w10.state}</b>.`} ${events.length?`Se detectaron ${events.length} activaciones estadísticas para revisión.`:'No se detectan reglas estadísticas.'}<br><small>La IA es asistiva. El criterio técnico ±0.10 pH y las reglas estadísticas no se modifican automáticamente.</small>`;
+  $('#ccHistoryBody').innerHTML=rows.slice().reverse().map(r=>`<tr><td>${ccFmtDate(r.measuredAt)}</td><td>${escapeHtml(r.analystName||'—')}</td><td>${r.p4.reading.toFixed(2)} (${r.p4.error.toFixed(2)})</td><td>${r.p7.reading.toFixed(2)} (${r.p7.error.toFixed(2)})</td><td>${r.p10.reading.toFixed(2)} (${r.p10.error.toFixed(2)})</td><td><span class="badge">${r.overallResult}</span></td><td>${escapeHtml(r.statisticalState||'—')}</td><td><button class="btn secondary compact" type="button" onclick="showCcPoint('${r.id}')">Ver</button></td></tr>`).join('');
+}
+async function showCcPoint(id){const r=await getOne('controlChartRecords',id),box=$('#ccPointDetail');if(!r||!box)return;box.classList.remove('hidden');if(r.controlType==='PH_MULTIPUNTO'){box.innerHTML=`<div class="section-head"><div><h3>Detalle trazable pH · ${ccFmtDate(r.measuredAt)}</h3><p>${escapeHtml(r.analystName||'—')} · pHmetro ${escapeHtml(r.equipment||'EI-345')}</p></div><button class="icon-btn" type="button" onclick="document.getElementById('ccPointDetail').classList.add('hidden')">×</button></div><div class="cc-detail-grid">${[['p4','4.00'],['p7','7.00'],['p10','10.00']].map(([k,n])=>`<div><small>Control pH ${n}</small><b>${Number(r[k].reading).toFixed(2)}</b><span>Error |lectura−nominal| = ${Number(r[k].error).toFixed(3)} · ${r[k].ok?'CUMPLE':'NO CUMPLE'}</span></div>`).join('')}<div><small>Resultado global</small><b>${escapeHtml(r.overallResult)}</b><span>criterio ±0.10 pH en los 3 niveles</span></div></div>${r.notes?`<p class="cc-note"><b>Observación:</b> ${escapeHtml(r.notes)}</p>`:''}`;}else{box.innerHTML=`<div class="section-head"><div><h3>Detalle trazable · ${ccFmtDate(r.measuredAt)}</h3><p>${escapeHtml(r.analystName||'—')} · ${escapeHtml(r.area||'Instrumental')} · ${escapeHtml(r.thermohygrometer||'EI-270')} / ${escapeHtml(r.dataLogger||'PF-09')}</p></div><button class="icon-btn" type="button" onclick="document.getElementById('ccPointDetail').classList.add('hidden')">×</button></div><div class="cc-detail-grid"><div><small>Temperatura original</small><b>${Number(r.tempRaw).toFixed(2)} °C</b><span>Factor +${Number(r.tempFactor).toFixed(2)} → ${Number(r.tempCorrected).toFixed(2)} °C</span></div><div><small>Humedad original</small><b>${Number(r.humRaw).toFixed(1)} %HR</b><span>Factor +${Number(r.humFactor).toFixed(1)} → ${Number(r.humCorrected).toFixed(1)} %HR</span></div><div><small>Cumplimiento ambiental</small><b>${escapeHtml(r.environmentalResult)}</b><span>17–23 °C · 20–80 %HR</span></div><div><small>Estado estadístico</small><b>${escapeHtml(r.statisticalState||'—')}</b><span>${escapeHtml((r.statisticalRules||[]).join(', ')||'Sin reglas')}</span></div></div>${r.notes?`<p class="cc-note"><b>Observación:</b> ${escapeHtml(r.notes)}</p>`:''}`;}box.scrollIntoView({behavior:'smooth',block:'nearest'});}
+
+async function backup(){const data={app:'ERP_PLANIFICACION_NEXTGEN',version:APP_VERSION,exportedAt:nowISO(),catalog:await getAll('catalog'),timeRules:await getAll('timeRules'),compositeSteps:await getAll('compositeSteps'),analysts:await getAll('analysts'),audit:await getAll('audit'),outbox:await getAll('outbox'),config:await getAll('config'),planning:await getAll('planning'),planComments:await getAll('planComments'),controlChartDefs:await getAll('controlChartDefs'),controlChartRecords:await getAll('controlChartRecords')};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`RESPALDO_ERP_PLANIFICACION_${APP_VERSION}_${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);await audit('EXPORTAR','SISTEMA','BACKUP','Respaldo general exportado');toast('Respaldo generado');await refreshAll()}
+async function resetDB(){if(!confirm('Esto eliminará catálogo, reglas, analistas y trazabilidad locales de esta versión. ¿Continuar?'))return;await Promise.all(['catalog','timeRules','compositeSteps','analysts','audit','outbox','config','planning','planComments','controlChartDefs','controlChartRecords'].map(clearStore));toast('Base local reiniciada');await loadConfig();await refreshAll()}
+async function refreshAll(){await Promise.all([renderDashboard(),renderCatalog(),renderAnalysts(),renderAudit(),analyzeData(true),renderMyDayAnalysts(),renderManagementFilters(),refreshNotificationBadge(),renderControlChartEngine()]);if($('#planDate'))await refreshPlanner();if($('#myDayDate'))await renderMyDay()}
 
 let currentSessionUser=null;
 
@@ -3510,7 +3657,6 @@ async function handleFirebaseAuthState(authUser){
     try{await flushOutbox(false)}catch(e){console.warn('Outbox pendiente al reanudar sesión',e)}
     try{await pullFirebaseData(false)}catch(e){console.warn('Revisión cloud pendiente al reanudar sesión',e)}
     startRealtimeSync();
-    await migrateLocalControlChartsToCloud();
     await refreshMigrationUI();
 
     const gateDone=$('#authGateConnection');
@@ -3529,7 +3675,7 @@ async function handleFirebaseAuthState(authUser){
 
 const ROLE_ACCESS={
   JEFE:['inicio','planificador','mi-jornada','seguimiento-diario','gestion','cartas-control','catalogo','analistas','inteligencia','trazabilidad','configuracion'],
-  ANALISTA:['inicio','mi-jornada','cartas-control'],
+  ANALISTA:['inicio','mi-jornada'],
   SIN_ROL:['inicio']
 };
 async function ensureLocalUsers(){
@@ -3588,7 +3734,7 @@ function switchView(view){
   if(!canAccessView(view)){
     toast('Este módulo no está habilitado para su rol');
     view=currentSessionUser?.role==='ANALISTA'?'mi-jornada':'inicio';
-  }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],'seguimiento-diario':['Seguimiento Diario','Vista ejecutiva del trabajo diario por analista'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],'cartas-control':['Cartas de Control','Recepción de Muestras · DBO5 · pH EI-345 · Conductividad EI-104'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador')refreshPlanner();if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='seguimiento-diario')renderDailyMonitor();if(view==='gestion')renderManagementDashboard();if(view==='cartas-control')renderSelectedReceptionChart()}
+  }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],'seguimiento-diario':['Seguimiento Diario','Vista ejecutiva del trabajo diario por analista'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],'cartas-control':['Cartas de Control','Tendencias, Westgard, cumplimiento e IA para Calidad'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador')refreshPlanner();if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='seguimiento-diario')renderDailyMonitor();if(view==='gestion')renderManagementDashboard();if(view==='cartas-control')renderControlChartsManagement()}
 async function refreshPlanner(){
   await renderPlanSelectors();
   await renderDailyLoad();
@@ -3622,7 +3768,7 @@ if($('#mgmtFrom')){
   $('#editPlanStart').addEventListener('input',previewPlanningEdit);
 }
 if($('#finishActivityForm'))$('#finishActivityForm').addEventListener('submit',submitFinishActivity);if($('#btnSaveCalibrationDraft'))$('#btnSaveCalibrationDraft').onclick=saveCalibrationDraft;if($('#btnSaveReagentDraft'))$('#btnSaveReagentDraft').onclick=saveReagentDraft;if($('#btnUnlockTechnicalEdit'))$('#btnUnlockTechnicalEdit').onclick=unlockCompletedTechnicalEdit;
-if($('#btnSaveConfig'))$('#btnSaveConfig').onclick=saveConfig;if($('#btnBackup'))$('#btnBackup').onclick=backup;if($('#btnReset'))$('#btnReset').onclick=resetDB;if($('#localSessionSelect'))$('#localSessionSelect').addEventListener('change',changeLocalSession);if($('#btnFirebaseLogin'))$('#btnFirebaseLogin').onclick=openFirebaseLogin;
+if($('#btnRefreshControlCharts'))$('#btnRefreshControlCharts').onclick=renderControlChartsManagement;if($('#ccChartSelect'))$('#ccChartSelect').addEventListener('change',renderControlChartsManagement);if($('#ccMonth'))$('#ccMonth').addEventListener('change',renderControlChartsManagement);if($('#btnCcCurrentMonth'))$('#btnCcCurrentMonth').onclick=()=>{$('#ccMonth').value=ccMonthNow();renderControlChartsManagement()};if($('#phRead4'))['4','7','10'].forEach(x=>$('#phRead'+x).addEventListener('input',previewPH));if($('#phControlForm'))$('#phControlForm').addEventListener('submit',savePHControl);if($('#dbo5TempRaw'))$('#dbo5TempRaw').addEventListener('input',previewDBO5);if($('#dbo5HumRaw'))$('#dbo5HumRaw').addEventListener('input',previewDBO5);if($('#dbo5ControlForm'))$('#dbo5ControlForm').addEventListener('submit',saveDBO5Control);if($('#btnSaveConfig'))$('#btnSaveConfig').onclick=saveConfig;if($('#btnNewControlChart'))$('#btnNewControlChart').onclick=()=>openControlChartDef();if($('#chartDefSection'))$('#chartDefSection').addEventListener('change',()=>refreshChartMethodOptions(''));if($('#chartDefMethodSelect'))$('#chartDefMethodSelect').addEventListener('change',()=>{const sel=$('#chartDefMethodSelect'),custom=$('#chartDefMethod'),opt=sel.options[sel.selectedIndex];if(sel.value==='CUSTOM'){custom.value='';custom.closest('label').classList.remove('hidden');custom.focus()}else{custom.value=opt?.dataset?.name||'';custom.closest('label').classList.add('hidden')}});if($('#controlChartDefForm'))$('#controlChartDefForm').addEventListener('submit',saveControlChartDef);if($('#btnBackup'))$('#btnBackup').onclick=backup;if($('#btnReset'))$('#btnReset').onclick=resetDB;if($('#localSessionSelect'))$('#localSessionSelect').addEventListener('change',changeLocalSession);if($('#btnFirebaseLogin'))$('#btnFirebaseLogin').onclick=openFirebaseLogin;
 if($('#btnFirebaseLogout'))$('#btnFirebaseLogout').onclick=firebaseLogout;if($('#btnNotifications'))$('#btnNotifications').onclick=openCommunications;if($('#commStatusFilter'))$('#commStatusFilter').onchange=renderCommunications;if($('#commTypeFilter'))$('#commTypeFilter').onchange=renderCommunications;if($('#btnRefreshCommunications'))$('#btnRefreshCommunications').onclick=renderCommunications;
 if($('#firebaseLoginForm')){
   $('#firebaseLoginForm').addEventListener('submit',submitFirebaseLogin);
@@ -3630,7 +3776,7 @@ if($('#firebaseLoginForm')){
 if($('#btnSyncConfigNow'))$('#btnSyncConfigNow').onclick=manualSync;
 if($('#btnPullFirebase'))$('#btnPullFirebase').onclick=()=>pullFirebaseData(true);
 if($('#btnInitialMigration'))$('#btnInitialMigration').onclick=initialControlledMigration;
-if($('#ccEntryForm'))$('#ccEntryForm').addEventListener('submit',saveControlChartEntry);if($('#btnCcSaveConfig'))$('#btnCcSaveConfig').onclick=saveControlChartConfig;['#ccTemp','#ccHr','#ccTempCorrection','#ccHrCorrection','#ccTempMin','#ccTempMax','#ccHrMin','#ccHrMax'].forEach(sel=>{if($(sel))$(sel).addEventListener('input',previewControlChartEntry)});if($('#ccMonth'))$('#ccMonth').addEventListener('change',renderControlChartDBO5);await loadConfig();await refreshAll();
+await loadConfig();await refreshAll();
   await refreshSyncUI();
   firebaseBridge.configured=firebaseConfigValid();
   if(firebaseBridge.configured){
@@ -3672,46 +3818,3 @@ window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)resumeCloudSession(false)});
 setInterval(()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)scheduleOutboxFlush(200)},10000);
 window.addEventListener('offline',()=>setSyncState('LOCAL','Sin conexión · cambios protegidos localmente'));
-
-// ===== CARTA INTELIGENTE DE CONTROL DBO5 · RECEPCIÓN DE MUESTRAS =====
-const DBO5_DEFAULT_CONFIG={key:'DBO5_ENV',chartType:'DBO5_ENV',area:'Instrumental',thermo:'EI-270',logger:'PF-09',tempMin:17,tempMax:23,hrMin:20,hrMax:80,tempCorrection:0,hrCorrection:0,tempFactors:[{min:16,max:18,factor:0.21},{min:18,max:21,factor:0.13},{min:21,max:24,factor:0.11}],hrFactors:[{min:20,max:65,factor:8.1},{min:65,max:90,factor:7.1}],statMode:'AUTO',statMinN:10,tempMean:null,tempSd:null,hrMean:null,hrSd:null,rules:{r12s:true,r13s:true,r22s:true,rR4s:true,r7x:true,r7t:true},source:'Carta de Condiciones DBO5.xlsx'};
-async function getControlChartConfig(){return {...DBO5_DEFAULT_CONFIG,...((await getOne('controlChartConfig','DBO5_ENV'))||{})}}
-function ccReadFactorRows(kind){return $$('#cc'+kind+'Factors .cc-factor-row').map(r=>({min:Number(r.querySelector('[data-k=min]').value),max:Number(r.querySelector('[data-k=max]').value),factor:Number(r.querySelector('[data-k=factor]').value)})).filter(x=>Number.isFinite(x.min)&&Number.isFinite(x.max)&&Number.isFinite(x.factor)&&x.min<x.max)}
-function controlChartFormConfig(){return {key:'DBO5_ENV',chartType:'DBO5_ENV',area:$('#ccArea').value.trim(),thermo:$('#ccThermo').value.trim(),logger:$('#ccLogger').value.trim(),tempMin:Number($('#ccTempMin').value),tempMax:Number($('#ccTempMax').value),hrMin:Number($('#ccHrMin').value),hrMax:Number($('#ccHrMax').value),tempCorrection:Number($('#ccTempCorrection')?.value||0),hrCorrection:Number($('#ccHrCorrection')?.value||0),tempFactors:ccReadFactorRows('Temp'),hrFactors:ccReadFactorRows('Hr'),statMode:$('#ccStatMode')?.value||'AUTO',statMinN:Number($('#ccStatMinN')?.value||10),tempMean:$('#ccTempMean')?.value===''?null:Number($('#ccTempMean')?.value),tempSd:$('#ccTempSd')?.value===''?null:Number($('#ccTempSd')?.value),hrMean:$('#ccHrMean')?.value===''?null:Number($('#ccHrMean')?.value),hrSd:$('#ccHrSd')?.value===''?null:Number($('#ccHrSd')?.value),rules:{r12s:!!$('#ccRule12s')?.checked,r13s:!!$('#ccRule13s')?.checked,r22s:!!$('#ccRule22s')?.checked,rR4s:!!$('#ccRuleR4s')?.checked,r7x:!!$('#ccRule7x')?.checked,r7t:!!$('#ccRule7t')?.checked},updatedAt:nowISO()}}
-function ccFactorFor(value,rows){const v=Number(value),a=(rows||[]).slice().sort((x,y)=>x.min-y.min);for(let i=0;i<a.length;i++){const r=a[i],last=i===a.length-1;if(v>=Number(r.min)&&(v<Number(r.max)||(last&&v<=Number(r.max))))return Number(r.factor)}return null}
-function evaluateControlReading(temp,hr,cfg){const tf=ccFactorFor(temp,cfg.tempFactors),hf=ccFactorFor(hr,cfg.hrFactors),tc=tf===null?NaN:Number(temp)+tf,hc=hf===null?NaN:Number(hr)+hf,tOk=Number.isFinite(tc)&&tc>=cfg.tempMin&&tc<=cfg.tempMax,hOk=Number.isFinite(hc)&&hc>=cfg.hrMin&&hc<=cfg.hrMax;const tMargin=tOk?Math.min(tc-cfg.tempMin,cfg.tempMax-tc):-Infinity,hMargin=hOk?Math.min(hc-cfg.hrMin,cfg.hrMax-hc):-Infinity;return {tempFactor:tf,hrFactor:hf,tempCorrected:tc,hrCorrected:hc,tempOk:tOk,hrOk:hOk,factorMissing:tf===null||hf===null,status:(tf!==null&&hf!==null&&tOk&&hOk)?'CUMPLE':'NO CUMPLE',nearLimit:(tOk&&tMargin<=0.5)||(hOk&&hMargin<=5)}}
-async function saveControlChartConfig(){const c=controlChartFormConfig();if(!(c.tempMin<c.tempMax)||!(c.hrMin<c.hrMax))return toast('Revise los límites de temperatura y humedad');if(!c.tempFactors.length||!c.hrFactors.length)return toast('Configure al menos un rango de factor para temperatura y humedad');await put('controlChartConfig',c);await queue('UPSERT','controlChartConfig',{...c,id:c.key});await audit('EDITAR','CARTA_CONTROL','DBO5_ENV',`Criterios DBO5: T ${c.tempMin}–${c.tempMax} °C · HR ${c.hrMin}–${c.hrMax} %`);toast('Configuración DBO5 actualizada');await renderControlChartDBO5()}
-async function saveControlChartEntry(ev){ev.preventDefault();const cfg=await getControlChartConfig(),date=$('#ccDate').value,time=$('#ccTime').value,temp=Number($('#ccTemp').value),hr=Number($('#ccHr').value);if(!date||!time||!Number.isFinite(temp)||!Number.isFinite(hr))return toast('Complete fecha, hora, temperatura y humedad');const e=evaluateControlReading(temp,hr,cfg);if(e.factorMissing)return toast('No existe factor de corrección para una de las lecturas. Revise la tabla de rangos');const rec={id:uid('CC-DBO5'),chartType:'DBO5_ENV',section:'RECEPCION_MUESTRAS',date,time,tempRead:temp,hrRead:hr,...e,area:cfg.area,thermo:cfg.thermo,logger:cfg.logger,responsible:currentSessionUser?.name||await actor(),analystId:currentSessionUser?.analystId||null,observation:$('#ccObs').value.trim(),createdAt:nowISO(),updatedAt:nowISO()};await put('controlChartEntries',rec);await queue('UPSERT','controlChartEntries',rec);await audit('REGISTRAR','CARTA_CONTROL',rec.id,`DBO5 ${date} ${time}: T ${e.tempCorrected.toFixed(1)} °C · HR ${e.hrCorrected.toFixed(1)} % · ${e.status}`);toast(`Registro DBO5 guardado · ${e.status}`);$('#ccTemp').value='';$('#ccHr').value='';$('#ccObs').value='';await renderControlChartDBO5()}
-function previewControlChartEntry(){const t=Number($('#ccTemp')?.value),h=Number($('#ccHr')?.value);if(!Number.isFinite(t)||!Number.isFinite(h))return;const cfg=controlChartFormConfig(),e=evaluateControlReading(t,h,cfg),el=$('#ccLiveEvaluation');el.innerHTML=e.factorMissing?`<b>⚠ SIN FACTOR</b> · ${e.tempFactor===null?'Temperatura fuera de los rangos configurados. ':''}${e.hrFactor===null?'Humedad fuera de los rangos configurados. ':''}No se inventará una corrección.`:`<b>${e.status}</b> · T° factor +${e.tempFactor} → ${e.tempCorrected.toFixed(2)} °C (${e.tempOk?'cumple':'fuera de criterio'}) · HR factor +${e.hrFactor} → ${e.hrCorrected.toFixed(2)} % (${e.hrOk?'cumple':'fuera de criterio'})${e.nearLimit?' · ⚠ Cerca de un límite':''}`;el.className=`cc-live-eval ${e.status==='CUMPLE'?'good':'danger'}`}
-function ccMean(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:null}
-function ccStd(a){if(a.length<2)return 0;const m=ccMean(a);return Math.sqrt(a.reduce((ss,x)=>ss+(x-m)**2,0)/(a.length-1))}
-function ccStatBase(vals,cfg,kind){const targetMean=kind==='temp'?cfg.tempMean:cfg.hrMean,targetSd=kind==='temp'?cfg.tempSd:cfg.hrSd;if(cfg.statMode==='TARGET'&&Number.isFinite(Number(targetMean))&&Number(targetSd)>0)return {ready:true,mean:Number(targetMean),sd:Number(targetSd),source:'objetivo de Calidad'};const n=Math.max(5,Number(cfg.statMinN)||10);if(vals.length<n)return {ready:false,n,have:vals.length};const base=vals.slice(0,Math.max(n,vals.length-1)),sd=ccStd(base);return {ready:sd>0,mean:ccMean(base),sd,source:'histórico',n,have:vals.length}}
-function ccWestgard(vals,base,rules){if(!base.ready)return [];const m=base.mean,s=base.sd,z=vals.map(v=>(v-m)/s),out=[];if(rules.r13s&&z.some(v=>Math.abs(v)>3))out.push({level:'danger',rule:'1₃s',text:'Un punto supera ±3s.'});if(rules.r22s)for(let i=1;i<z.length;i++)if((z[i]>2&&z[i-1]>2)||(z[i]<-2&&z[i-1]<-2)){out.push({level:'danger',rule:'2₂s',text:'Dos puntos consecutivos superan ±2s del mismo lado.'});break}if(rules.rR4s)for(let i=1;i<z.length;i++)if(Math.abs(z[i]-z[i-1])>4){out.push({level:'danger',rule:'R₄s',text:'Dos resultados consecutivos presentan una separación mayor de 4s.'});break}if(rules.r12s&&z.some(v=>Math.abs(v)>2)&&!out.some(x=>x.rule==='1₃s'))out.push({level:'warning',rule:'1₂s',text:'Al menos un punto supera ±2s: señal de advertencia.'});if(rules.r7x&&vals.length>=7){const a=vals.slice(-7);if(a.every(v=>v>m)||a.every(v=>v<m))out.push({level:'warning',rule:'7x',text:'Siete puntos consecutivos están al mismo lado de la media: posible desplazamiento.'})}if(rules.r7t&&vals.length>=7){const a=vals.slice(-7);let up=true,down=true;for(let i=1;i<a.length;i++){if(a[i]<=a[i-1])up=false;if(a[i]>=a[i-1])down=false}if(up||down)out.push({level:'warning',rule:'7T',text:`Siete puntos consecutivos muestran tendencia ${up?'ascendente':'descendente'}.`})}return out}
-function ccSvg(entries,cfg,key,min,max,label){if(!entries.length)return `<div class="empty"><h4>Sin registros en este período</h4><p>La gráfica aparecerá automáticamente al guardar datos.</p></div>`;const W=900,H=300,L=55,R=20,T=20,B=42,vals=entries.map(e=>Number(e[key])),lo=Math.min(min,...vals)-1,hi=Math.max(max,...vals)+1,x=i=>L+(entries.length===1?(W-L-R)/2:i*(W-L-R)/(entries.length-1)),y=v=>T+(hi-v)*(H-T-B)/(hi-lo),pts=vals.map((v,i)=>`${x(i)},${y(v)}`).join(' ');let circles=vals.map((v,i)=>`<circle cx="${x(i)}" cy="${y(v)}" r="4"><title>${entries[i].date} · ${v.toFixed(1)} ${label}</title></circle>`).join('');let labels=entries.map((e,i)=>i%Math.max(1,Math.ceil(entries.length/10))===0?`<text x="${x(i)}" y="${H-15}" text-anchor="middle">${e.date.slice(8)}</text>`:'').join('');return `<div class="cc-legend"><span>${label}</span><span>Criterio ${min}–${max}</span></div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Carta ${label}"><line x1="${L}" y1="${y(max)}" x2="${W-R}" y2="${y(max)}" stroke="currentColor" stroke-dasharray="7 5" opacity=".45"/><line x1="${L}" y1="${y(min)}" x2="${W-R}" y2="${y(min)}" stroke="currentColor" stroke-dasharray="7 5" opacity=".45"/><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="2.5"/>${circles}${labels}<text x="8" y="${y(max)+4}">${max}</text><text x="8" y="${y(min)+4}">${min}</text></svg>`}
-function analyzeControlChart(entries,cfg){if(!entries.length)return [{cls:'good',text:'Carta lista. Ingrese el primer registro para iniciar el análisis inteligente.'}];const out=[],bad=entries.filter(e=>e.status!=='CUMPLE'),near=entries.filter(e=>e.nearLimit),tv=entries.map(e=>Number(e.tempCorrected)),hv=entries.map(e=>Number(e.hrCorrected));if(bad.length)out.push({cls:'danger',text:`CRITERIO AMBIENTAL: ${bad.length} registro(s) fuera de los límites técnicos configurados.`});else out.push({cls:'good',text:`CRITERIO AMBIENTAL: ${entries.length}/${entries.length} registros cumplen los límites configurados.`});if(near.length)out.push({cls:'warning',text:`VIGILANCIA: ${near.length} registro(s) están próximos a un límite técnico.`});for(const [name,vals,kind] of [['Temperatura',tv,'temp'],['Humedad',hv,'hr']]){const base=ccStatBase(vals,cfg,kind);if(!base.ready){out.push({cls:'warning',text:`${name} · FASE DE ESTABLECIMIENTO: ${base.have||vals.length}/${base.n||cfg.statMinN||10} datos. Aún no se emite conclusión Westgard/Shewhart${base.sd===0?' porque la DE es 0':''}.`});continue}const hits=ccWestgard(vals,base,cfg.rules||DBO5_DEFAULT_CONFIG.rules);if(!hits.length)out.push({cls:'good',text:`${name} · CONTROL ESTADÍSTICO: sin señales activas. Media ${base.mean.toFixed(2)}, s=${base.sd.toFixed(2)} (${base.source}).`});else hits.forEach(h=>out.push({cls:h.level,text:`${name} · ${h.rule}: ${h.text} Media ${base.mean.toFixed(2)}, s=${base.sd.toFixed(2)}.`}))}out.push({cls:'good',text:`Resumen descriptivo del período: T° media ${ccMean(tv).toFixed(2)} °C (s=${ccStd(tv).toFixed(2)}); HR media ${ccMean(hv).toFixed(2)} % (s=${ccStd(hv).toFixed(2)}).`});return out}
-function ccRenderFactorRows(kind,rows){const box=$('#cc'+kind+'Factors');if(!box)return;box.innerHTML=(rows||[]).map((r,i)=>`<div class="cc-factor-row"><input data-k="min" type="number" step="0.01" value="${r.min}"><span>≤ lectura ${i===(rows.length-1)?'≤':'<'} </span><input data-k="max" type="number" step="0.01" value="${r.max}"><span>Factor +</span><input data-k="factor" type="number" step="0.01" value="${r.factor}"></div>`).join('');box.querySelectorAll('input').forEach(x=>x.addEventListener('input',previewControlChartEntry))}
-async function renderControlChartDBO5(){if(!$('#ccBody'))return;const cfg=await getControlChartConfig();[['#ccArea','area'],['#ccThermo','thermo'],['#ccLogger','logger'],['#ccTempMin','tempMin'],['#ccTempMax','tempMax'],['#ccHrMin','hrMin'],['#ccHrMax','hrMax'],['#ccTempCorrection','tempCorrection'],['#ccHrCorrection','hrCorrection']].forEach(([id,k])=>{if($(id)&&document.activeElement!==$(id))$(id).value=cfg[k]});ccRenderFactorRows('Temp',cfg.tempFactors);ccRenderFactorRows('Hr',cfg.hrFactors);[['#ccStatMode','statMode'],['#ccStatMinN','statMinN'],['#ccTempMean','tempMean'],['#ccTempSd','tempSd'],['#ccHrMean','hrMean'],['#ccHrSd','hrSd']].forEach(([id,k])=>{if($(id)&&document.activeElement!==$(id))$(id).value=cfg[k]??''});const rr=cfg.rules||DBO5_DEFAULT_CONFIG.rules;[['#ccRule12s','r12s'],['#ccRule13s','r13s'],['#ccRule22s','r22s'],['#ccRuleR4s','rR4s'],['#ccRule7x','r7x'],['#ccRule7t','r7t']].forEach(([id,k])=>{if($(id))$(id).checked=rr[k]!==false});const now=new Date(),month=$('#ccMonth').value||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;$('#ccMonth').value=month;if(!$('#ccDate').value)$('#ccDate').value=dateToday();if(!$('#ccTime').value)$('#ccTime').value=new Date().toTimeString().slice(0,5);const all=(await getAll('controlChartEntries')).filter(e=>e.chartType==='DBO5_ENV'&&String(e.date).startsWith(month)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));const good=all.filter(e=>e.status==='CUMPLE').length,bad=all.length-good,latest=all.at(-1);$('#ccKpis').innerHTML=`<article class="card cc-kpi"><small>Registros</small><strong>${all.length}</strong></article><article class="card cc-kpi"><small>Cumplen</small><strong>${good}</strong></article><article class="card cc-kpi"><small>No cumplen</small><strong>${bad}</strong></article><article class="card cc-kpi"><small>Último control</small><strong>${latest?latest.date.slice(8):'—'}</strong></article>`;const st=$('#ccOverallStatus');st.className=`control-status ${bad?'bad':all.length?'ok':''}`;st.innerHTML=`<span>Estado del período</span><strong>${bad?'REVISAR':all.length?'EN CONTROL':'SIN DATOS'}</strong><small>${all.length?`${good}/${all.length} registros cumplen`:'Ingrese el primer registro'}</small>`;const tv=all.map(e=>Number(e.tempCorrected)),hv=all.map(e=>Number(e.hrCorrected)),tb=ccStatBase(tv,cfg,'temp'),hb=ccStatBase(hv,cfg,'hr'),th=tb.ready?ccWestgard(tv,tb,cfg.rules||DBO5_DEFAULT_CONFIG.rules):[],hh=hb.ready?ccWestgard(hv,hb,cfg.rules||DBO5_DEFAULT_CONFIG.rules):[],hits=[...th,...hh],danger=hits.some(x=>x.level==='danger'),warning=hits.some(x=>x.level==='warning');if($('#ccAmbientStatus')){$('#ccAmbientStatus').textContent=!all.length?'SIN DATOS':bad?'REVISAR':'CUMPLE';$('#ccAmbientDetail').textContent=!all.length?'Esperando registros':`${good}/${all.length} registros dentro de límites técnicos`;}if($('#ccStatStatus')){$('#ccStatStatus').textContent=!all.length?'SIN DATOS':(!tb.ready||!hb.ready)?'ESTABLECIENDO BASE':danger?'FUERA DE CONTROL':warning?'ADVERTENCIA':'EN CONTROL';$('#ccStatDetail').textContent=!all.length?'Shewhart / Westgard':(!tb.ready||!hb.ready)?`Base histórica: ${Math.min(all.length,Number(cfg.statMinN)||10)}/${Number(cfg.statMinN)||10}`:hits.length?`${hits.map(x=>x.rule).join(', ')} detectada(s)`:'Sin señales estadísticas activas';}if($('#ccAiHeadline')){const aiState=!all.length?'LISTO PARA ANALIZAR':bad?'REVISIÓN AMBIENTAL':danger?'SEÑAL CRÍTICA':warning?'VIGILANCIA':(!tb.ready||!hb.ready)?'APRENDIENDO':'PROCESO ESTABLE';$('#ccAiHeadline').textContent=aiState;$('#ccAiHeadlineDetail').textContent=!all.length?'La explicación se actualiza con cada registro.':bad?'Hay resultados fuera de límites técnicos.':danger?'Se activó una regla estadística que requiere revisión.':warning?'Se detectó una señal preventiva o tendencia.':(!tb.ready||!hb.ready)?'Aún se está formando la línea base estadística.':'Cumplimiento ambiental y estadístico sin señales activas.';}$('#ccBody').innerHTML=all.length?all.slice().reverse().map(e=>`<tr><td>${escapeHtml(e.date)}</td><td>${escapeHtml(e.time)}</td><td>${Number(e.tempRead).toFixed(1)}</td><td>+${Number(e.tempFactor).toFixed(2)}</td><td>${Number(e.tempCorrected).toFixed(2)}</td><td>${Number(e.hrRead).toFixed(1)}</td><td>+${Number(e.hrFactor).toFixed(2)}</td><td>${Number(e.hrCorrected).toFixed(2)}</td><td><span class="cc-pill ${e.status==='CUMPLE'?'ok':'bad'}">${e.status}</span></td><td>${escapeHtml(e.responsible||'')}</td><td>${escapeHtml(e.observation||'—')}</td></tr>`).join(''):`<tr><td colspan="11">Sin registros para ${month}</td></tr>`;$('#ccAi').innerHTML=analyzeControlChart(all,cfg).map(x=>`<div class="cc-ai-item ${x.cls}">${escapeHtml(x.text)}</div>`).join('');$('#ccChart').innerHTML=`<h4>Temperatura corregida</h4>${ccSvg(all,cfg,'tempCorrected',cfg.tempMin,cfg.tempMax,'°C')}<h4>Humedad relativa corregida</h4>${ccSvg(all,cfg,'hrCorrected',cfg.hrMin,cfg.hrMax,'%')}`;}
-
-
-// ===== CARTAS INTELIGENTES MULTIPUNTO · RECEPCIÓN DE MUESTRAS · V6.39 =====
-let activeReceptionChart='DBO5_ENV';
-const MULTI_CHARTS={
- PH_EI345:{key:'PH_EI345',title:'🧪 Carta inteligente de pH · EI-345',desc:'Control de pH en tres niveles independientes. Fuente: Carta de Control PH EI-345.xlsx.',area:'Instrumental',equipment:'EI-345',targets:[4,7,10],labels:['pH 4.00','pH 7.00','pH 10.00'],units:['pH','pH','pH'],criterion:0.10,criterionMode:'ABS',criterionLabel:'±0.10 pH'},
- COND_EI104:{key:'COND_EI104',title:'⚡ Carta inteligente de Conductividad · EI-104',desc:'Control multipunto de conductividad. Fuente: Carta de Control Conductividad EI-104.xlsx.',area:'Instrumental',equipment:'EI-104',targets:[84,1413,12.88],labels:['84 µS/cm','1413 µS/cm','12.88 mS/cm'],units:['µS/cm','µS/cm','mS/cm'],criterion:0.10,criterionMode:'REL',criterionLabel:'±10% del valor objetivo'}
-};
-function multiDefaultConfig(type){const d=MULTI_CHARTS[type];return {...d,statMinN:10,rules:{r12s:true,r13s:true,r22s:true,rR4s:true,r7x:true,r7t:true}}}
-async function getMultiConfig(type){return {...multiDefaultConfig(type),...((await getOne('controlChartConfig',type))||{})}}
-function renderSelectedReceptionChart(){document.querySelectorAll('.cc-select').forEach(b=>b.classList.toggle('active',b.dataset.ccType===activeReceptionChart));$('#ccDboPanel')?.classList.toggle('hidden',activeReceptionChart!=='DBO5_ENV');$('#ccMultiPanel')?.classList.toggle('hidden',activeReceptionChart==='DBO5_ENV');if(activeReceptionChart==='DBO5_ENV')return renderControlChartDBO5();return renderMultiControlChart(activeReceptionChart)}
-function multiEval(readings,cfg){const levels=readings.map((v,i)=>{const target=Number(cfg.targets[i]),err=Math.abs(v-target),limit=cfg.criterionMode==='REL'?Math.abs(target*Number(cfg.criterion)):Number(cfg.criterion);return {read:v,target,error:err,limit,status:err<=limit?'CUMPLE':'NO CUMPLE'}});return {levels,status:levels.every(x=>x.status==='CUMPLE')?'CUMPLE':'NO CUMPLE'}}
-function multiConfigFromForm(type){const base=MULTI_CHARTS[type];return {...base,key:type,chartType:type,area:$('#ccMultiArea').value.trim(),equipment:$('#ccMultiEquipment').value.trim(),criterion:Number($('#ccMultiCriterion').value),targets:[1,2,3].map(i=>Number($('#ccMultiTarget'+i).value)),statMinN:Number($('#ccMultiMinN').value||10),rules:{r12s:$('#ccMRule12s').checked,r13s:$('#ccMRule13s').checked,r22s:$('#ccMRule22s').checked,rR4s:$('#ccMRuleR4s').checked,r7x:$('#ccMRule7x').checked,r7t:$('#ccMRule7t').checked},updatedAt:nowISO()}}
-async function saveMultiConfig(){const type=activeReceptionChart;if(!MULTI_CHARTS[type])return;const c=multiConfigFromForm(type);if(!Number.isFinite(c.criterion)||c.criterion<0||c.targets.some(x=>!Number.isFinite(x)))return toast('Revise criterio y valores objetivo');await put('controlChartConfig',c);await queue('UPSERT','controlChartConfig',{...c,id:c.key});await audit('EDITAR','CARTA_CONTROL',type,`${type}: criterio ${c.criterionLabel||c.criterion}`);toast('Configuración actualizada');await renderMultiControlChart(type)}
-async function saveMultiEntry(ev){ev.preventDefault();const type=activeReceptionChart,cfg=await getMultiConfig(type),date=$('#ccMultiDate').value,time=$('#ccMultiTime').value,readings=[1,2,3].map(i=>Number($('#ccMultiL'+i).value));if(!date||!time||readings.some(x=>!Number.isFinite(x)))return toast('Complete fecha, hora y las tres lecturas');const e=multiEval(readings,cfg),rec={id:uid('CC-'+type),chartType:type,section:'RECEPCION_MUESTRAS',date,time,readings,levels:e.levels,status:e.status,area:cfg.area,equipment:cfg.equipment,responsible:currentSessionUser?.name||await actor(),analystId:currentSessionUser?.analystId||null,observation:$('#ccMultiObs').value.trim(),createdAt:nowISO(),updatedAt:nowISO()};await put('controlChartEntries',rec);await queue('UPSERT','controlChartEntries',rec);await audit('REGISTRAR','CARTA_CONTROL',rec.id,`${type} ${date}: ${e.status}`);toast(`Control guardado · ${e.status}`);[1,2,3].forEach(i=>$('#ccMultiL'+i).value='');$('#ccMultiObs').value='';await renderMultiControlChart(type)}
-function previewMulti(){const type=activeReceptionChart;if(!MULTI_CHARTS[type])return;getMultiConfig(type).then(cfg=>{const vals=[1,2,3].map(i=>Number($('#ccMultiL'+i).value));if(vals.some(x=>!Number.isFinite(x))){$('#ccMultiPreview').innerHTML='Ingrese las tres lecturas para evaluar.';return}const e=multiEval(vals,cfg);$('#ccMultiPreview').innerHTML=e.levels.map((x,i)=>`<b>${escapeHtml(cfg.labels[i])}</b>: error ${x.error.toFixed(3)} / límite ${x.limit.toFixed(3)} · <span class="cc-pill ${x.status==='CUMPLE'?'ok':'bad'}">${x.status}</span>`).join(' &nbsp; · &nbsp; ')})}
-function multiAi(entries,cfg){if(!entries.length)return [{cls:'good',text:'Carta lista. Ingrese el primer control para iniciar el análisis inteligente.'}];const out=[],bad=entries.filter(e=>e.status!=='CUMPLE');out.push({cls:bad.length?'danger':'good',text:bad.length?`CRITERIO TÉCNICO: ${bad.length} control(es) con al menos un nivel fuera de criterio.`:`CRITERIO TÉCNICO: ${entries.length}/${entries.length} controles cumplen en los tres niveles.`});cfg.targets.forEach((_,i)=>{const vals=entries.map(e=>Number(e.readings?.[i])).filter(Number.isFinite),base=ccStatBase(vals,{...cfg,statMode:'AUTO'},'temp');if(!base.ready){out.push({cls:'warning',text:`${cfg.labels[i]} · FASE DE ESTABLECIMIENTO: ${vals.length}/${cfg.statMinN} datos. Aún no se emite conclusión estadística.`});return}const hits=ccWestgard(vals,base,cfg.rules);if(!hits.length)out.push({cls:'good',text:`${cfg.labels[i]} · EN CONTROL: media ${base.mean.toFixed(3)}, s=${base.sd.toFixed(3)}; sin reglas activas.`});else hits.forEach(h=>out.push({cls:h.level,text:`${cfg.labels[i]} · ${h.rule}: ${h.text}`}))});return out}
-async function renderMultiControlChart(type){const cfg=await getMultiConfig(type),d=MULTI_CHARTS[type];$('#ccMultiTitle').textContent=d.title;$('#ccMultiDesc').textContent=d.desc;$('#ccMultiCfgTitle').textContent=`Criterios · ${d.title.replace(/^[^ ]+ /,'')}`;$('#ccMultiArea').value=cfg.area;$('#ccMultiEquipment').value=cfg.equipment;$('#ccMultiCriterion').value=cfg.criterion;$('#ccMultiMinN').value=cfg.statMinN;[1,2,3].forEach(i=>{$('#ccMultiTarget'+i).value=cfg.targets[i-1];$('#ccMultiL'+i+'Label').firstChild.textContent=cfg.labels[i-1]+' ';});const rr=cfg.rules;[['#ccMRule12s','r12s'],['#ccMRule13s','r13s'],['#ccMRule22s','r22s'],['#ccMRuleR4s','rR4s'],['#ccMRule7x','r7x'],['#ccMRule7t','r7t']].forEach(([id,k])=>$(id).checked=rr[k]!==false);if(!$('#ccMultiDate').value)$('#ccMultiDate').value=dateToday();if(!$('#ccMultiTime').value)$('#ccMultiTime').value=new Date().toTimeString().slice(0,5);const now=new Date(),month=$('#ccMultiMonth').value||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;$('#ccMultiMonth').value=month;const all=(await getAll('controlChartEntries')).filter(e=>e.chartType===type&&String(e.date).startsWith(month)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)),bad=all.filter(e=>e.status!=='CUMPLE');const analyses=[];cfg.targets.forEach((_,i)=>{const vals=all.map(e=>Number(e.readings?.[i])).filter(Number.isFinite),base=ccStatBase(vals,{...cfg,statMode:'AUTO'},'temp');analyses.push({base,hits:base.ready?ccWestgard(vals,base,cfg.rules):[]})});const ready=analyses.every(x=>x.base.ready),hits=analyses.flatMap(x=>x.hits),danger=hits.some(x=>x.level==='danger'),warning=hits.some(x=>x.level==='warning');$('#ccMultiOverall').className=`control-status ${bad.length||danger?'bad':all.length?'ok':''}`;$('#ccMultiOverall').innerHTML=`<span>Estado integral</span><strong>${!all.length?'SIN DATOS':bad.length?'REVISAR':danger?'FUERA DE CONTROL':warning?'ADVERTENCIA':ready?'EN CONTROL':'ESTABLECIENDO BASE'}</strong><small>${all.length} control(es) del período</small>`;$('#ccMultiTech').textContent=!all.length?'SIN DATOS':bad.length?'REVISAR':'CUMPLE';$('#ccMultiTechDetail').textContent=!all.length?'Esperando registros':`${all.length-bad.length}/${all.length} controles cumplen los tres niveles`;$('#ccMultiStat').textContent=!all.length?'SIN DATOS':!ready?'ESTABLECIENDO BASE':danger?'FUERA DE CONTROL':warning?'ADVERTENCIA':'EN CONTROL';$('#ccMultiStatDetail').textContent=!ready?`Histórico mínimo ${Math.min(all.length,cfg.statMinN)}/${cfg.statMinN}`:hits.length?hits.map(x=>x.rule).join(', '):'Sin señales activas';$('#ccMultiAiHead').textContent=!all.length?'LISTO':bad.length?'REVISIÓN TÉCNICA':danger?'SEÑAL CRÍTICA':warning?'VIGILANCIA':!ready?'APRENDIENDO':'PROCESO ESTABLE';$('#ccMultiAiDetail').textContent=`Análisis independiente de ${cfg.labels.join(' · ')}`;$('#ccMultiAi').innerHTML=multiAi(all,cfg).map(x=>`<div class="cc-ai-item ${x.cls}">${escapeHtml(x.text)}</div>`).join('');$('#ccMultiBody').innerHTML=all.length?all.slice().reverse().map(e=>`<tr><td>${escapeHtml(e.date)}</td><td>${escapeHtml(e.time)}</td>${e.levels.map(x=>`<td>${Number(x.read).toFixed(3)}</td><td>${Number(x.error).toFixed(3)} · <span class="cc-pill ${x.status==='CUMPLE'?'ok':'bad'}">${x.status}</span></td>`).join('')}<td><span class="cc-pill ${e.status==='CUMPLE'?'ok':'bad'}">${e.status}</span></td><td>${escapeHtml(e.responsible||'')}</td><td>${escapeHtml(e.observation||'—')}</td></tr>`).join(''):'<tr><td colspan="11">Sin registros para este período</td></tr>';$('#ccMultiChart').innerHTML=cfg.targets.map((_,i)=>{const pseudo=all.map(e=>({date:e.date,time:e.time,value:Number(e.readings?.[i])}));const base=analyses[i].base;return `<h4>${escapeHtml(cfg.labels[i])}</h4>${ccSvg(pseudo.map(x=>({date:x.date,time:x.time,multiValue:x.value})),cfg,'multiValue',cfg.targets[i]-(cfg.criterionMode==='REL'?cfg.targets[i]*cfg.criterion:cfg.criterion),cfg.targets[i]+(cfg.criterionMode==='REL'?cfg.targets[i]*cfg.criterion:cfg.criterion),cfg.units[i])}`}).join('')}
-
-document.addEventListener('click',e=>{const b=e.target.closest?.('.cc-select');if(b){activeReceptionChart=b.dataset.ccType;renderSelectedReceptionChart()}});
-document.addEventListener('input',e=>{if(['ccMultiL1','ccMultiL2','ccMultiL3'].includes(e.target?.id))previewMulti()});
-document.addEventListener('change',e=>{if(e.target?.id==='ccMultiMonth'&&activeReceptionChart!=='DBO5_ENV')renderMultiControlChart(activeReceptionChart)});
-document.addEventListener('submit',e=>{if(e.target?.id==='ccMultiForm'){e.preventDefault();saveMultiEntry(e)}});
-document.addEventListener('click',e=>{if(e.target?.id==='btnCcMultiSaveConfig')saveMultiConfig()});
