@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.27-MI-JORNADA-ESTABLE-CHROME';
+const APP_VERSION='V1.0.5.6.31-INVENTARIO-INTELIGENTE-VIVO';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=7;
 const SECTIONS=[
@@ -1798,35 +1798,104 @@ async function finishMyActivity(planId){
 }
 async function applyConfirmedReagentInventoryToCatalog(p){
   if(!p?.reagentResult?.items?.length)return;
-  const catalog=await getOne('catalog',p.catalogId);
-  if(!catalog||!Array.isArray(catalog.reagentConfig))return;
-  let changed=false;
-  const results=new Map(p.reagentResult.items.map(x=>[x.reagentId,x]));
-  catalog.reagentConfig=catalog.reagentConfig.map(r=>{
-    const item=results.get(r.id);if(!item||item.notUsed||item.usedInActivity===false)return r;
-    const next=JSON.parse(JSON.stringify(r));
-    if(next.mode==='COUNT'&&Number.isFinite(Number(item.stockRemaining))){
-      next.stockQuantity=Math.max(0,Number(item.stockRemaining));
-      next.inventoryStatus=next.stockQuantity<=0?'AGOTADO':'ACTIVO';
-      changed=true;
-    }
-    if(next.mode==='WEIGHT'&&Array.isArray(next.containers)&&Array.isArray(item.containers)){
-      next.containers=next.containers.map(env=>{
-        const hit=item.containers.find(x=>(x.containerId||x.id)===env.id)||item.containers.find(x=>normalizeIdentityText(x.label||'')===normalizeIdentityText(env.label||'')&&normalizeIdentityText(x.containerType||'FRASCO')===normalizeIdentityText(env.containerType||'FRASCO'));
-        if(!hit)return env;
-        const final=Number(hit.finalWeight);changed=true;
-        return {...env,initialWeight:Number.isFinite(final)?final:env.initialWeight,status:hit.depleted?'AGOTADO':'ACTIVO'};
-      });
-      const active=next.containers.filter(x=>x.status!=='AGOTADO');
-      next.inventoryStatus=active.length?'ACTIVO':'AGOTADO';
-    }
-    return next;
-  });
-  if(!changed)return;
-  catalog.updatedAt=nowISO();
-  await put('catalog',catalog);await queue('UPDATE','catalog',catalog);
+  // INVENTARIO GLOBAL VIVO: nombre + lote es una sola existencia aunque el reactivo
+  // esté configurado en varias actividades. Al cerrar un consumo se actualizan TODAS
+  // las fichas que apuntan al mismo lote para impedir que reaparezca un stock antiguo.
+  const catalogs=await getAll('catalog');
+  const usedItems=(p.reagentResult.items||[]).filter(x=>x&&x.usedInActivity!==false&&!x.notUsed);
+  if(!usedItems.length)return;
+  const itemByIdentity=new Map(usedItems.map(item=>[`${normalizeIdentityText(item.name||'')}|${normalizeIdentityText(item.lot||'')}`,item]));
+  for(const catalog of catalogs){
+    if(!Array.isArray(catalog.reagentConfig)||!catalog.reagentConfig.length)continue;
+    let changed=false;
+    catalog.reagentConfig=catalog.reagentConfig.map(r=>{
+      const key=`${normalizeIdentityText(r.name||'')}|${normalizeIdentityText(r.lot||'')}`;
+      const item=itemByIdentity.get(key);if(!item)return r;
+      const next=JSON.parse(JSON.stringify(r));
+      if(next.mode==='COUNT'&&item.mode==='COUNT'&&Number.isFinite(Number(item.stockRemaining))){
+        next.stockQuantity=Math.max(0,Number(item.stockRemaining));
+        next.inventoryStatus=next.stockQuantity<=0?'AGOTADO':'ACTIVO';
+        changed=true;
+      }
+      if(next.mode==='WEIGHT'&&item.mode==='WEIGHT'&&Array.isArray(next.containers)&&Array.isArray(item.containers)){
+        next.containers=next.containers.map(env=>{
+          const hit=item.containers.find(x=>(x.containerId||x.id)===env.id)||item.containers.find(x=>normalizeIdentityText(x.label||'')===normalizeIdentityText(env.label||'')&&normalizeIdentityText(x.containerType||'FRASCO')===normalizeIdentityText(env.containerType||'FRASCO'));
+          if(!hit)return env;
+          const final=Number(hit.finalWeight);changed=true;
+          return {...env,initialWeight:Number.isFinite(final)?final:env.initialWeight,status:hit.depleted?'AGOTADO':'ACTIVO'};
+        });
+        next.inventoryStatus=next.containers.some(x=>x.status!=='AGOTADO')?'ACTIVO':'AGOTADO';
+      }
+      return next;
+    });
+    if(changed){catalog.updatedAt=nowISO();await put('catalog',catalog);await queue('UPDATE','catalog',catalog)}
+  }
+  reagentMasterProfiles=[];
 }
 
+
+async function propagateLiveInventoryToOpenPlans(){
+  const catalogs=await getAll('catalog'), plans=await visiblePlanningRows();
+  const byId=new Map(catalogs.map(c=>[c.id,c])); let changed=0;
+  for(const p of plans){
+    if(['REALIZADO','CANCELADO'].includes(p.status))continue;
+    const c=byId.get(p.catalogId); if(!c?.reagentConfig?.length)continue;
+    const next=mergeOpenPlanReagentConfig(p,c.reagentConfig).filter(r=>{
+      if(r.mode==='COUNT')return r.inventoryStatus!=='AGOTADO'&&Number(r.stockQuantity||0)>0;
+      if(r.mode==='WEIGHT')return r.inventoryStatus!=='AGOTADO'&&(r.containers||[]).some(e=>e.status!=='AGOTADO');
+      return true;
+    });
+    if(JSON.stringify(next)!==JSON.stringify(p.reagentConfig||[])){
+      p.reagentConfig=next;p.inventorySyncedAt=nowISO();p.updatedAt=nowISO();
+      await put('planning',p);await queue('UPDATE','planning',p);changed++;
+    }
+  }
+  return changed;
+}
+async function reconcileInventoryFromConfirmedHistory(){
+  const catalogs=await getAll('catalog'); let touched=0;
+  for(const c of catalogs){
+    if(!Array.isArray(c.reagentConfig))continue; let changed=false;
+    for(const r of c.reagentConfig){
+      if(r.mode==='COUNT'){
+        const latest=await latestConfirmedReagentRecord(r);
+        const sr=Number(latest?.item?.stockRemaining);
+        if(Number.isFinite(sr)&&Number(r.stockQuantity)!==Math.max(0,sr)){
+          r.stockQuantity=Math.max(0,sr);r.inventoryStatus=r.stockQuantity<=0?'AGOTADO':'ACTIVO';changed=true;
+        }
+      }else if(r.mode==='WEIGHT'&&Array.isArray(r.containers)){
+        for(const env of r.containers){
+          const latest=await latestConfirmedContainerRecord(r,env);
+          if(!latest)continue; const f=Number(latest.container.finalWeight);
+          const depleted=latest.container.depleted===true||(Number.isFinite(f)&&f<=Number(env.tareWeight)+0.000001);
+          if(Number.isFinite(f)&&Number(env.initialWeight)!==f){env.initialWeight=f;changed=true}
+          const st=depleted?'AGOTADO':'ACTIVO';if(env.status!==st){env.status=st;changed=true}
+        }
+        const st=r.containers.some(e=>e.status!=='AGOTADO')?'ACTIVO':'AGOTADO';if(r.inventoryStatus!==st){r.inventoryStatus=st;changed=true}
+      }
+    }
+    if(changed){c.updatedAt=nowISO();await put('catalog',c);await queue('UPDATE','catalog',c);touched++}
+  }
+  if(touched)await propagateLiveInventoryToOpenPlans();
+  reagentMasterProfiles=[];return touched;
+}
+async function validateReagentResultAgainstLiveInventory(result){
+  if(!result?.items?.length)return {ok:true};
+  await reconcileInventoryFromConfirmedHistory();
+  const catalogs=await getAll('catalog');
+  const all=catalogs.flatMap(c=>c.reagentConfig||[]);
+  for(const item of result.items.filter(x=>x?.usedInActivity!==false&&!x?.notUsed)){
+    const live=all.find(r=>normalizeIdentityText(r.name||'')===normalizeIdentityText(item.name||'')&&normalizeIdentityText(r.lot||'')===normalizeIdentityText(item.lot||''));
+    if(!live)continue;
+    if(item.mode==='COUNT'){
+      const stock=Number(live.stockQuantity||0), used=Number(item.used||0);
+      if(live.inventoryStatus==='AGOTADO'||stock<=0)return {ok:false,text:`${item.name} · lote ${item.lot||'—'} ya está AGOTADO. El inventario fue actualizado; vuelva a abrir la actividad.`};
+      if(used>stock)return {ok:false,text:`Stock actualizado de ${item.name} · lote ${item.lot||'—'}: ${stock} ${live.unit||item.unit||'unidad'}. El consumo ingresado (${used}) ya no está disponible.`};
+      item.stockBefore=stock;item.stockRemaining=Math.max(0,stock-used);
+    }
+  }
+  return {ok:true};
+}
 async function completeActivityRecord(p,actualSamples=null,finalComment='',calibrationResult=undefined,reagentResult=undefined){
   p.status='REALIZADO';p.actualFinishedAt=nowISO();p.updatedAt=nowISO();
   if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;if(reagentResult!==undefined)p.reagentResult=reagentResult;
@@ -1865,6 +1934,8 @@ async function submitFinishActivity(e){
     if(!rr.ok)return toast(rr.text);
     if(!rr.complete)return toast('Complete todos los consumos de reactivos');
     reagentResult=rr.result;
+    const liveCheck=await validateReagentResultAgainstLiveInventory(reagentResult);
+    if(!liveCheck.ok){await renderFinishReagents(p);return toast(liveCheck.text)}
   }
   const comment=$('#finishActivityComment').value.trim();
 
@@ -2688,7 +2759,7 @@ async function buildReagentMasterProfiles(){
   for(const [key,hit] of latestUse){
     const base=byIdentity.get(key);if(!base)continue;
     const r=base.profile,item=hit.item;
-    if(r.mode==='COUNT'&&Number.isFinite(Number(item.stockRemaining)))r.stockQuantity=Number(item.stockRemaining);
+    if(r.mode==='COUNT'&&Number.isFinite(Number(item.stockRemaining))){r.stockQuantity=Math.max(0,Number(item.stockRemaining));r.inventoryStatus=r.stockQuantity<=0?'AGOTADO':'ACTIVO';}
     if(r.mode==='WEIGHT'){
       if(item.physicalState)r.physicalState=item.physicalState;
       if(Number.isFinite(Number(item.density)))r.density=Number(item.density);
@@ -2698,7 +2769,7 @@ async function buildReagentMasterProfiles(){
           const used=resultContainers.find(x=>(x.containerId||x.id)===env.id);
           if(!used)return env;
           const final=Number(used.finalWeight);
-          return {...env,lot:used.lot||env.lot||r.lot||'',initialWeight:Number.isFinite(final)?final:env.initialWeight};
+          return {...env,lot:used.lot||env.lot||r.lot||'',initialWeight:Number.isFinite(final)?final:env.initialWeight,status:used.depleted?'AGOTADO':'ACTIVO'};
         });
       }else if(Number.isFinite(Number(item.finalWeight))){r.initialWeight=Number(item.finalWeight);}
     }
@@ -2707,8 +2778,10 @@ async function buildReagentMasterProfiles(){
   reagentMasterProfiles=[...byIdentity.entries()].map(([key,v])=>{
     const nameKey=normalizeIdentityText(v.profile.name||''),lotKey=normalizeIdentityText(v.profile.lot||'');
     const displayValue=v.profile.lot?`${v.profile.name} · Lote ${v.profile.lot}`:(v.profile.name||'');
+    if(v.profile.mode==='WEIGHT'&&Array.isArray(v.profile.containers))v.profile.inventoryStatus=v.profile.containers.some(x=>x.status!=='AGOTADO')?'ACTIVO':'AGOTADO';
     return {key,nameKey,lotKey,displayKey:normalizeIdentityText(displayValue),displayValue,...v};
-  }).sort((a,b)=>`${a.profile.name||''} ${a.profile.lot||''}`.localeCompare(`${b.profile.name||''} ${b.profile.lot||''}`,'es'));
+  }).filter(x=>x.profile.inventoryStatus!=='AGOTADO' && !(x.profile.mode==='COUNT'&&Number(x.profile.stockQuantity)<=0))
+    .sort((a,b)=>`${a.profile.name||''} ${a.profile.lot||''}`.localeCompare(`${b.profile.name||''} ${b.profile.lot||''}`,'es'));
   return reagentMasterProfiles;
 }
 function reagentMasterDatalistHtml(){

@@ -1,8 +1,9 @@
 {
-  "version": "V1.0.5.6.29",
+  "version": "V1.0.5.6.30",
   "build": "COMUNICACIONES-PRO-CHROME",
-  "notes": "Corrige falsos estados ERROR de sincronización en Chrome/PWA: tras un error transitorio del cliente, verifica el estado real en Firestore y autocierra la Outbox si el cambio ya fue aplicado. Conserva Comunicaciones PRO y Mi Jornada Chrome estable.",
+  "notes": "Inventario dinámico global por reactivo + lote: el saldo confirmado se propaga a todas las actividades; los lotes agotados (stock 0) desaparecen del selector del analista y no reaparecen desde configuraciones antiguas.",
   "features": [
-    "Sync auto-verification: prevents false ERROR when Firestore already applied the change"
+    "Sync auto-verification: prevents false ERROR when Firestore already applied the change",
+    "Global live inventory by reagent + lot; depleted lots hidden automatically"
   ]
 }
