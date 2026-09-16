@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.6-RECONCILIACION-MULTIPC';
+const APP_VERSION='V1.0.5.6.33.25.10.7-ACK-REALTIME';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
 const SECTIONS=[
@@ -133,7 +133,8 @@ function setSyncState(state,detail=''){
   if(dot)dot.className=`sync-dot ${state.toLowerCase()}`;
   if(label)label.textContent=state;
   if(desc)desc.textContent=detail||'';
-  refreshSyncUI();
+  // 10.7: no lanzar refresh asíncrono desde aquí. Ese patrón podía terminar
+  // después de la confirmación real y dejar visualmente "SINCRONIZANDO".
 }
 async function refreshSyncUI(){
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy)await reconcileConfirmedChartOutbox();
@@ -160,6 +161,10 @@ async function refreshSyncUI(){
     }else if(chartOpen.length){
       const permission=chartOpen.some(x=>/permission|insufficient/i.test(String(x.lastError||'')));
       setSyncStateVisualOnly('PARCIAL',permission?`ERP conectado · Cartas pendientes: ${chartOpen.length} (permisos Firebase)`:`ERP conectado · Cartas pendientes: ${chartOpen.length}`);
+    }else{
+      // 10.7: estado terminal determinista. Si Firestore está conectado y Outbox=0,
+      // la UI jamás puede quedarse pegada en "Confirmando cambios…".
+      setSyncStateVisualOnly('SINCRONIZADO','Sin cambios pendientes');
     }
   }
 }
@@ -464,23 +469,16 @@ async function flushOutbox(showToast=true){
               await setDoc(ref,{...cloudPayloadFor('controlChartDefs',localDef),_cloudUpdatedAt:cloudStamp},{merge:true});
             }
           }else{
+            // deleteDoc resuelto = confirmación del backend; la verificación por lectura
+            // queda reservada únicamente para la ruta de error/reconciliación.
             await deleteDoc(ref);
-            const check=await getDoc(ref);
-            if(check.exists())throw new Error('Firestore no confirmó la eliminación');
           }
         }else{
           const cloudStamp=nowISO();
+          // 10.7: en Firestore Web, la Promise de setDoc se resuelve cuando el backend
+          // confirma la escritura. Una segunda lectura getDoc duplicaba la latencia y
+          // mantenía innecesariamente el indicador en "Confirmando".
           await setDoc(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
-          const check=await getDoc(ref);
-          if(!check.exists())throw new Error('Firestore no confirmó la escritura');
-          const cloud=check.data()||{};
-          // Confirmar identidad y la revisión funcional del registro.
-          if(payload.id&&cloud.id&&String(payload.id)!==String(cloud.id)){
-            throw new Error('Firestore devolvió un registro diferente');
-          }
-          if(payload.updatedAt&&cloud.updatedAt&&String(cloud.updatedAt)!==String(payload.updatedAt)){
-            throw new Error('La revisión confirmada en Firestore no coincide');
-          }
         }
 
         item.status='SINCRONIZADO';
@@ -4656,5 +4654,12 @@ window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.
 window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 setInterval(()=>{if(firebaseBridge.ready&&firebaseBridge.authUser){scheduleOutboxFlush(200);if(!document.hidden)reconcileVisibleInterface('HEARTBEAT')}},15000);
+// 10.7 · watchdog visual de ACK. No escribe ni consulta Firestore: solo compara
+// el estado real de Outbox con el indicador. Corrige estados visuales obsoletos.
+setInterval(()=>{
+  if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy){
+    refreshSyncUI().catch(e=>console.warn('Watchdog de sincronización',e));
+  }
+},2500);
 window.addEventListener('offline',()=>setSyncState('LOCAL','Sin conexión · cambios protegidos localmente'));
 if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',async event=>{if(event.data?.type==='OPEN_COMMUNICATIONS'){try{window.focus();await openCommunications()}catch(e){console.warn('Abrir comunicaciones desde notificación',e)}}});}
