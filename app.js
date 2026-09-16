@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.5-CARGA-HISTORICA-UNIVERSAL';
+const APP_VERSION='V1.0.5.6.33.25.10.6-RECONCILIACION-MULTIPC';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
 const SECTIONS=[
@@ -671,10 +671,7 @@ function startRealtimeSync(){
         const open=(await getAll('outbox')).filter(x=>x.status==='PENDIENTE'||x.status==='ERROR');
         if(open.length)await refreshSyncUI();
         else setSyncState('SINCRONIZADO','Cambios recibidos en tiempo real');
-        const active=document.querySelector('.nav-item.active')?.dataset.view;
-        if(active==='mi-jornada')await renderMyDay();
-        else if(active==='planificador')await refreshPlanner();
-        else if(active==='gestion')await renderManagementDashboard();
+        await reconcileVisibleInterface(storeName);
         if(storeName==='planComments'){
           await refreshNotificationBadge();
           const newest=incomingComments.filter(c=>communicationVisibleComment(c)&&!isOwnCommunication(c)).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0];
@@ -695,6 +692,49 @@ function startRealtimeSync(){
     firebaseBridge.unsubs.push(unsub);
   });
 }
+// 6.33.25.10.6 · Reconciliación multi-PC.
+// Firestore sigue siendo la fuente compartida; IndexedDB conserva la base local.
+// Un cambio remoto actualiza también la vista actualmente visible, sin crear escrituras nuevas.
+let interfaceReconcileBusy=false;
+let interfaceReconcileQueued=false;
+let lastInterfaceReconcileAt=0;
+async function reconcileVisibleInterface(reason='REMOTE'){
+  if(interfaceReconcileBusy){interfaceReconcileQueued=true;return;}
+  interfaceReconcileBusy=true;
+  try{
+    const active=document.querySelector('.nav-item.active')?.dataset.view||'';
+    // Siempre refrescar indicadores que pueden cambiar desde otra PC.
+    await refreshNotificationBadge();
+    if(active==='inicio')await renderDashboard();
+    else if(active==='mi-jornada')await renderMyDay();
+    else if(active==='planificador')await refreshPlanner();
+    else if(active==='seguimiento-diario')await renderDailyMonitor();
+    else if(active==='gestion')await renderManagementDashboard();
+    else if(active==='cartas-control')await renderControlChartsManagement();
+    else if(active==='catalogo')await renderCatalog();
+    else if(active==='analistas')await renderAnalysts();
+    else if(active==='trazabilidad')await renderAudit();
+    else if(active==='inteligencia')await analyzeData(true);
+    else if(active==='configuracion')await renderControlChartEngine();
+    lastInterfaceReconcileAt=Date.now();
+    const open=(await getAll('outbox')).filter(x=>x.status==='PENDIENTE'||x.status==='ERROR');
+    if(firebaseBridge.ready&&firebaseBridge.authUser&&!open.length){
+      setSyncStateVisualOnly('SINCRONIZADO','Firestore + interfaz actualizados');
+    }
+  }catch(e){
+    console.warn('Reconciliación visual multi-PC',reason,e);
+  }finally{
+    interfaceReconcileBusy=false;
+    if(interfaceReconcileQueued){interfaceReconcileQueued=false;setTimeout(()=>reconcileVisibleInterface('QUEUED'),60);}
+  }
+}
+async function reconcileAfterResume(force=false){
+  if(!firebaseBridge.ready||!firebaseBridge.authUser)return;
+  // Al volver de minimizado/foco, primero resolver Outbox/nube y después repintar.
+  await resumeCloudSession(force);
+  await reconcileVisibleInterface('RESUME');
+}
+
 async function manualSync(){
   if(!firebaseBridge.ready){
     const ok=await initFirebaseBridge();
@@ -4611,9 +4651,10 @@ async function resumeCloudSession(force=false){
     await refreshSyncUI();
   }
 }
-window.addEventListener('online',()=>{if(firebaseBridge.ready)resumeCloudSession(true);else initFirebaseBridge()});
-window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)resumeCloudSession(false)});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)resumeCloudSession(false)});
-setInterval(()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)scheduleOutboxFlush(200)},10000);
+window.addEventListener('online',()=>{if(firebaseBridge.ready)reconcileAfterResume(true);else initFirebaseBridge()});
+window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
+window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
+setInterval(()=>{if(firebaseBridge.ready&&firebaseBridge.authUser){scheduleOutboxFlush(200);if(!document.hidden)reconcileVisibleInterface('HEARTBEAT')}},15000);
 window.addEventListener('offline',()=>setSyncState('LOCAL','Sin conexión · cambios protegidos localmente'));
 if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',async event=>{if(event.data?.type==='OPEN_COMMUNICATIONS'){try{window.focus();await openCommunications()}catch(e){console.warn('Abrir comunicaciones desde notificación',e)}}});}
