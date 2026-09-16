@@ -1,5 +1,5 @@
-const SW_VERSION='V1.0.5.6.33.25.9';
-const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.9';
+const SW_VERSION='V1.0.5.6.33.25.10.4';
+const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.10.4';
 const APP_SHELL=[
   './','./index.html','./styles.css','./app.js','./firebase-config.js',
   './manifest.webmanifest','./version.json','./icons/icon-192.png','./icons/icon-512.png'
@@ -48,4 +48,16 @@ self.addEventListener('fetch',event=>{
       return r;
     }))
   );
+});
+
+
+// 6.33.25.10.4 · Al tocar el aviso, enfoca/abre el ERP y solicita abrir Comunicaciones.
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  event.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(clients=>{
+    for(const client of clients){
+      if('focus' in client){client.postMessage({type:'OPEN_COMMUNICATIONS',data:event.notification.data||{}});return client.focus();}
+    }
+    return self.clients.openWindow('./?open=communications');
+  }));
 });
