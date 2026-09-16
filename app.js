@@ -1,6 +1,6 @@
-const APP_VERSION='V1.0.5.6.33.9-PH-IA-FIREBASE';
+const APP_VERSION='V1.0.5.6.33.9.1-PH-IA-FIREBASE-IDB-FIX';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
-const DB_VERSION=8;
+const DB_VERSION=9;
 const SECTIONS=[
   {id:'ACTIVIDADES_LABORATORIO',label:'Actividad de Laboratorio',prefix:'AL',hint:'Mantenimiento, calibración, verificación, limpieza, preparación, control y otras actividades internas.',family:'Tipo de actividad',suggest:['MANTENIMIENTO','CALIBRACIÓN','VERIFICACIÓN','LIMPIEZA','PREPARACIÓN','CONTROL','OTRO']},
   {id:'SOPORTE_CALIDAD',label:'Soporte de Calidad',prefix:'SC',hint:'Actividades de calidad, revisión, auditoría, documentación, SGC y soporte técnico.',family:'Tipo / proceso',suggest:[]},
