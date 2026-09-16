@@ -1,14 +1,18 @@
 {
-  "version": "V1.0.5.6.33.9.1-PH-IA-FIREBASE-IDB-FIX",
-  "build": "PH-MULTIPUNTO-IA-FIREBASE",
-  "notes": "pH EI-345: control multipunto 4.00/7.00/10.00, criterio ±0.10 pH, estadística independiente, IA y Gestión Calidad mensual.",
+  "version": "V1.0.5.6.33.25.9-CENTRO-COMUNICACIONES-INTELIGENTE-CARTAS-CONSOLIDADAS",
+  "build": "V1.0.5.6.33.25.9-CENTRO-COMUNICACIONES-INTELIGENTE-CARTAS-CONSOLIDADAS",
+  "name": "Nevera Agares Microbiología EI-69 IA",
+  "notes": "Habilita la carta existente de Nevera de AGARES MICROBIOLOGÍA EI-69 con criterio técnico corregido 2–8 °C, conservando el motor metrológico/estadístico de referencia EI-269.",
   "features": [
-    "DBO5 operativo + Gestión Calidad",
-    "pH EI-345 multipunto",
-    "Error absoluto por nivel ≤0.10 pH",
-    "Resultado global de tres niveles",
-    "Westgard/Shewhart independiente pH 4/7/10",
-    "IA y trazabilidad Firebase multi-PC",
-    "Gestión mensual con tres gráficas"
+    "Nevera de AGARES MICROBIOLOGÍA EI-69 ejecutable",
+    "Criterio técnico corregido 2–8 °C",
+    "Misma lógica metrológica de referencia EI-269",
+    "Serie independiente por chartId/equipo",
+    "Westgard/Shewhart + tendencias + diagnóstico asistivo",
+    "Sin cambios en reglas Firebase ni en otras cartas"
+  ],
+  "changes": [
+    "Nueva carta técnica Congelador Microbiología EI-350",
+    "Se conserva trazabilidad histórica y snapshot de configuración"
   ]
 }
