@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.7-ACK-REALTIME';
+const APP_VERSION='V1.0.5.6.33.25.10.8-UI-ESTABLE-NO-RESET';
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
 const SECTIONS=[
@@ -696,13 +696,48 @@ function startRealtimeSync(){
 let interfaceReconcileBusy=false;
 let interfaceReconcileQueued=false;
 let lastInterfaceReconcileAt=0;
+// 10.8 · Estabilidad de interfaz: una sincronización en segundo plano jamás debe
+// desmontar un formulario que el usuario está usando. Firestore actualiza IndexedDB
+// en tiempo real; la vista se repinta solo cuando corresponde y no existe un borrador activo.
+function plannerHasActiveDraft(){
+  const view=$('#view-planificador');
+  if(!view?.classList.contains('active'))return false;
+  const ae=document.activeElement;
+  if(ae&&view.contains(ae)&&/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(ae.tagName))return true;
+  return !!(
+    ($('#planCatalog')?.value||'') || ($('#planActivitySearch')?.value||'').trim() ||
+    ($('#planAnalyst')?.value||'') || ($('#planNotes')?.value||'').trim() ||
+    ($('#planSamples')?.value||'')
+  );
+}
+function remoteChangeRelevantToView(view,reason){
+  if(['RESUME','MANUAL','QUEUED'].includes(reason))return true;
+  const map={
+    'planificador':new Set(['planning','catalog','analysts','timeRules']),
+    'mi-jornada':new Set(['planning','planComments','controlChartDefs','controlChartRecords']),
+    'seguimiento-diario':new Set(['planning','planComments']),
+    'gestion':new Set(['planning','planComments']),
+    'cartas-control':new Set(['controlChartDefs','controlChartRecords']),
+    'catalogo':new Set(['catalog']),
+    'analistas':new Set(['analysts']),
+    'trazabilidad':new Set(['audit']),
+    'inicio':new Set(['planning','catalog','analysts','planComments'])
+  };
+  return !map[view]||map[view].has(reason);
+}
 async function reconcileVisibleInterface(reason='REMOTE'){
   if(interfaceReconcileBusy){interfaceReconcileQueued=true;return;}
   interfaceReconcileBusy=true;
   try{
     const active=document.querySelector('.nav-item.active')?.dataset.view||'';
-    // Siempre refrescar indicadores que pueden cambiar desde otra PC.
+    // La campana sí puede actualizarse sin tocar el formulario activo.
     await refreshNotificationBadge();
+    if(!remoteChangeRelevantToView(active,reason))return;
+    if(active==='planificador'&&plannerHasActiveDraft()){
+      // Los datos ya están reconciliados en IndexedDB. Se difiere únicamente el repintado
+      // para no cerrar selects, borrar búsquedas ni reiniciar una planificación en curso.
+      return;
+    }
     if(active==='inicio')await renderDashboard();
     else if(active==='mi-jornada')await renderMyDay();
     else if(active==='planificador')await refreshPlanner();
@@ -4653,7 +4688,9 @@ window.addEventListener('online',()=>{if(firebaseBridge.ready)reconcileAfterResu
 window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
-setInterval(()=>{if(firebaseBridge.ready&&firebaseBridge.authUser){scheduleOutboxFlush(200);if(!document.hidden)reconcileVisibleInterface('HEARTBEAT')}},15000);
+// 10.8 · Heartbeat de transporte únicamente. Antes repintaba la vista cada 15 s y podía
+// cerrar el selector/reiniciar el formulario aunque no existiera ninguna acción del usuario.
+setInterval(()=>{if(firebaseBridge.ready&&firebaseBridge.authUser){scheduleOutboxFlush(200);refreshSyncUI().catch(()=>{});}},15000);
 // 10.7 · watchdog visual de ACK. No escribe ni consulta Firestore: solo compara
 // el estado real de Outbox con el indicador. Corrige estados visuales obsoletos.
 setInterval(()=>{
