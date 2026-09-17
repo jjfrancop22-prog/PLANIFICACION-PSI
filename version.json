@@ -1,14 +1,14 @@
 {
-  "version": "V1.0.5.6.33.9-PH-IA-FIREBASE",
-  "build": "PH-MULTIPUNTO-IA-FIREBASE",
-  "notes": "pH EI-345: control multipunto 4.00/7.00/10.00, criterio ±0.10 pH, estadística independiente, IA y Gestión Calidad mensual.",
+  "version": "V1.0.5.6.33.25.10.9",
+  "build": "V1.0.5.6.33.25.10.9-UI-ESTABLE-NO-RESET",
+  "name": "UI-ESTABLE-NO-RESET",
+  "notes": "Evita que la sincronización en segundo plano reinicie formularios, cierre selectores o borre una planificación en curso. El heartbeat ya no repinta la interfaz.",
   "features": [
-    "DBO5 operativo + Gestión Calidad",
-    "pH EI-345 multipunto",
-    "Error absoluto por nivel ≤0.10 pH",
-    "Resultado global de tres niveles",
-    "Westgard/Shewhart independiente pH 4/7/10",
-    "IA y trazabilidad Firebase multi-PC",
-    "Gestión mensual con tres gráficas"
-  ]
+    "Sin reinicio periódico del Planificador",
+    "Heartbeat solo sincroniza transporte/ACK",
+    "Cambios remotos repintan solo módulos relacionados",
+    "Borradores y selectores activos protegidos",
+    "Firestore e IndexedDB conservados sin cambios de reglas"
+  ],
+  "date": "2026-09-16"
 }

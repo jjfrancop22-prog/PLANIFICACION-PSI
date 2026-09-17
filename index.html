@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f4c81" />
   <title>ERP Planificación NextGen</title>
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="stylesheet" href="styles.css?v=6.33.25.10.8" />
+  <link rel="stylesheet" href="styles.css?v=6.33.25.10.9" />
 </head>
 <body>
 <div class="app-shell">
@@ -25,7 +25,7 @@
       <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
       <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
     </nav>
-    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.8-UI-ESTABLE-NO-RESET · Firebase Auth</small></div>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.9-UI-ESTABLE-NO-RESET · Firebase Auth</small></div>
   </aside>
 
   <main class="main">
@@ -295,7 +295,7 @@
       </div>
     
       <div class="card control-chart-engine-card">
-        <div class="section-head"><div><span class="eyebrow">NÚCLEO 6.33.25.10.8 · FIREBASE MULTI-PC · UI ESTABLE · SIN REINICIOS</span><h3>📈 Motor universal de Cartas de Control</h3><p>Configure cada carta por actividad/área y método. La definición se sincroniza entre computadoras mediante el mismo Firestore + Outbox + tiempo real del ERP.</p></div><button class="btn primary" id="btnNewControlChart" type="button" onclick="openControlChartDef().catch(e=>{console.error(e);alert('No se pudo abrir la carta: '+e.message)})">+ Nueva carta</button></div>
+        <div class="section-head"><div><span class="eyebrow">NÚCLEO 6.33.25.10.9 · FIREBASE MULTI-PC · UI ESTABLE · SIN REINICIOS</span><h3>📈 Motor universal de Cartas de Control</h3><p>Configure cada carta por actividad/área y método. La definición se sincroniza entre computadoras mediante el mismo Firestore + Outbox + tiempo real del ERP.</p></div><button class="btn primary" id="btnNewControlChart" type="button" onclick="openControlChartDef().catch(e=>{console.error(e);alert('No se pudo abrir la carta: '+e.message)})">+ Nueva carta</button></div>
         <div class="sync-settings-grid"><div><small>Cartas configuradas</small><strong id="chartEngineTotal">0</strong></div><div><small>Fuente compartida</small><strong id="chartEngineCloud">ESPERANDO SESIÓN</strong></div><div><small>Regla de acceso</small><strong>ACTIVIDAD ASIGNADA</strong></div><div><small>Datos locales</small><strong>CACHÉ / OUTBOX</strong></div></div>
         <div class="inline-alert info"><b>Arquitectura:</b> Calidad crea la carta una sola vez. El analista la verá únicamente cuando tenga asignada la actividad correspondiente. Los criterios y campos específicos se agregarán sobre esta definición sin romper la sincronización.</div>
         <div id="controlChartDefsEmpty" class="empty compact"><h4>Aún no hay cartas configuradas</h4><p>Primero pruebe la sincronización creando una carta de prueba.</p></div>
@@ -698,7 +698,7 @@
 
 <div id="toast" class="toast"></div>
 <script src="firebase-config.js"></script>
-<script src="app.js?v=6.33.25.10.8"></script>
+<script src="app.js?v=6.33.25.10.9"></script>
 
 <script>
 (function(){
