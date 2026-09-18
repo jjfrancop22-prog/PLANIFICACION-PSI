@@ -1,14 +1,14 @@
 {
-  "version": "V1.0.5.6.33.25.10.9",
-  "build": "V1.0.5.6.33.25.10.9-UI-ESTABLE-NO-RESET",
-  "name": "UI-ESTABLE-NO-RESET",
-  "notes": "Evita que la sincronización en segundo plano reinicie formularios, cierre selectores o borre una planificación en curso. El heartbeat ya no repinta la interfaz.",
+  "version": "V1.0.5.6.33.25.10.10",
+  "build": "V1.0.5.6.33.25.10.10-ANTI-DUPLICIDAD-TRANSACCIONAL",
+  "name": "ANTI-DUPLICIDAD-TRANSACCIONAL",
+  "notes": "Corrección de fondo para doble finalización, doble consumo y planificación duplicada en escenarios multi-PC/reconexión.",
   "features": [
-    "Sin reinicio periódico del Planificador",
-    "Heartbeat solo sincroniza transporte/ACK",
-    "Cambios remotos repintan solo módulos relacionados",
-    "Borradores y selectores activos protegidos",
-    "Firestore e IndexedDB conservados sin cambios de reglas"
+    "Bloqueo local contra doble clic en planificación y finalización",
+    "Transacción Firestore antes de finalizar actividades con movimiento de inventario",
+    "Aviso técnico final con ID determinístico por actividad",
+    "Detección de planificación idéntica antes de crearla",
+    "Finalización con marca completionCommittedAt para trazabilidad"
   ],
-  "date": "2026-09-16"
+  "date": "2026-09-18"
 }
