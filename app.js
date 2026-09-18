@@ -1,4 +1,5 @@
-const APP_VERSION='V1.0.5.6.33.25.10.10-ANTI-DUPLICIDAD-TRANSACCIONAL';
+const APP_VERSION='V1.0.5.6.33.25.10.11-RECONCILIACION-CACHE-MULTIPC';
+const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
 const SECTIONS=[
@@ -47,14 +48,14 @@ async function queue(type,entity,payload){
       const keep=open[0];
       keep.type=open.some(x=>x.type==='CREATE')?'CREATE':type;
       keep.payload=payload;keep.status='PENDIENTE';keep.attempts=0;keep.lastError=null;
-      keep.updatedAt=nowISO();
+      keep.updatedAt=nowISO();keep.sessionId=PAGE_SESSION_ID;
       await put('outbox',keep);
       for(const stale of open.slice(1)){stale.status='SUPERSEDIDO';stale.lastError=null;stale.syncedAt=nowISO();await put('outbox',stale)}
       firebaseBridge.flushRequested=true;await refreshSyncUI();scheduleOutboxFlush(80);return;
     }
   }
   await put('outbox',{
-    id:uid('OUT'),createdAt:nowISO(),type,entity,payload,recordId,
+    id:uid('OUT'),createdAt:nowISO(),type,entity,payload,recordId,sessionId:PAGE_SESSION_ID,
     status:'PENDIENTE',attempts:0,lastError:null
   });
   firebaseBridge.flushRequested=true;
@@ -266,11 +267,40 @@ async function reconcilePlanningAgainstCloud(cloudIds){
   }
   return removed;
 }
+async function reconcilePreviousSessionPlanningOutbox(cloudDocs){
+  // 10.11 · Al abrir una PC, Firestore manda. Una Outbox heredada de una sesión
+  // anterior no puede resucitar una planificación borrada/modificada en otra PC.
+  // No se borra evidencia: queda como CONFLICTO_LOCAL para trazabilidad.
+  const cloudMap=new Map(cloudDocs.map(d=>[d.id,d.data()||{}]));
+  const open=(await getAll('outbox')).filter(x=>x.entity==='planning' &&
+    (x.status==='PENDIENTE'||x.status==='ERROR') && x.sessionId!==PAGE_SESSION_ID);
+  let quarantined=0, acknowledged=0;
+  for(const item of open){
+    const payload=cloudPayloadFor('planning',item.payload||{});
+    const id=payload.id||item.recordId;
+    if(!id)continue;
+    const cloud=cloudMap.get(id);
+    if(item.type==='DELETE'){
+      if(!cloud){item.status='SINCRONIZADO';item.syncedAt=nowISO();item.lastError=null;await put('outbox',item);acknowledged++;}
+      continue;
+    }
+    if(cloud && sameCloudFunctionalPayload(payload,cloud)){
+      item.status='SINCRONIZADO';item.syncedAt=nowISO();item.lastError=null;await put('outbox',item);acknowledged++;continue;
+    }
+    // Si la nube ya no tiene el registro, o contiene otra revisión, se conserva
+    // la nube como estado canónico y se impide que el caché antiguo la sobrescriba.
+    item.status='CONFLICTO_LOCAL';item.syncedAt=nowISO();
+    item.lastError=cloud?'Revisión local antigua; Firestore conserva una revisión diferente':'Planificación local antigua ausente en Firestore';
+    await put('outbox',item);quarantined++;
+  }
+  return {quarantined,acknowledged};
+}
 async function pullFirebaseStore(storeName){
   if(!firebaseBridge.ready||!FIREBASE_SYNC_STORES.includes(storeName))return 0;
   const {collection,getDocs}=firebaseBridge.mods;
   const physical=cloudCollectionFor(storeName);
   const snap=await getDocs(collection(firebaseBridge.db,physical));
+  if(storeName==='planning')await reconcilePreviousSessionPlanningOutbox(snap.docs);
   let count=0;
   for(const d of snap.docs){
     const data=d.data();

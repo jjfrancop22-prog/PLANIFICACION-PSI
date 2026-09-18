@@ -1,12 +1,12 @@
-const SW_VERSION='V1.0.5.6.33.25.10.10';
-const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.10.10';
+const SW_VERSION='V1.0.5.6.33.25.10.11';
+const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.10.11';
 const APP_SHELL=[
   './','./index.html','./styles.css','./app.js','./firebase-config.js',
   './manifest.webmanifest','./version.json','./icons/icon-192.png','./icons/icon-512.png'
 ];
 
 self.addEventListener('install',event=>{
-  event.waitUntil(caches.open(CACHE_NAME).then(c=>c.addAll(APP_SHELL)));
+  event.waitUntil(caches.open(CACHE_NAME).then(c=>c.addAll(APP_SHELL)).then(()=>self.skipWaiting()));
 });
 
 self.addEventListener('activate',event=>{

@@ -1,8 +1,8 @@
 {
-  "version": "V1.0.5.6.33.25.10.10",
-  "build": "V1.0.5.6.33.25.10.10-ANTI-DUPLICIDAD-TRANSACCIONAL",
-  "name": "ANTI-DUPLICIDAD-TRANSACCIONAL",
-  "notes": "Corrección de fondo para doble finalización, doble consumo y planificación duplicada en escenarios multi-PC/reconexión.",
+  "version": "V1.0.5.6.33.25.10.11",
+  "build": "V1.0.5.6.33.25.10.11-RECONCILIACION-CACHE-MULTIPC",
+  "name": "RECONCILIACION-CACHE-MULTIPC",
+  "notes": "Reconciliación autoritativa Firestore/IndexedDB entre PCs y actualización PWA sin necesidad de borrar caché.",
   "features": [
     "Bloqueo local contra doble clic en planificación y finalización",
     "Transacción Firestore antes de finalizar actividades con movimiento de inventario",
