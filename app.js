@@ -62,11 +62,34 @@ async function queue(type,entity,payload){
   await refreshSyncUI();
   scheduleOutboxFlush(80);
 }
+// 10.12 · Protección de cuota: no martillar Firestore cuando responde RESOURCE_EXHAUSTED.
+let firebaseQuotaPauseUntil=0;
+let firebaseQuotaFailures=0;
+function isFirebaseQuotaError(err){
+  const t=String(err?.code||'')+' '+String(err?.message||err||'');
+  return /resource-exhausted|quota exceeded|quota|too many requests|429/i.test(t);
+}
+function quotaPauseRemaining(){return Math.max(0,firebaseQuotaPauseUntil-Date.now())}
+function registerFirebaseQuotaError(err){
+  firebaseQuotaFailures=Math.min(8,firebaseQuotaFailures+1);
+  const delay=Math.min(15*60*1000,30000*Math.pow(2,firebaseQuotaFailures-1));
+  firebaseQuotaPauseUntil=Date.now()+delay;
+  firebaseBridge.lastError='Cuota Firebase temporalmente limitada';
+  setSyncStateVisualOnly('CUOTA FIREBASE',`Pausa automática ${Math.ceil(delay/60000)} min · datos locales protegidos`);
+  console.warn('Firebase quota backoff',delay,err);
+  return delay;
+}
+function clearFirebaseQuotaBackoff(){firebaseQuotaFailures=0;firebaseQuotaPauseUntil=0}
+async function hasOpenOutbox(){
+  const all=await getAll('outbox');
+  return all.some(x=>x.status==='PENDIENTE'||x.status==='ERROR');
+}
 function scheduleOutboxFlush(delay=250){
+  if(quotaPauseRemaining()>0)return;
   if(firebaseBridge.flushTimer)clearTimeout(firebaseBridge.flushTimer);
   firebaseBridge.flushTimer=setTimeout(async()=>{
     firebaseBridge.flushTimer=null;
-    try{await flushOutbox(false)}catch(e){console.warn('Reintento Outbox',e)}
+    try{if(await hasOpenOutbox())await flushOutbox(false)}catch(e){console.warn('Reintento Outbox',e)}
   },delay);
 }
 function nextCode(section,all){const m=sectionMeta(section),count=all.filter(x=>x.section===section).length+1;return `CAT-${m.prefix}-${String(count).padStart(5,'0')}`}
@@ -448,6 +471,10 @@ async function initialControlledMigration(){
   }
 }
 async function flushOutbox(showToast=true){
+  if(quotaPauseRemaining()>0){
+    setSyncStateVisualOnly('CUOTA FIREBASE',`Pausa automática · reintento en ${Math.ceil(quotaPauseRemaining()/60000)} min`);
+    return false;
+  }
   if(firebaseBridge.busy){
     firebaseBridge.flushRequested=true;
     scheduleOutboxFlush(350);
@@ -518,6 +545,13 @@ async function flushOutbox(showToast=true){
         await put('outbox',item);
         sent++;
       }catch(err){
+        // 10.12: si Firestore agotó cuota, NO hacer la lectura de verificación ni
+        // continuar el lote. Eso solo agregaría más lecturas y agravaría el límite.
+        if(isFirebaseQuotaError(err)){
+          item.attempts=Number(item.attempts||0)+1;
+          item.status='ERROR';item.lastError='Firebase quota/resource-exhausted · reintento automático diferido';
+          await put('outbox',item);failed++;registerFirebaseQuotaError(err);break;
+        }
         // Algunos Chrome/PWA pueden perder la respuesta de confirmación aunque
         // Firestore sí haya aplicado la escritura. Antes de pintar ERROR, leer
         // el documento y comprobar el resultado real para evitar falsos rojos.
@@ -560,13 +594,13 @@ async function flushOutbox(showToast=true){
       firebaseBridge.lastError=open[0]?.lastError||`${open.length} cambio(s) pendientes`;
       setSyncStateVisualOnly(failed?'ERROR':'PENDIENTE',`${open.length} cambio(s) sin confirmar`);
       firebaseBridge.flushRequested=true;
-      scheduleOutboxFlush(2500);
+      if(quotaPauseRemaining()===0)scheduleOutboxFlush(2500);
       if(showToast)toast(`${open.length} cambio(s) siguen pendientes`);
       return false;
     }
 
     firebaseBridge.lastSyncAt=nowISO();
-    firebaseBridge.lastError=null;
+    firebaseBridge.lastError=null;clearFirebaseQuotaBackoff();
     await put('config',{key:'lastCloudSyncAt',value:firebaseBridge.lastSyncAt});
     setSyncState('SINCRONIZADO',sent?`${sent} cambio(s) confirmados en Firestore`:'Sin cambios pendientes');
     if(showToast)toast(sent?`${sent} cambio(s) confirmados`:'Todo está sincronizado');
@@ -575,7 +609,7 @@ async function flushOutbox(showToast=true){
     firebaseBridge.busy=false;
     await refreshSyncUI();
     try{await renderControlChartEngine()}catch(e){console.warn('Estado visual de Cartas pendiente',e)}
-    if(firebaseBridge.flushRequested)scheduleOutboxFlush(400);
+    if(firebaseBridge.flushRequested&&quotaPauseRemaining()===0)scheduleOutboxFlush(400);
   }
 }
 function shouldAcceptCloud(local,remote){
@@ -2226,7 +2260,14 @@ async function claimActivityCompletion(plan){
       if(!result.claimed){activityCompletionLocks.delete(plan.id);return {ok:false,reason:'Esta actividad ya fue finalizada desde otra sesión/equipo. Se actualizarán los datos desde Firebase.'};}
       plan.completionClaim=result.owner;plan.completionClaimedAt=nowISO();
       return {ok:true};
-    }catch(err){activityCompletionLocks.delete(plan.id);return {ok:false,reason:`No se pudo obtener el bloqueo anti-duplicado en Firebase: ${String(err?.message||err)}`};}
+    }catch(err){
+      activityCompletionLocks.delete(plan.id);
+      if(isFirebaseQuotaError(err)){
+        registerFirebaseQuotaError(err);
+        return {ok:false,reason:'Firebase alcanzó temporalmente su límite de cuota. La actividad NO fue finalizada ni se descontó inventario. Sus datos guardados permanecen protegidos. Espere el reintento automático antes de finalizar.'};
+      }
+      return {ok:false,reason:`No se pudo obtener el bloqueo anti-duplicado en Firebase: ${String(err?.message||err)}`};
+    }
   }
   return {ok:true};
 }
@@ -4771,7 +4812,12 @@ window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.aut
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 // 10.8 · Heartbeat de transporte únicamente. Antes repintaba la vista cada 15 s y podía
 // cerrar el selector/reiniciar el formulario aunque no existiera ninguna acción del usuario.
-setInterval(()=>{if(firebaseBridge.ready&&firebaseBridge.authUser){scheduleOutboxFlush(200);refreshSyncUI().catch(()=>{});}},15000);
+setInterval(async()=>{
+  if(firebaseBridge.ready&&firebaseBridge.authUser){
+    refreshSyncUI().catch(()=>{});
+    if(quotaPauseRemaining()===0 && await hasOpenOutbox())scheduleOutboxFlush(500);
+  }
+},60000);
 // 10.7 · watchdog visual de ACK. No escribe ni consulta Firestore: solo compara
 // el estado real de Outbox con el indicador. Corrige estados visuales obsoletos.
 setInterval(()=>{

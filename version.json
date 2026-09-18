@@ -1,7 +1,7 @@
 {
-  "version": "V1.0.5.6.33.25.10.11",
-  "build": "V1.0.5.6.33.25.10.11-RECONCILIACION-CACHE-MULTIPC",
-  "name": "RECONCILIACION-CACHE-MULTIPC",
+  "version": "V1.0.5.6.33.25.10.12",
+  "build": "V1.0.5.6.33.25.10.12-CUOTA-FIREBASE-ANTI-LOOP",
+  "name": "CUOTA-FIREBASE-ANTI-LOOP",
   "notes": "Reconciliación autoritativa Firestore/IndexedDB entre PCs y actualización PWA sin necesidad de borrar caché.",
   "features": [
     "Bloqueo local contra doble clic en planificación y finalización",
