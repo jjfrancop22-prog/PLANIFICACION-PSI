@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.11-RECONCILIACION-CACHE-MULTIPC';
+const APP_VERSION='V1.0.5.6.33.25.10.13-CIERRE-LOCAL-IDEMPOTENTE';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -2243,38 +2243,20 @@ async function claimActivityCompletion(plan){
   if(!plan?.id)return {ok:false,reason:'Actividad inválida'};
   if(activityCompletionLocks.has(plan.id))return {ok:false,reason:'La finalización ya está en proceso'};
   activityCompletionLocks.add(plan.id);
-  // Cuando Firebase está configurado, el cierre que mueve inventario exige una
-  // transacción cloud. Esto evita que dos PCs descuenten el mismo plan a la vez.
-  if(firebaseBridge.configured){
-    if(!firebaseBridge.ready||!firebaseBridge.authUser){activityCompletionLocks.delete(plan.id);return {ok:false,reason:'Sin conexión confirmada con Firebase. Los datos pueden guardarse, pero para finalizar y descontar inventario se requiere conexión para evitar duplicidades.'};}
-    try{
-      const {doc,runTransaction}=firebaseBridge.mods;
-      const ref=doc(firebaseBridge.db,'planning',plan.id);
-      const owner=`${currentSessionUser?.email||currentSessionUser?.name||'usuario'}|${nowISO()}`;
-      const result=await runTransaction(firebaseBridge.db,async tx=>{
-        const snap=await tx.get(ref);const cloud=snap.exists()?snap.data():null;
-        if(cloud?.status==='REALIZADO'||cloud?.completionCommittedAt)return {claimed:false,cloud};
-        tx.set(ref,{completionClaim:owner,completionClaimedAt:nowISO(),updatedAt:nowISO()},{merge:true});
-        return {claimed:true,owner};
-      });
-      if(!result.claimed){activityCompletionLocks.delete(plan.id);return {ok:false,reason:'Esta actividad ya fue finalizada desde otra sesión/equipo. Se actualizarán los datos desde Firebase.'};}
-      plan.completionClaim=result.owner;plan.completionClaimedAt=nowISO();
-      return {ok:true};
-    }catch(err){
-      activityCompletionLocks.delete(plan.id);
-      if(isFirebaseQuotaError(err)){
-        registerFirebaseQuotaError(err);
-        return {ok:false,reason:'Firebase alcanzó temporalmente su límite de cuota. La actividad NO fue finalizada ni se descontó inventario. Sus datos guardados permanecen protegidos. Espere el reintento automático antes de finalizar.'};
-      }
-      return {ok:false,reason:`No se pudo obtener el bloqueo anti-duplicado en Firebase: ${String(err?.message||err)}`};
-    }
-  }
-  return {ok:true};
+  // 10.13 · CIERRE OPERATIVO LOCAL + IDEMPOTENCIA.
+  // El analista NO depende de una transacción cloud previa para cerrar su trabajo.
+  // La identidad del cierre es determinística por plan: los reintentos/reconexiones
+  // reutilizan el mismo planning y los mismos avisos automáticos en Firestore.
+  const safePlanId=String(plan.id).replace(/[^a-zA-Z0-9_-]/g,'_');
+  plan.completionOperationId=`FINAL-${safePlanId}`;
+  plan.completionClaim=`LOCAL|${PAGE_SESSION_ID}`;
+  plan.completionClaimedAt=nowISO();
+  return {ok:true,offline:firebaseBridge.configured&&(!firebaseBridge.ready||!firebaseBridge.authUser||quotaPauseRemaining()>0)};
 }
 function releaseActivityCompletion(planId){if(planId)activityCompletionLocks.delete(planId)}
 
 async function completeActivityRecord(p,actualSamples=null,finalComment='',calibrationResult=undefined,reagentResult=undefined){
-  p.status='REALIZADO';p.actualFinishedAt=nowISO();p.completionCommittedAt=p.actualFinishedAt;p.completionCommittedBy=currentSessionUser?.email||currentSessionUser?.name||'Usuario';p.updatedAt=nowISO();
+  p.status='REALIZADO';p.actualFinishedAt=nowISO();p.completionCommittedAt=p.actualFinishedAt;p.completionCommittedBy=currentSessionUser?.email||currentSessionUser?.name||'Usuario';p.completionOperationId=p.completionOperationId||`FINAL-${String(p.id||'PLAN').replace(/[^a-zA-Z0-9_-]/g,'_')}`;p.updatedAt=nowISO();
   if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;if(reagentResult!==undefined)p.reagentResult=reagentResult;
   await put('planning',p);await queue('UPDATE','planning',p);
   // Confirmar el saldo como inventario vivo: el siguiente uso parte del peso/stock final real.
@@ -2344,7 +2326,7 @@ async function submitFinishActivity(e){
   const dailyGate=await assertDailyControlsBeforeDayClose(p);
   if(!dailyGate.ok){alert(dailyGate.message);await renderMyDay();return toast('Complete las cartas de control obligatorias antes de cerrar la jornada');}
   const claim=await claimActivityCompletion(p);
-  if(!claim.ok){toast(claim.reason);if(firebaseBridge.ready&&firebaseBridge.authUser)await pullFirebaseData(false);return;}
+  if(!claim.ok){toast(claim.reason);return;}
   const submitBtn=$('#finishSubmitBtn');if(submitBtn)submitBtn.disabled=true;
   $('#finishActivityDialog').close();
   try{await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment,calibrationResult,reagentResult);}

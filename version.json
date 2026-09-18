@@ -1,14 +1,15 @@
 {
-  "version": "V1.0.5.6.33.25.10.12",
-  "build": "V1.0.5.6.33.25.10.12-CUOTA-FIREBASE-ANTI-LOOP",
-  "name": "CUOTA-FIREBASE-ANTI-LOOP",
-  "notes": "Reconciliación autoritativa Firestore/IndexedDB entre PCs y actualización PWA sin necesidad de borrar caché.",
+  "version": "V1.0.5.6.33.25.10.13",
+  "build": "V1.0.5.6.33.25.10.13-CIERRE-LOCAL-IDEMPOTENTE",
+  "name": "CIERRE-LOCAL-IDEMPOTENTE",
+  "notes": "Recupera el cierre operativo inmediato sin transacción Firestore previa. Mantiene idempotencia por plan/operationId, avisos determinísticos, Outbox anti-duplicado, reconciliación multi-PC y backoff de cuota.",
   "features": [
-    "Bloqueo local contra doble clic en planificación y finalización",
-    "Transacción Firestore antes de finalizar actividades con movimiento de inventario",
-    "Aviso técnico final con ID determinístico por actividad",
-    "Detección de planificación idéntica antes de crearla",
-    "Finalización con marca completionCommittedAt para trazabilidad"
+    "Cierre local inmediato aunque Firebase esté temporalmente limitado",
+    "operationId determinístico FINAL-{planId}",
+    "Avisos de finalización y cierre técnico determinísticos por actividad",
+    "Outbox coalescente por entidad/recordId",
+    "Backoff Firebase sin bloquear el trabajo del analista",
+    "Reconciliación multi-PC y PWA con caché versionada"
   ],
   "date": "2026-09-18"
 }
