@@ -1,15 +1,13 @@
 {
-  "version": "V1.0.5.6.33.25.10.13",
-  "build": "V1.0.5.6.33.25.10.13-CIERRE-LOCAL-IDEMPOTENTE",
-  "name": "CIERRE-LOCAL-IDEMPOTENTE",
-  "notes": "Recupera el cierre operativo inmediato sin transacción Firestore previa. Mantiene idempotencia por plan/operationId, avisos determinísticos, Outbox anti-duplicado, reconciliación multi-PC y backoff de cuota.",
+  "version": "V1.0.5.6.33.25.10.14",
+  "build": "V1.0.5.6.33.25.10.14-PDF-MC1602-08",
+  "name": "PDF-MC1602-08",
+  "notes": "Agrega exportación mensual controlada MC1602-08 exclusivamente para Condiciones de Balanza, DBO5 y Condiciones de Microbiología.",
   "features": [
-    "Cierre local inmediato aunque Firebase esté temporalmente limitado",
-    "operationId determinístico FINAL-{planId}",
-    "Avisos de finalización y cierre técnico determinísticos por actividad",
-    "Outbox coalescente por entidad/recordId",
-    "Backoff Firebase sin bloquear el trabajo del analista",
-    "Reconciliación multi-PC y PWA con caché versionada"
+    "Botón PDF visible solo en las 3 cartas autorizadas",
+    "Informe A4 horizontal MC1602-08 con KPIs, gráficas, trazabilidad, IA y reglas estadísticas",
+    "Incluye criterios, equipo, data logger, responsables y firmas",
+    "Auditoría de exportación y flujo Guardar como PDF"
   ],
-  "date": "2026-09-18"
+  "date": "2026-09-20"
 }
