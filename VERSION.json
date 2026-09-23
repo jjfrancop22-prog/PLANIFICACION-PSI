@@ -1,14 +1,14 @@
 {
-  "version": "V1.0.5.6.33.25.10.8",
-  "name": "UI-ESTABLE-NO-RESET",
-  "date": "2026-09-16",
-  "build": "V1.0.5.6.33.25.10.8-UI-ESTABLE-NO-RESET",
-  "notes": "Evita que la sincronización en segundo plano reinicie formularios, cierre selectores o borre una planificación en curso. El heartbeat ya no repinta la interfaz.",
+  "version": "V1.0.5.6.33.25.10.16",
+  "build": "V1.0.5.6.33.25.10.16-VERSION-RUNTIME-AUTOREPARACION",
+  "name": "VERSION-RUNTIME-AUTOREPARACION",
+  "notes": "Alinea la versión visible, version.json, APP_VERSION, recursos PWA y Service Worker; conserva la autorreparación multi-PC de planificación.",
   "features": [
-    "Sin reinicio periódico del Planificador",
-    "Heartbeat solo sincroniza transporte/ACK",
-    "Cambios remotos repintan solo módulos relacionados",
-    "Borradores y selectores activos protegidos",
-    "Firestore e IndexedDB conservados sin cambios de reglas"
-  ]
+    "Versión visible alineada en toda la interfaz",
+    "version.json y VERSION.json sincronizados",
+    "Cache-busting de app.js y styles.css actualizado",
+    "Service Worker y caché PWA incrementados",
+    "Conserva autorreparación de planificación desde Firestore"
+  ],
+  "date": "2026-09-23"
 }

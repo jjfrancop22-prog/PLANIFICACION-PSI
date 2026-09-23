@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.14-PDF-MC1602-08';
+const APP_VERSION='V1.0.5.6.33.25.10.16';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -320,9 +320,13 @@ async function reconcilePreviousSessionPlanningOutbox(cloudDocs){
 }
 async function pullFirebaseStore(storeName){
   if(!firebaseBridge.ready||!FIREBASE_SYNC_STORES.includes(storeName))return 0;
-  const {collection,getDocs}=firebaseBridge.mods;
+  const {collection,getDocs,getDocsFromServer}=firebaseBridge.mods;
   const physical=cloudCollectionFor(storeName);
-  const snap=await getDocs(collection(firebaseBridge.db,physical));
+  // 10.15: planning debe reconstruirse desde el servidor, no desde una vista local/cacheada.
+  // Esto evita que una PC conserve una agenda parcial hasta que el usuario borre IndexedDB.
+  const snap=storeName==='planning' && typeof getDocsFromServer==='function'
+    ? await getDocsFromServer(collection(firebaseBridge.db,physical))
+    : await getDocs(collection(firebaseBridge.db,physical));
   if(storeName==='planning')await reconcilePreviousSessionPlanningOutbox(snap.docs);
   let count=0;
   for(const d of snap.docs){
@@ -689,7 +693,7 @@ function startRealtimeSync(){
   FIREBASE_SYNC_STORES.forEach(storeName=>{
     let listenerReady=false;
     const physical=cloudCollectionFor(storeName);
-    const unsub=onSnapshot(collection(firebaseBridge.db,physical),async snap=>{
+    const unsub=onSnapshot(collection(firebaseBridge.db,physical),{includeMetadataChanges:true},async snap=>{
       let changed=false, incomingComments=[];
       for(const ch of snap.docChanges()){
         const chData=ch.doc.data()||{};
@@ -724,7 +728,9 @@ function startRealtimeSync(){
       // un `removed` para ese registro viejo local. Comparamos la lista completa de
       // IDs que existen AHORA en Firestore y retiramos cualquier planificación local
       // huérfana (salvo cambios locales todavía pendientes de subir).
-      if(storeName==='planning'){
+      if(storeName==='planning' && !snap.metadata.fromCache){
+        // 10.15: jamás interpretar un snapshot de caché como listado canónico.
+        // Un snapshot parcial/cacheado no puede borrar actividades válidas de IndexedDB.
         const pruned=await reconcilePlanningAgainstCloud(new Set(snap.docs.map(d=>d.id)));
         if(pruned)changed=true;
       }
@@ -825,10 +831,28 @@ async function reconcileVisibleInterface(reason='REMOTE'){
     if(interfaceReconcileQueued){interfaceReconcileQueued=false;setTimeout(()=>reconcileVisibleInterface('QUEUED'),60);}
   }
 }
+let lastPlanningServerHealAt=0;
+async function selfHealPlanningFromServer(force=false){
+  if(!firebaseBridge.ready||!firebaseBridge.authUser)return 0;
+  const now=Date.now();
+  if(!force && now-lastPlanningServerHealAt<120000)return 0;
+  lastPlanningServerHealAt=now;
+  try{
+    // pullFirebaseStore('planning') usa getDocsFromServer desde 10.15 y reconstruye
+    // la base local sin exigir borrar caché/historial del navegador.
+    const n=await pullFirebaseStore('planning');
+    firebaseBridge.lastSyncAt=nowISO();
+    return n;
+  }catch(e){
+    console.warn('Autorreparación planning desde servidor pendiente',e);
+    return 0;
+  }
+}
 async function reconcileAfterResume(force=false){
   if(!firebaseBridge.ready||!firebaseBridge.authUser)return;
   // Al volver de minimizado/foco, primero resolver Outbox/nube y después repintar.
   await resumeCloudSession(force);
+  await selfHealPlanningFromServer(force);
   await reconcileVisibleInterface('RESUME');
 }
 
@@ -4750,7 +4774,7 @@ function switchView(view){
   if(!canAccessView(view)){
     toast('Este módulo no está habilitado para su rol');
     view=currentSessionUser?.role==='ANALISTA'?'mi-jornada':'inicio';
-  }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],'seguimiento-diario':['Seguimiento Diario','Vista ejecutiva del trabajo diario por analista'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],'cartas-control':['Cartas de Control','Tendencias, Westgard, cumplimiento e IA para Calidad'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador')refreshPlanner();if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='seguimiento-diario')renderDailyMonitor();if(view==='gestion')renderManagementDashboard();if(view==='cartas-control')renderControlChartsManagement()}
+  }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],'seguimiento-diario':['Seguimiento Diario','Vista ejecutiva del trabajo diario por analista'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],'cartas-control':['Cartas de Control','Tendencias, Westgard, cumplimiento e IA para Calidad'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador'){selfHealPlanningFromServer(false).then(()=>refreshPlanner()).catch(()=>refreshPlanner());}if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='seguimiento-diario')renderDailyMonitor();if(view==='gestion')renderManagementDashboard();if(view==='cartas-control')renderControlChartsManagement()}
 async function refreshPlanner(){
   await renderPlanSelectors();
   await renderDailyLoad();
