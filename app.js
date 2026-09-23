@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.16';
+const APP_VERSION='V1.0.5.6.33.25.10.17';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -695,10 +695,28 @@ function startRealtimeSync(){
     const physical=cloudCollectionFor(storeName);
     const unsub=onSnapshot(collection(firebaseBridge.db,physical),{includeMetadataChanges:true},async snap=>{
       let changed=false, incomingComments=[];
+
+      // 10.17 · BLINDAJE PLANIFICACIÓN EN SESIÓN ACTIVA.
+      // Firestore puede emitir primero un snapshot desde su caché local al reconectar,
+      // recuperar foco o mientras cambia el estado de red. Ese snapshot NO es autoridad
+      // para planning: podría ser parcial y provocar que la propia PC del planificador
+      // oculte actividades que ya están confirmadas en el servidor.
+      // Para planning ignoramos por completo cambios procedentes de caché y esperamos
+      // el snapshot de servidor. Los cambios locales del usuario ya están protegidos
+      // por IndexedDB + Outbox hasta recibir ACK remoto.
+      if(storeName==='planning' && snap.metadata.fromCache){
+        setSyncStateVisualOnly('SINCRONIZANDO','Validando planificación con Firebase…');
+        listenerReady=true;
+        return;
+      }
+
       for(const ch of snap.docChanges()){
         const chData=ch.doc.data()||{};
         if(!cloudDocBelongsToStore(storeName,chData))continue;
         if(ch.type==='removed'){
+          // 10.17: una eliminación de planning solo se acepta desde snapshot de servidor.
+          // (Los snapshots fromCache ya fueron descartados arriba.)
+          if(storeName==='planning' && snap.metadata.fromCache)continue;
           // 6.33.21.1: una definición de carta nunca desaparece por sincronización.
           // En este ERP las cartas se DESACTIVAN; no existe borrado físico desde la UI.
           // Esto protege frente a clientes antiguos que todavía intenten borrar por deduplicación.
@@ -4857,6 +4875,14 @@ window.addEventListener('online',()=>{if(firebaseBridge.ready)reconcileAfterResu
 window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
+// 10.17 · Verificación silenciosa de integridad mientras el JEFE permanece planificando.
+// No reemplaza realtime ni hace polling agresivo: cada 3 min confirma el estado canónico
+// del servidor únicamente si la pestaña está visible y el Planificador está abierto.
+setInterval(()=>{
+  if(document.hidden||!firebaseBridge.ready||!firebaseBridge.authUser)return;
+  if(!document.querySelector('#view-planificador.active'))return;
+  selfHealPlanningFromServer(true).then(()=>reconcileVisibleInterface('PLANNING_INTEGRITY')).catch(()=>{});
+},180000);
 // 10.8 · Heartbeat de transporte únicamente. Antes repintaba la vista cada 15 s y podía
 // cerrar el selector/reiniciar el formulario aunque no existiera ninguna acción del usuario.
 setInterval(async()=>{

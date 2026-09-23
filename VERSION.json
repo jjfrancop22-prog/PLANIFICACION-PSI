@@ -1,8 +1,8 @@
 {
-  "version": "V1.0.5.6.33.25.10.16",
-  "build": "V1.0.5.6.33.25.10.16-VERSION-RUNTIME-AUTOREPARACION",
+  "version": "V1.0.5.6.33.25.10.17",
+  "build": "V1.0.5.6.33.25.10.17-BLINDAJE-PLANIFICACION-SESION-ACTIVA",
   "name": "VERSION-RUNTIME-AUTOREPARACION",
-  "notes": "Alinea la versión visible, version.json, APP_VERSION, recursos PWA y Service Worker; conserva la autorreparación multi-PC de planificación.",
+  "notes": "Evita desaparición temporal de actividades durante planificación activa: planning ignora snapshots Firestore desde caché, acepta estado canónico solo desde servidor y verifica integridad silenciosamente.",
   "features": [
     "Versión visible alineada en toda la interfaz",
     "version.json y VERSION.json sincronizados",
@@ -10,5 +10,12 @@
     "Service Worker y caché PWA incrementados",
     "Conserva autorreparación de planificación desde Firestore"
   ],
-  "date": "2026-09-23"
+  "date": "2026-09-23",
+  "changes": [
+    "Snapshots fromCache de planning no modifican IndexedDB ni la vista",
+    "Eliminaciones de planning solo se aceptan desde estado confirmado por servidor",
+    "Conserva IndexedDB + Outbox para cambios locales pendientes",
+    "Autorreparación al recuperar foco/online y verificación de integridad cada 3 min solo en Planificador visible",
+    "Versión, recursos PWA y Service Worker alineados en 10.17"
+  ]
 }
