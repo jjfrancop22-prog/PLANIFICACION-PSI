@@ -1,6 +1,6 @@
 {
-  "version": "V1.0.5.6.33.25.10.19",
-  "build": "V1.0.5.6.33.25.10.19-INVENTARIO-VIVO-GLOBAL-CALIDAD",
+  "version": "V1.0.5.6.33.25.10.19.1",
+  "build": "V1.0.5.6.33.25.10.19.1-INVENTARIO-VIVO-GLOBAL-CALIDAD-VERSION-VISIBLE",
   "name": "INVENTARIO-VIVO-GLOBAL-CALIDAD",
   "notes": "Inventario global por reactivo+lote: saldo confirmado dinámico entre PCs/analistas, agotados ocultos y edición manual protegida por CALIDAD.",
   "features": [
