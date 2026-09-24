@@ -1,22 +1,21 @@
 {
-  "version": "V1.0.5.6.33.25.10.18",
-  "build": "V1.0.5.6.33.25.10.18-BLINDAJE-HORARIO-SIN-SOLAPES-RECEPCION-FLEXIBLE",
-  "name": "BLINDAJE-HORARIO-SIN-SOLAPES-RECEPCION-FLEXIBLE",
-  "notes": "Bloquea cruces y sobrecarga al guardar; respeta la hora elegida y deja Recepción con duración compuesta editable.",
+  "version": "V1.0.5.6.33.25.10.19",
+  "build": "V1.0.5.6.33.25.10.19-INVENTARIO-VIVO-GLOBAL-CALIDAD",
+  "name": "INVENTARIO-VIVO-GLOBAL-CALIDAD",
+  "notes": "Inventario global por reactivo+lote: saldo confirmado dinámico entre PCs/analistas, agotados ocultos y edición manual protegida por CALIDAD.",
   "features": [
-    "Bloqueo estricto de solapamientos por analista",
-    "Bloqueo de carga diaria superior a la jornada configurada",
-    "La hora elegida no se mueve silenciosamente al guardar",
-    "Recepción de Muestras conserva actividad compuesta pero con duración total editable",
-    "Desglose de Recepción validado contra la duración definida por el jefe",
-    "Conserva blindaje 10.17 de sincronización y sesión activa"
+    "Saldo global por nombre + lote sin filtro por usuario/rol",
+    "Cada nueva actividad toma el último saldo confirmado",
+    "Lotes con saldo 0 quedan AGOTADOS y desaparecen de nuevas actividades",
+    "Reconciliación automática antes de visualizar consumos",
+    "Edición manual de inventario protegida con contraseña CALIDAD",
+    "Propagación del saldo vivo a actividades abiertas"
   ],
   "date": "2026-09-24",
   "changes": [
-    "Eliminada confirmación que permitía guardar cruces",
-    "Eliminada confirmación que permitía superar 8 h",
-    "Si existe cruce se informa y se sugiere el siguiente espacio, sin guardar ni mover automáticamente",
-    "Recepción deja de forzar 300 min en edición y guardado",
-    "Controles Horas/Minutos habilitados para Recepción"
+    "Corregido origen de stock que podía leer solo planificaciones visibles para el usuario",
+    "El histórico confirmado global pasa a ser la fuente de verdad del inventario",
+    "Se evita que un stock antiguo de catálogo reaparezca en otra PC o actividad",
+    "Protección de cambios manuales en reactivos/lotes/stock con contraseña CALIDAD"
   ]
 }
