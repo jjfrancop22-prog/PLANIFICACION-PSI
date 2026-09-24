@@ -1,4 +1,4 @@
-const SW_VERSION='V1.0.5.6.33.25.10.17';
+const SW_VERSION='V1.0.5.6.33.25.10.18';
 const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.10.17';
 const APP_SHELL=[
   './','./index.html','./styles.css','./app.js','./firebase-config.js',

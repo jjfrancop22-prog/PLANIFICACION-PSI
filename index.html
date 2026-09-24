@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f4c81" />
   <title>ERP Planificación NextGen</title>
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="stylesheet" href="styles.css?v=6.33.25.10.17" />
+  <link rel="stylesheet" href="styles.css?v=6.33.25.10.18" />
 </head>
 <body>
 <div class="app-shell">
@@ -25,7 +25,7 @@
       <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
       <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
     </nav>
-    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.17 · Firebase Auth</small></div>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.18 · Firebase Auth</small></div>
   </aside>
 
   <main class="main">
@@ -384,7 +384,7 @@
     <label class="full">Descripción / alcance<textarea id="catalogDescription" rows="3" placeholder="Opcional"></textarea></label>
   </div>
   <div id="rulesEditor" class="rules-editor hidden"><div class="rules-title"><div><b>Reglas por cantidad de muestras</b><small>El Planificador calculará la duración según el rango que corresponda.</small></div><button type="button" class="btn secondary" id="btnAddRule">+ Agregar rango</button></div><div id="ruleRows"></div><div class="inline-alert" id="ruleValidation"></div></div>
-  <div id="compositeEditor" class="rules-editor hidden"><div class="rules-title"><div><b>Desglose de actividad compuesta</b><small id="compositeHelp">El jefe seleccionará una sola actividad y el futuro Planificador reservará el bloque completo. En Recepción de Muestras el total queda fijado en 5 h.</small></div><button type="button" class="btn secondary" id="btnAddStep">+ Agregar detalle</button></div><div class="composite-total"><span>Duración total del bloque</span><strong id="compositeTotalLabel">5 h</strong><small id="compositeProgress">Desglose pendiente: 5 h</small></div><div id="stepRows"></div><div class="inline-alert" id="stepValidation"></div></div>
+  <div id="compositeEditor" class="rules-editor hidden"><div class="rules-title"><div><b>Desglose de actividad compuesta</b><small id="compositeHelp">El jefe seleccionará una sola actividad y el futuro Planificador reservará el bloque completo. En Recepción de Muestras la duración total es editable por el jefe y el desglose debe coincidir con ese total.</small></div><button type="button" class="btn secondary" id="btnAddStep">+ Agregar detalle</button></div><div class="composite-total"><span>Duración total del bloque</span><strong id="compositeTotalLabel">5 h</strong><small id="compositeProgress">Desglose pendiente: 5 h</small></div><div id="stepRows"></div><div class="inline-alert" id="stepValidation"></div></div>
   <div id="calibrationEditor" class="rules-editor hidden">
     <div class="rules-title">
       <div><b>Curva de calibración</b><small>Esta configuración aplica únicamente a las actividades de laboratorio de tipo curva de calibración. Registre los puntos que el analista leerá con el número de réplicas configurado.</small></div>
@@ -698,7 +698,7 @@
 
 <div id="toast" class="toast"></div>
 <script src="firebase-config.js"></script>
-<script src="app.js?v=6.33.25.10.17"></script>
+<script src="app.js?v=6.33.25.10.18"></script>
 
 <script>
 (function(){

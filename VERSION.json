@@ -1,21 +1,22 @@
 {
-  "version": "V1.0.5.6.33.25.10.17",
-  "build": "V1.0.5.6.33.25.10.17-BLINDAJE-PLANIFICACION-SESION-ACTIVA",
-  "name": "VERSION-RUNTIME-AUTOREPARACION",
-  "notes": "Evita desaparición temporal de actividades durante planificación activa: planning ignora snapshots Firestore desde caché, acepta estado canónico solo desde servidor y verifica integridad silenciosamente.",
+  "version": "V1.0.5.6.33.25.10.18",
+  "build": "V1.0.5.6.33.25.10.18-BLINDAJE-HORARIO-SIN-SOLAPES-RECEPCION-FLEXIBLE",
+  "name": "BLINDAJE-HORARIO-SIN-SOLAPES-RECEPCION-FLEXIBLE",
+  "notes": "Bloquea cruces y sobrecarga al guardar; respeta la hora elegida y deja Recepción con duración compuesta editable.",
   "features": [
-    "Versión visible alineada en toda la interfaz",
-    "version.json y VERSION.json sincronizados",
-    "Cache-busting de app.js y styles.css actualizado",
-    "Service Worker y caché PWA incrementados",
-    "Conserva autorreparación de planificación desde Firestore"
+    "Bloqueo estricto de solapamientos por analista",
+    "Bloqueo de carga diaria superior a la jornada configurada",
+    "La hora elegida no se mueve silenciosamente al guardar",
+    "Recepción de Muestras conserva actividad compuesta pero con duración total editable",
+    "Desglose de Recepción validado contra la duración definida por el jefe",
+    "Conserva blindaje 10.17 de sincronización y sesión activa"
   ],
-  "date": "2026-09-23",
+  "date": "2026-09-24",
   "changes": [
-    "Snapshots fromCache de planning no modifican IndexedDB ni la vista",
-    "Eliminaciones de planning solo se aceptan desde estado confirmado por servidor",
-    "Conserva IndexedDB + Outbox para cambios locales pendientes",
-    "Autorreparación al recuperar foco/online y verificación de integridad cada 3 min solo en Planificador visible",
-    "Versión, recursos PWA y Service Worker alineados en 10.17"
+    "Eliminada confirmación que permitía guardar cruces",
+    "Eliminada confirmación que permitía superar 8 h",
+    "Si existe cruce se informa y se sugiere el siguiente espacio, sin guardar ni mover automáticamente",
+    "Recepción deja de forzar 300 min en edición y guardado",
+    "Controles Horas/Minutos habilitados para Recepción"
   ]
 }
