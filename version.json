@@ -1,13 +1,23 @@
 {
-  "version": "V1.0.5.6.33.25.10.14",
-  "build": "V1.0.5.6.33.25.10.14-PDF-MC1602-08",
-  "name": "PDF-MC1602-08",
-  "notes": "Agrega exportación mensual controlada MC1602-08 exclusivamente para Condiciones de Balanza, DBO5 y Condiciones de Microbiología.",
+  "version": "V1.0.5.6.33.25.10.20.0",
+  "build": "V1.0.5.6.33.25.10.20.0-CENTRO-COMUNICACIONES-INVENTARIO-ML-MENSAJERIA",
+  "name": "CENTRO-COMUNICACIONES-INVENTARIO-ML-MENSAJERIA",
+  "notes": "Centro de Comunicaciones mejorado: inventario muestra ANTES/CONSUMIDO/DESPUÉS también para líquidos en mL; interfaz tipo mensajería y avisos del sistema para nuevas comunicaciones.",
   "features": [
-    "Botón PDF visible solo en las 3 cartas autorizadas",
-    "Informe A4 horizontal MC1602-08 con KPIs, gráficas, trazabilidad, IA y reglas estadísticas",
-    "Incluye criterios, equipo, data logger, responsables y firmas",
-    "Auditoría de exportación y flujo Guardar como PDF"
+    "Saldo global por nombre + lote sin filtro por usuario/rol",
+    "Cada nueva actividad toma el último saldo confirmado",
+    "Lotes con saldo 0 quedan AGOTADOS y desaparecen de nuevas actividades",
+    "Reconciliación automática antes de visualizar consumos",
+    "Edición manual de inventario protegida con contraseña CALIDAD",
+    "Propagación del saldo vivo a actividades abiertas"
   ],
-  "date": "2026-09-20"
+  "date": "2026-09-29",
+  "changes": [
+    "Corrige guiones en reactivos líquidos: calcula saldo antes y después en mL desde peso, tara y densidad.",
+    "Renombra columnas a Antes, Consumido y Después para lectura inmediata.",
+    "Mantiene trazabilidad técnica completa sin ocultar los datos principales.",
+    "Mejora visual del Centro de Comunicaciones con estilo de mensajería tipo WhatsApp.",
+    "Amplía avisos nativos a comunicaciones técnicas, actividad, controles y conversaciones cuando el ERP está en segundo plano.",
+    "Agrupa avisos por actividad/categoría mediante tag para reducir duplicidad visual."
+  ]
 }

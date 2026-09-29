@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.19.1';
+const APP_VERSION='V1.0.5.6.33.25.10.20.0';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -1588,14 +1588,18 @@ async function ensureSystemNotificationPermission(fromUserGesture=false){
   try{return await Notification.requestPermission()}catch(e){console.warn('Permiso de notificaciones',e);return 'default'}
 }
 async function showSystemControlCompletionNotification(comment){
-  if(!isDailyControlCompletionSummary(comment)||!communicationVisibleComment(comment)||isOwnCommunication(comment))return false;
+  if(!comment||!communicationVisibleComment(comment)||isOwnCommunication(comment))return false;
   if(!('Notification' in window)||Notification.permission!=='granted')return false;
-  // Si el JEFE está mirando activamente el ERP se conserva el popup interno; el aviso
-  // del sistema se reserva para pestaña oculta, otra ventana o aplicación minimizada.
   if(document.visibilityState==='visible'&&document.hasFocus())return false;
-  const title=(comment.controlSummary?.bad||0)>0?'⚠️ Controles diarios · requiere revisión':'✅ Controles diarios completados';
-  const body=`${comment.analystName||'Analista'} · ${comment.controlSummary?.done||''}/${comment.controlSummary?.total||''} cartas${comment.controlSummary?.bad?` · ${comment.controlSummary.bad} requiere revisión`:' · sin desviaciones'}`;
-  const options={body,tag:String(comment.id||'control-diario'),renotify:false,icon:'./icons/icon-192.png',badge:'./icons/icon-192.png',data:{type:'OPEN_COMMUNICATIONS',commentId:comment.id,planId:comment.planId}};
+  const meta=communicationCategoryMeta(comment);
+  const p=await getOne('planning',comment.planId);
+  let title=`${meta.icon} ${meta.label}`;
+  if(isDailyControlCompletionSummary(comment)) title=(comment.controlSummary?.bad||0)>0?'⚠️ Controles diarios · requiere revisión':'✅ Controles diarios completados';
+  else if(comment.priority==='ALTA'||(comment.actionRequired&&comment.actionRequired!=='CONOCIMIENTO')) title=`⚠️ ${meta.label} · requiere atención`;
+  const activity=p?.catalogName||'Actividad';
+  const analyst=p?.analystName||comment.analystName||comment.authorName||'LAB-PSI';
+  const body=`${activity} · ${analyst} · ${String(comment.text||'').replace(/^[^·]+·\s*/,'').slice(0,180)}`;
+  const options={body,tag:`PSI-${comment.planId||comment.id}-${meta.type}`,renotify:false,icon:'./icons/icon-192.png',badge:'./icons/icon-192.png',data:{type:'OPEN_COMMUNICATIONS',commentId:comment.id,planId:comment.planId}};
   try{
     const reg=await navigator.serviceWorker?.ready;
     if(reg?.showNotification){await reg.showNotification(title,options);return true}
@@ -1693,9 +1697,45 @@ function communicationInventoryRows(comment){
   const items=comment?.technicalPayload?.reagents;
   if(Array.isArray(items)&&items.length){
     for(const x of items.filter(x=>x&&x.usedInActivity&&!x.notUsed)){
-      const consumption=Number(x.consumptionValue??x.used), unit=x.consumptionUnit||x.unit||'';
-      const final=Number(x.stockRemaining??x.finalWeight??x.after);
-      const initial=(Number.isFinite(final)&&Number.isFinite(consumption))?final+consumption:null;
+      const consumption=Number(x.consumptionValue??x.used);
+      let unit=x.consumptionUnit||x.unit||'';
+      let initial=null, final=null;
+      // Reactivos por peso: el detalle real vive en containers. Para líquidos se
+      // muestran ANTES / CONSUMO / DESPUÉS en mL, no el peso bruto del frasco.
+      if(Array.isArray(x.containers)&&x.containers.length){
+        const usedContainers=x.containers.filter(e=>e&&e.usedInActivity!==false);
+        const density=Number(x.density);
+        const isLiquid=String(x.physicalState||'').toUpperCase()==='LIQUID' && Number.isFinite(density) && density>0;
+        if(isLiquid){
+          unit='mL';
+          initial=usedContainers.reduce((sum,e)=>{
+            const iw=Number(e.initialWeight), tare=Number(e.tareWeight||0);
+            return sum+(Number.isFinite(iw)?Math.max(0,iw-tare)/density:0);
+          },0);
+          final=usedContainers.reduce((sum,e)=>{
+            const direct=Number(e.netRemainingMl);
+            if(Number.isFinite(direct))return sum+direct;
+            const fw=Number(e.finalWeight), tare=Number(e.tareWeight||0);
+            return sum+(Number.isFinite(fw)?Math.max(0,fw-tare)/density:0);
+          },0);
+        }else{
+          unit='g';
+          initial=usedContainers.reduce((sum,e)=>{
+            const iw=Number(e.initialWeight), tare=Number(e.tareWeight||0);
+            return sum+(Number.isFinite(iw)?Math.max(0,iw-tare):0);
+          },0);
+          final=usedContainers.reduce((sum,e)=>{
+            const direct=Number(e.netRemainingG);
+            if(Number.isFinite(direct))return sum+direct;
+            const fw=Number(e.finalWeight), tare=Number(e.tareWeight||0);
+            return sum+(Number.isFinite(fw)?Math.max(0,fw-tare):0);
+          },0);
+        }
+      }else{
+        final=Number(x.stockRemaining??x.finalWeight??x.after);
+        const before=Number(x.stockBefore);
+        initial=Number.isFinite(before)?before:((Number.isFinite(final)&&Number.isFinite(consumption))?final+consumption:null);
+      }
       rows.push({name:x.name||'Reactivo / insumo',lot:x.lot||'—',initial:Number.isFinite(initial)?initial:null,consumption:Number.isFinite(consumption)?consumption:null,final:Number.isFinite(final)?final:null,unit,depleted:!!x.depleted});
     }
     if(rows.length)return rows;
@@ -1712,9 +1752,10 @@ function communicationInventoryRows(comment){
 }
 function communicationInventoryCard(comment){
   const rows=communicationInventoryRows(comment);if(!rows.length)return '';
-  const body=rows.map(r=>`<tr><td><b>${escapeHtml(r.name)}</b>${r.lot&&r.lot!=='—'?`<small>Lote ${escapeHtml(r.lot)}</small>`:''}</td><td>${r.initial==null?'—':escapeHtml(String(Number(r.initial.toFixed(4))))}</td><td class="comm-consumption">− ${r.consumption==null?'—':escapeHtml(String(Number(r.consumption.toFixed(4))))}</td><td class="comm-final">${r.final==null?'—':escapeHtml(String(Number(r.final.toFixed(4))))}</td><td>${escapeHtml(r.unit||'—')}</td><td>${r.depleted?'<span class="comm-stock-alert">REVISAR</span>':'<span class="comm-stock-ok">REGISTRADO</span>'}</td></tr>`).join('');
+  const fmt=v=>v==null?'—':escapeHtml(String(Number(v.toFixed(4))));
+  const body=rows.map(r=>`<tr><td><b>${escapeHtml(r.name)}</b>${r.lot&&r.lot!=='—'?`<small>Lote ${escapeHtml(r.lot)}</small>`:''}</td><td class="comm-before">${fmt(r.initial)}</td><td class="comm-consumption">− ${fmt(r.consumption)}</td><td class="comm-final">${fmt(r.final)}</td><td>${escapeHtml(r.unit||'—')}</td><td>${r.depleted?'<span class="comm-stock-alert">REVISAR</span>':'<span class="comm-stock-ok">REGISTRADO</span>'}</td></tr>`).join('');
   const remaining=rows.filter(r=>r.final!=null).map(r=>`${r.name}: ${Number(r.final.toFixed(4))} ${r.unit||''}`.trim());
-  return `<div class="comm-inventory-card"><div class="comm-inventory-head"><b>📦 Movimiento de inventario</b><small>${remaining.length?`Saldo resultante · ${escapeHtml(remaining.join(' · '))}`:'Consumo registrado con trazabilidad'}</small></div><div class="comm-inventory-scroll"><table><thead><tr><th>Reactivo / insumo</th><th>Inicial</th><th>Consumo</th><th>Final</th><th>Unidad</th><th>Estado</th></tr></thead><tbody>${body}</tbody></table></div><div class="comm-ai-note"><b>IA · Seguimiento:</b> ${rows.some(r=>r.depleted)?'Hay un insumo que requiere revisión de inventario o reposición.':'Movimiento coherente registrado; el saldo final queda disponible para seguimiento.'}</div></div>`;
+  return `<div class="comm-inventory-card"><div class="comm-inventory-head"><b>📦 Movimiento de inventario</b><small>${remaining.length?`Saldo después · ${escapeHtml(remaining.join(' · '))}`:'Consumo registrado con trazabilidad'}</small></div><div class="comm-inventory-scroll"><table><thead><tr><th>Reactivo / insumo</th><th>Antes</th><th>Consumido</th><th>Después</th><th>Unidad</th><th>Estado</th></tr></thead><tbody>${body}</tbody></table></div><div class="comm-ai-note"><b>IA · Seguimiento:</b> ${rows.some(r=>r.depleted)?'Hay un insumo que requiere revisión de inventario o reposición.':'Movimiento coherente: se visualiza saldo antes, consumo y saldo después en la unidad operativa.'}</div></div>`;
 }
 function communicationTechnicalSummary(text=''){
   const clean=String(text).replace(/^🧪\s*DATOS TÉCNICOS CONFIRMADOS\s*·?\s*/i,'');
@@ -4839,7 +4880,7 @@ if($('#mgmtFrom')){
 }
 if($('#finishActivityForm'))$('#finishActivityForm').addEventListener('submit',submitFinishActivity);if($('#btnSaveCalibrationDraft'))$('#btnSaveCalibrationDraft').onclick=saveCalibrationDraft;if($('#btnSaveReagentDraft'))$('#btnSaveReagentDraft').onclick=saveReagentDraft;if($('#btnUnlockTechnicalEdit'))$('#btnUnlockTechnicalEdit').onclick=unlockCompletedTechnicalEdit;
 if($('#microFreezerTemp'))$('#microFreezerTemp').addEventListener('input',previewMicroFreezer);if($('#microFreezerControlForm'))$('#microFreezerControlForm').addEventListener('submit',saveMicroFreezerControl);if($('#btnSaveMicroFreezerConfig'))$('#btnSaveMicroFreezerConfig').onclick=saveMicroFreezerConfig;if($('#incMicroTemp'))$('#incMicroTemp').addEventListener('input',previewIncMicro);if($('#incMicroControlForm'))$('#incMicroControlForm').addEventListener('submit',saveIncMicroControl);if($('#btnSaveIncMicroConfig'))$('#btnSaveIncMicroConfig').onclick=saveIncMicroConfig;if($('#microIncTemp'))$('#microIncTemp').addEventListener('input',previewMicroIncubator);if($('#microIncControlForm'))$('#microIncControlForm').addEventListener('submit',saveMicroIncubatorControl);if($('#btnSaveMicroIncConfig'))$('#btnSaveMicroIncConfig').onclick=saveMicroIncConfig;if($('#microEnvTempRaw'))['microEnvTempRaw','microEnvHumRaw'].forEach(id=>$('#'+id).addEventListener('input',previewMicroEnv));if($('#microEnvControlForm'))$('#microEnvControlForm').addEventListener('submit',saveMicroEnvControl);if($('#btnSaveMicroEnvConfig'))$('#btnSaveMicroEnvConfig').onclick=saveMicroEnvConfig;if($('#btnRefreshControlCharts'))$('#btnRefreshControlCharts').onclick=renderControlChartsManagement;if($('#ccChartSelect'))$('#ccChartSelect').addEventListener('change',renderControlChartsManagement);if($('#ccMonth'))$('#ccMonth').addEventListener('change',()=>{updateHistoricalButton();renderControlChartsManagement()});if($('#btnCcHistorical'))$('#btnCcHistorical').onclick=openHistoricalLoader;if($('#btnCcPdf'))$('#btnCcPdf').onclick=exportControlChartMC160208;if($('#btnSaveHistoricalMonth'))$('#btnSaveHistoricalMonth').onclick=saveHistoricalMonth;if($('#btnCcCurrentMonth'))$('#btnCcCurrentMonth').onclick=()=>{$('#ccMonth').value=ccMonthNow();renderControlChartsManagement()};if($('#balanceEnvTempRaw'))['balanceEnvTempRaw','balanceEnvHumRaw'].forEach(id=>$('#'+id).addEventListener('input',previewBalanceEnv));if($('#balanceEnvControlForm'))$('#balanceEnvControlForm').addEventListener('submit',saveBalanceEnvControl);if($('#btnSaveBalanceEnvConfig'))$('#btnSaveBalanceEnvConfig').onclick=saveBalanceEnvConfig;if($('#metalsTempRaw'))['metalsTempRaw','metalsHumRaw'].forEach(id=>$('#'+id).addEventListener('input',previewMetals));if($('#metalsControlForm'))$('#metalsControlForm').addEventListener('submit',saveMetalsControl);if($('#btnSaveMetalsConfig'))$('#btnSaveMetalsConfig').onclick=saveMetalsConfig;if($('#oven314TempRaw'))$('#oven314TempRaw').addEventListener('input',previewOven314);if($('#oven314ControlForm'))$('#oven314ControlForm').addEventListener('submit',saveOven314Control);if($('#btnSaveOven314Config'))$('#btnSaveOven314Config').onclick=saveOven314Config;if($('#tpTempRaw'))$('#tpTempRaw').addEventListener('input',previewThermalPoint);if($('#thermalPointControlForm'))$('#thermalPointControlForm').addEventListener('submit',saveThermalPointControl);if($('#digTempRaw'))$('#digTempRaw').addEventListener('input',previewDigestor);if($('#digestorControlForm'))$('#digestorControlForm').addEventListener('submit',saveDigestorControl);if($('#btnSaveDigConfig'))$('#btnSaveDigConfig').onclick=saveDigestorConfig;if($('#fridge344TempRaw'))$('#fridge344TempRaw').addEventListener('input',previewFridge344);if($('#fridge344ControlForm'))$('#fridge344ControlForm').addEventListener('submit',saveFridge344Control);if($('#btnSaveFridge344Config'))$('#btnSaveFridge344Config').onclick=saveFridge344Config;if($('#fridgeTempRaw'))$('#fridgeTempRaw').addEventListener('input',previewFridge);if($('#fridgeControlForm'))$('#fridgeControlForm').addEventListener('submit',saveFridgeControl);if($('#btnSaveFridgeConfig'))$('#btnSaveFridgeConfig').onclick=saveFridgeConfig;if($('#balRead1'))['balRead1','balRead100'].forEach(id=>$('#'+id).addEventListener('input',previewBalance));if($('#balanceControlForm'))$('#balanceControlForm').addEventListener('submit',saveBalanceControl);if($('#distReading'))$('#distReading').addEventListener('input',previewDistiller);if($('#distillerControlForm'))$('#distillerControlForm').addEventListener('submit',saveDistillerControl);if($('#incTempRaw'))$('#incTempRaw').addEventListener('input',previewIncubator);if($('#incubatorControlForm'))$('#incubatorControlForm').addEventListener('submit',saveIncubatorControl);if($('#btnSaveIncConfig'))$('#btnSaveIncConfig').onclick=saveIncubatorConfig;if($('#phRead4'))['4','7','10'].forEach(x=>$('#phRead'+x).addEventListener('input',previewPH));if($('#condRead84'))['84','1413','1288'].forEach(x=>$('#condRead'+x).addEventListener('input',previewConductivity));if($('#conductivityControlForm'))$('#conductivityControlForm').addEventListener('submit',saveConductivityControl);if($('#phControlForm'))$('#phControlForm').addEventListener('submit',savePHControl);if($('#dbo5TempRaw'))$('#dbo5TempRaw').addEventListener('input',previewDBO5);if($('#dbo5HumRaw'))$('#dbo5HumRaw').addEventListener('input',previewDBO5);if($('#dbo5ControlForm'))$('#dbo5ControlForm').addEventListener('submit',saveDBO5Control);if($('#btnSaveConfig'))$('#btnSaveConfig').onclick=saveConfig;if($('#btnNewControlChart'))$('#btnNewControlChart').onclick=()=>openControlChartDef();if($('#chartDefLinkMode'))$('#chartDefLinkMode').addEventListener('change',()=>updateChartLinkMode());if($('#chartDefSection'))$('#chartDefSection').addEventListener('change',()=>refreshChartMethodOptions(''));if($('#chartDefMethodSelect'))$('#chartDefMethodSelect').addEventListener('change',()=>{const sel=$('#chartDefMethodSelect'),custom=$('#chartDefMethod'),opt=sel.options[sel.selectedIndex];if(sel.value==='CUSTOM'){custom.value='';custom.closest('label').classList.remove('hidden');custom.focus()}else{custom.value=opt?.dataset?.name||'';custom.closest('label').classList.add('hidden')}});if($('#controlChartDefForm'))$('#controlChartDefForm').addEventListener('submit',saveControlChartDef);if($('#btnBackup'))$('#btnBackup').onclick=backup;if($('#btnReset'))$('#btnReset').onclick=resetDB;if($('#localSessionSelect'))$('#localSessionSelect').addEventListener('change',changeLocalSession);if($('#btnFirebaseLogin'))$('#btnFirebaseLogin').onclick=openFirebaseLogin;
-if($('#btnFirebaseLogout'))$('#btnFirebaseLogout').onclick=firebaseLogout;if($('#btnNotifications'))$('#btnNotifications').onclick=async()=>{const p=await ensureSystemNotificationPermission(true);if(p==='granted')toast('Avisos del sistema activados · llegarán al completar todas las cartas');else if(p==='denied')toast('Notificaciones bloqueadas en el navegador/sistema');await openCommunications();};if($('#commStatusFilter'))$('#commStatusFilter').onchange=renderCommunications;if($('#commTypeFilter'))$('#commTypeFilter').onchange=renderCommunications;if($('#commSearch'))$('#commSearch').oninput=()=>{clearTimeout(window.__commSearchTimer);window.__commSearchTimer=setTimeout(renderCommunications,180)};if($('#btnRefreshCommunications'))$('#btnRefreshCommunications').onclick=renderCommunications;
+if($('#btnFirebaseLogout'))$('#btnFirebaseLogout').onclick=firebaseLogout;if($('#btnNotifications'))$('#btnNotifications').onclick=async()=>{const p=await ensureSystemNotificationPermission(true);if(p==='granted')toast('Avisos activados · recibirás comunicaciones nuevas cuando el ERP esté minimizado o en segundo plano');else if(p==='denied')toast('Notificaciones bloqueadas en el navegador/sistema');await openCommunications();};if($('#commStatusFilter'))$('#commStatusFilter').onchange=renderCommunications;if($('#commTypeFilter'))$('#commTypeFilter').onchange=renderCommunications;if($('#commSearch'))$('#commSearch').oninput=()=>{clearTimeout(window.__commSearchTimer);window.__commSearchTimer=setTimeout(renderCommunications,180)};if($('#btnRefreshCommunications'))$('#btnRefreshCommunications').onclick=renderCommunications;
 if($('#firebaseLoginForm')){
   $('#firebaseLoginForm').addEventListener('submit',submitFirebaseLogin);
 }if($('#btnSyncNow'))$('#btnSyncNow').onclick=manualSync;
