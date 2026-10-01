@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.27.0';
+const APP_VERSION='V1.0.5.6.33.25.10.28.0';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -1158,109 +1158,111 @@ async function smartPlannerRecalculate(){
 const planSaveLocks=new Set();
 const activityCompletionLocks=new Set();
 
-// 10.20 · CANDADO MULTI-PC DEL PLANIFICADOR.
-// El control local evita doble clic, pero dos computadoras podían validar al mismo tiempo
-// contra copias distintas y ambas guardar. Para planificación, Firestore pasa a ser la
-// autoridad ANTES de confirmar: se toma un lease corto por fecha+analista, se relee la
-// agenda desde servidor, se valida cruce/capacidad y recién entonces se escribe.
-function plannerLeaseId(date,analystId){
-  return `${String(date||'').replace(/[^0-9]/g,'')}_${String(analystId||'').replace(/[^A-Za-z0-9_-]/g,'_')}`;
-}
-async function acquirePlannerLease(date,analystId){
-  if(!firebaseBridge.ready||!firebaseBridge.authUser)throw new Error('PLAN_REQUIRES_CLOUD');
-  const {doc,runTransaction,serverTimestamp}=firebaseBridge.mods;
-  if(typeof runTransaction!=='function')throw new Error('PLAN_LOCK_UNAVAILABLE');
-  const ref=doc(firebaseBridge.db,'planningLocks',plannerLeaseId(date,analystId));
-  const token=`${PAGE_SESSION_ID}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-  const now=Date.now(),expiresAtMs=now+20000;
-  await runTransaction(firebaseBridge.db,async tx=>{
-    const snap=await tx.get(ref),data=snap.exists()?(snap.data()||{}):{};
-    const active=Number(data.expiresAtMs||0)>now && data.token && data.token!==token;
-    if(active)throw new Error('PLAN_LOCK_BUSY');
-    tx.set(ref,{token,date,analystId,owner:currentSessionUser?.name||currentSessionUser?.email||'Usuario',sessionId:PAGE_SESSION_ID,expiresAtMs,updatedAt:serverTimestamp()},{merge:true});
-  });
-  return {ref,token};
-}
-async function releasePlannerLease(lease){
-  if(!lease?.ref||!firebaseBridge.ready)return;
-  try{
-    const {runTransaction,serverTimestamp}=firebaseBridge.mods;
-    await runTransaction(firebaseBridge.db,async tx=>{
-      const snap=await tx.get(lease.ref);if(!snap.exists())return;
-      const data=snap.data()||{};if(data.token!==lease.token)return;
-      tx.set(lease.ref,{token:'',expiresAtMs:0,releasedAt:serverTimestamp()},{merge:true});
-    });
-  }catch(e){console.warn('No se pudo liberar inmediatamente el candado de planificación',e)}
-}
+// 10.28 · GUARDIA MULTI-PC SIN COLECCIÓN DE CANDADOS.
+// La 10.20 usaba `planningLocks`. En instalaciones donde las reglas de Firestore no
+// autorizan esa colección, una planificación válida terminaba en el mensaje genérico
+// "se protegió la jornada". Además añadía dos transacciones y una lectura completa.
+// Desde 10.28 se valida contra la colección REAL `planning`, se escribe el candidato
+// y se hace una verificación post-commit determinística. Así dos PCs no pueden dejar
+// cruces/duplicados ni superar 8 h, sin exigir una colección/regla Firebase adicional.
+function plannerPriorityKey(p){return `${String(p?.createdAt||p?.updatedAt||'9999')}|${String(p?.id||'')}`}
 async function serverPlanningForDateAnalyst(date,analystId){
   if(!firebaseBridge.ready||!firebaseBridge.authUser)throw new Error('PLAN_REQUIRES_CLOUD');
-  const {collection,getDocsFromServer,getDocs}=firebaseBridge.mods;
+  const {collection,getDocsFromServer,getDocs,query,where}=firebaseBridge.mods;
   const reader=typeof getDocsFromServer==='function'?getDocsFromServer:getDocs;
-  const snap=await reader(collection(firebaseBridge.db,cloudCollectionFor('planning')));
+  let snap;
+  try{
+    // Una igualdad por fecha reduce drásticamente la lectura y no requiere índice compuesto.
+    snap=await reader(query(collection(firebaseBridge.db,cloudCollectionFor('planning')),where('date','==',date)));
+  }catch(err){
+    console.warn('Consulta planning por fecha no disponible; usando colección completa',err);
+    snap=await reader(collection(firebaseBridge.db,cloudCollectionFor('planning')));
+  }
   return snap.docs.map(d=>({...d.data(),id:d.data()?.id||d.id}))
     .filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO');
 }
-function exactPlanDuplicate(plans,analystId,itemId,date,start,dur){
-  return plans.find(x=>x.status!=='CANCELADO'&&x.analystId===analystId&&x.catalogId===itemId&&x.date===date&&x.startTime===start&&Number(x.durationMinutes||0)===Number(dur));
+function exactPlanDuplicate(plans,analystId,itemId,date,start,dur,excludeId=''){
+  return plans.find(x=>x.id!==excludeId&&x.status!=='CANCELADO'&&x.analystId===analystId&&x.catalogId===itemId&&x.date===date&&x.startTime===start&&Number(x.durationMinutes||0)===Number(dur));
+}
+function acceptedPlanningIds(plans,capacity){
+  // Orden estable: ante dos escrituras concurrentes gana la primera confirmada/creada.
+  // Cada PC obtiene la misma decisión al leer el mismo conjunto.
+  const ordered=[...plans].sort((a,b)=>plannerPriorityKey(a).localeCompare(plannerPriorityKey(b)));
+  const accepted=[],ids=new Set();let load=0;
+  for(const p of ordered){
+    const dur=Number(p.durationMinutes||0),start=timeToMinutes(p.startTime);
+    if(!dur||load+dur>capacity)continue;
+    if(accepted.some(a=>workOverlap(start,dur,timeToMinutes(a.startTime),Number(a.durationMinutes||0))))continue;
+    accepted.push(p);ids.add(p.id);load+=dur;
+  }
+  return ids;
 }
 
 async function savePlan(){
   if(planSaveLocks.has('planner'))return toast('Guardado ya en proceso · espere la confirmación');
   planSaveLocks.add('planner');
   const saveBtn=$('#btnSavePlan');if(saveBtn)saveBtn.disabled=true;
-  let lease=null;
+  let remoteCandidateId='';
   try{
     const item=(await getAll('catalog')).find(x=>x.id===$('#planCatalog').value),date=$('#planDate').value,
     analyst=(await getAll('analysts')).find(a=>a.id===$('#planAnalyst').value),dur=(await effectivePlanDuration(item,$('#planSamples').value)).minutes;
     let start=$('#planStart').value;
     if(!item||!date||!analyst||!start||!dur)return toast('Complete actividad, fecha, horario y analista');
     if(!(analyst.competencies||[]).includes(item.section))return toast('El analista no tiene competencia para esta sección');
-    if(!firebaseBridge.ready||!firebaseBridge.authUser)return toast('Planificación protegida: conecte/inicie sesión en Firebase para guardar. Así se evita duplicar o sobrecargar desde otra PC.');
+    if(!firebaseBridge.ready||!firebaseBridge.authUser)return toast('Planificación protegida: conecte/inicie sesión en Firebase para guardar.');
 
     const startMin=timeToMinutes(start),computedEnd=addWorkingMinutes(startMin,dur);
     if(computedEnd>WORK_END)return toast('No se guardó: la actividad excede la jornada laboral de 17:00. Cambie hora, duración, analista o fecha.');
 
-    // Candado por analista+fecha: dos PCs no pueden confirmar simultáneamente.
-    try{lease=await acquirePlannerLease(date,analyst.id)}catch(e){
-      if(String(e?.message||e).includes('PLAN_LOCK_BUSY'))return toast(`Espere unos segundos: otra computadora está actualizando la jornada de ${analyst.name}.`);
-      throw e;
-    }
-
-    // Relectura OBLIGATORIA desde servidor dentro de la sección crítica.
-    const plans=await serverPlanningForDateAnalyst(date,analyst.id);
+    // 1) Validación rápida contra el servidor antes de escribir.
+    let plans=await serverPlanningForDateAnalyst(date,analyst.id);
+    const duplicate=exactPlanDuplicate(plans,analyst.id,item.id,date,start,dur);
+    if(duplicate)return toast(`Actividad ya registrada: ${duplicate.catalogName} · ${duplicate.startTime}–${duplicate.endTime}`);
     const conflict=plans.find(p=>workOverlap(startMin,dur,timeToMinutes(p.startTime),Number(p.durationMinutes||0)));
     if(conflict){
-      const slot=findBestWorkSlot(plans,analyst.id,dur),suggestion=slot?` Siguiente espacio disponible: ${minutesToTime(slot.start)}–${minutesToTime(slot.end)}.`:'';
-      const box=$('#recommendationBox');
-      if(box){box.className='recommendation-box error';box.innerHTML=`<b>Asignación bloqueada por seguridad multi-PC</b><span>La agenda del servidor cambió. ${escapeHtml(start)} se cruza con ${escapeHtml(conflict.catalogName)} (${conflict.startTime}–${conflict.endTime}).${escapeHtml(suggestion)}</span>`;}
+      const slot=findBestWorkSlot(plans,analyst.id,dur),suggestion=slot?` Siguiente espacio: ${minutesToTime(slot.start)}–${minutesToTime(slot.end)}.`:'';
+      const box=$('#recommendationBox');if(box){box.className='recommendation-box error';box.innerHTML=`<b>Horario ocupado</b><span>${escapeHtml(start)} se cruza con ${escapeHtml(conflict.catalogName)} (${conflict.startTime}–${conflict.endTime}).${escapeHtml(suggestion)}</span>`;}
       return toast(`No se guardó: ${analyst.name} ya tiene una actividad en ese horario.`);
     }
     const capacity=Number(analyst.dailyHours||8)*60;
     const load=plans.reduce((t,p)=>t+Number(p.durationMinutes||0),0);
     if(load+dur>capacity)return toast(`No se guardó: ${analyst.name} quedaría con ${minutesText(load+dur)} / ${analyst.dailyHours||8} h. El límite diario es obligatorio.`);
-    const duplicate=exactPlanDuplicate(plans,analyst.id,item.id,date,start,dur);
-    if(duplicate)return toast(`Actividad ya registrada en servidor: ${duplicate.catalogName} · ${duplicate.startTime}–${duplicate.endTime}`);
 
-    const end=minutesToTime(computedEnd);
-    const rec={id:uid('PLAN'),code:`PLA-${date.replaceAll('-','')}-${String((await getAll('planning')).length+1).padStart(4,'0')}`,date,catalogId:item.id,catalogCode:item.code,catalogName:item.name,section:item.section,family:item.family||'',timeMode:item.timeMode,samples:item.timeMode==='BY_SAMPLES'?Number($('#planSamples').value||0):null,actualSamples:null,durationMinutes:dur,startTime:start,endTime:end,analystId:analyst.id,analystCode:analyst.code,analystName:analyst.name,status:'PROGRAMADO',calibrationConfig:item.calibrationConfig?.enabled?JSON.parse(JSON.stringify(item.calibrationConfig)):null,calibrationResult:null,reagentConfig:item.reagentConfig?.length?JSON.parse(JSON.stringify(item.reagentConfig)):[],reagentResult:null,notes:$('#planNotes').value.trim(),createdAt:nowISO(),updatedAt:nowISO(),plannerGuardVersion:'10.20'};
+    const end=minutesToTime(computedEnd),created=nowISO();
+    const rec={id:uid('PLAN'),code:`PLA-${date.replaceAll('-','')}-${String((await getAll('planning')).length+1).padStart(4,'0')}`,date,catalogId:item.id,catalogCode:item.code,catalogName:item.name,section:item.section,family:item.family||'',timeMode:item.timeMode,samples:item.timeMode==='BY_SAMPLES'?Number($('#planSamples').value||0):null,actualSamples:null,durationMinutes:dur,startTime:start,endTime:end,analystId:analyst.id,analystCode:analyst.code,analystName:analyst.name,status:'PROGRAMADO',calibrationConfig:item.calibrationConfig?.enabled?JSON.parse(JSON.stringify(item.calibrationConfig)):null,calibrationResult:null,reagentConfig:item.reagentConfig?.length?JSON.parse(JSON.stringify(item.reagentConfig)):[],reagentResult:null,notes:$('#planNotes').value.trim(),createdAt:created,updatedAt:created,plannerGuardVersion:'10.28'};
+    remoteCandidateId=rec.id;
 
-    // Escritura directa mientras conservamos el lease. No esperamos al Outbox para que
-    // otra PC pueda verla: la confirmación remota ocurre antes de mostrar "guardado".
-    const {doc,setDoc,serverTimestamp}=firebaseBridge.mods;
-    await setDoc(doc(firebaseBridge.db,cloudCollectionFor('planning'),rec.id),{...cloudPayloadFor('planning',rec),_cloudUpdatedAt:nowISO(),_erpEntity:'planning',_plannerCommittedAt:serverTimestamp()});
-    await put('planning',rec);
-    await audit('PLANIFICAR','PLANIFICADOR',rec.code,`${rec.catalogName} · ${rec.analystName} · ${rec.date} ${rec.startTime}-${rec.endTime} · guardia multi-PC`);
+    // 2) Commit directo: setDoc resuelve cuando Firestore confirma backend.
+    const {doc,setDoc,deleteDoc,serverTimestamp}=firebaseBridge.mods;
+    const ref=doc(firebaseBridge.db,cloudCollectionFor('planning'),rec.id);
+    await setDoc(ref,{...cloudPayloadFor('planning',rec),_cloudUpdatedAt:nowISO(),_erpEntity:'planning',_plannerCommittedAt:serverTimestamp()});
+
+    // 3) Verificación post-commit. Si dos PCs escribieron casi al mismo tiempo,
+    // ambas aplican la misma prioridad y solo una planificación queda aceptada.
+    plans=await serverPlanningForDateAnalyst(date,analyst.id);
+    const accepted=acceptedPlanningIds(plans,capacity);
+    if(!accepted.has(rec.id)){
+      await deleteDoc(ref);remoteCandidateId='';
+      const competing=plans.find(p=>p.id!==rec.id&&workOverlap(startMin,dur,timeToMinutes(p.startTime),Number(p.durationMinutes||0)));
+      if(competing)return toast(`No se guardó: otra PC confirmó primero ${competing.catalogName} (${competing.startTime}–${competing.endTime}).`);
+      return toast(`No se guardó: la jornada de ${analyst.name} alcanzó el límite de ${analyst.dailyHours||8} h desde otra PC.`);
+    }
+
+    await put('planning',rec);remoteCandidateId='';
+    await audit('PLANIFICAR','PLANIFICADOR',rec.code,`${rec.catalogName} · ${rec.analystName} · ${rec.date} ${rec.startTime}-${rec.endTime} · guardia multi-PC 10.28`);
     $('#planNotes').value='';
-    await releasePlannerLease(lease);lease=null;
     await refreshPlanner();
-    toast(`Planificación guardada y validada en servidor · ${analyst.name} ${minutesText(load+dur)} / ${analyst.dailyHours||8} h`);
+    const finalLoad=plans.filter(p=>accepted.has(p.id)).reduce((t,p)=>t+Number(p.durationMinutes||0),0);
+    toast(`Planificación guardada · ${analyst.name} ${minutesText(finalLoad)} / ${analyst.dailyHours||8} h`);
   }catch(err){
-    console.error('Guardar planificación protegida',err);
-    const msg=String(err?.message||err);
-    if(/offline|network|unavailable|failed-precondition/i.test(msg))toast('No se guardó: no fue posible validar la agenda contra Firebase. Reintente con conexión para evitar duplicados.');
-    else toast('No se guardó la planificación. Se protegió la jornada para evitar cruces o duplicados.');
+    console.error('Guardar planificación protegida 10.28',err);
+    // Si hubo un error después de crear el candidato, no dejamos un registro huérfano.
+    if(remoteCandidateId&&firebaseBridge.ready){try{const {doc,deleteDoc}=firebaseBridge.mods;await deleteDoc(doc(firebaseBridge.db,cloudCollectionFor('planning'),remoteCandidateId));}catch{}}
+    const msg=String(err?.code||'')+' '+String(err?.message||err);
+    if(/permission-denied/i.test(msg))toast('No se guardó: Firebase rechazó el permiso de escritura de planificación.');
+    else if(/offline|network|unavailable|failed-precondition/i.test(msg))toast('No se guardó: no fue posible validar la agenda contra Firebase. Reintente con conexión.');
+    else toast(`No se guardó la planificación · ${String(err?.code||'error de sincronización')}`);
   }finally{
-    if(lease)await releasePlannerLease(lease);
     planSaveLocks.delete('planner');if(saveBtn)saveBtn.disabled=false;
   }
 }
