@@ -1,6 +1,6 @@
 {
-  "version": "1.0.5.6.33.25.10.25.0",
-  "build": "V1.0.5.6.33.25.10.25.0-WESTGARD-RECALC-DEDUP-UI-SYNC-UI-ESTABLE",
+  "version": "1.0.5.6.33.25.10.27.0",
+  "build": "V1.0.5.6.33.25.10.27.0-WESTGARD-RECALC-DEDUP-UI-SYNC-UI-ESTABLE",
   "name": "WESTGARD-RECALC-DEDUP-UI-SYNC-UI-ESTABLE",
   "notes": "Unificación integral de versión y caché sobre 10.23.0. Conserva Westgard recalculado, deduplicación y edición estable; invalida cachés anteriores y evita recursos mezclados entre PCs.",
   "features": [
