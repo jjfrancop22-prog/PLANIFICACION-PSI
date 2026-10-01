@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.24.0';
+const APP_VERSION='V1.0.5.6.33.25.10.25.0';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -612,7 +612,9 @@ async function flushOutbox(showToast=true){
   }finally{
     firebaseBridge.busy=false;
     await refreshSyncUI();
-    try{await renderControlChartEngine()}catch(e){console.warn('Estado visual de Cartas pendiente',e)}
+    // 10.25: una confirmación de Outbox NO debe desmontar/reconstruir Cartas de Control.
+    // Firestore/IndexedDB ya contienen el dato; la vista se actualiza sólo por una
+    // reconciliación remota relevante y agrupada. Esto elimina el parpadeo continuo.
     if(firebaseBridge.flushRequested&&quotaPauseRemaining()===0)scheduleOutboxFlush(400);
   }
 }
@@ -695,6 +697,9 @@ function startRealtimeSync(){
     const physical=cloudCollectionFor(storeName);
     const unsub=onSnapshot(collection(firebaseBridge.db,physical),{includeMetadataChanges:true},async snap=>{
       let changed=false, incomingComments=[];
+      // 10.25: los snapshots producidos por nuestras propias escrituras pendientes
+      // no son un cambio remoto nuevo y no deben provocar un repintado.
+      const localPendingSnapshot=!!snap.metadata.hasPendingWrites;
 
       // 10.17 · BLINDAJE PLANIFICACIÓN EN SESIÓN ACTIVA.
       // Firestore puede emitir primero un snapshot desde su caché local al reconectar,
@@ -757,7 +762,10 @@ function startRealtimeSync(){
         const open=(await getAll('outbox')).filter(x=>x.status==='PENDIENTE'||x.status==='ERROR');
         if(open.length)await refreshSyncUI();
         else setSyncState('SINCRONIZADO','Cambios recibidos en tiempo real');
-        await reconcileVisibleInterface(storeName);
+        // 10.25: agrupar ráfagas de snapshots (defs + records + metadatos) en un
+        // único repintado. El snapshot inicial sólo hidrata IndexedDB; al abrir la
+        // pantalla su propio render toma la información disponible sin pestañear.
+        if(listenerReady&&!localPendingSnapshot)scheduleVisibleReconcile(storeName,260);
         if(storeName==='planComments'){
           await refreshNotificationBadge();
           const newest=incomingComments.filter(c=>communicationVisibleComment(c)&&!isOwnCommunication(c)).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0];
@@ -784,6 +792,16 @@ function startRealtimeSync(){
 let interfaceReconcileBusy=false;
 let interfaceReconcileQueued=false;
 let lastInterfaceReconcileAt=0;
+let visibleReconcileTimer=null;
+let visibleReconcileReason='REMOTE';
+function scheduleVisibleReconcile(reason='REMOTE',delay=220){
+  visibleReconcileReason=reason||visibleReconcileReason;
+  clearTimeout(visibleReconcileTimer);
+  visibleReconcileTimer=setTimeout(()=>{
+    visibleReconcileTimer=null;
+    reconcileVisibleInterface(visibleReconcileReason);
+  },delay);
+}
 // 10.8 · Estabilidad de interfaz: una sincronización en segundo plano jamás debe
 // desmontar un formulario que el usuario está usando. Firestore actualiza IndexedDB
 // en tiempo real; la vista se repinta solo cuando corresponde y no existe un borrador activo.
