@@ -1,5 +1,5 @@
-const SW_VERSION='V1.0.5.6.33.25.10.19.1';
-const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.10.19.1';
+const SW_VERSION='V1.0.5.6.33.25.10.24.0';
+const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.10.24.0';
 const APP_SHELL=[
   './','./index.html','./styles.css','./app.js','./firebase-config.js',
   './manifest.webmanifest','./version.json','./icons/icon-192.png','./icons/icon-512.png'
@@ -30,7 +30,7 @@ self.addEventListener('fetch',event=>{
   // Código y navegación: red primero para detectar versiones nuevas.
   if(req.mode==='navigate' || /\.(js|css|json|webmanifest)$/.test(url.pathname)){
     event.respondWith(
-      fetch(req)
+      fetch(req,{cache:'no-store'})
         .then(r=>{
           const copy=r.clone();
           caches.open(CACHE_NAME).then(c=>c.put(req,copy));
