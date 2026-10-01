@@ -1,23 +1,19 @@
 {
-  "version": "V1.0.5.6.33.25.10.20.0",
-  "build": "V1.0.5.6.33.25.10.20.0-CENTRO-COMUNICACIONES-INVENTARIO-ML-MENSAJERIA",
-  "name": "CENTRO-COMUNICACIONES-INVENTARIO-ML-MENSAJERIA",
-  "notes": "Centro de Comunicaciones mejorado: inventario muestra ANTES/CONSUMIDO/DESPUÉS también para líquidos en mL; interfaz tipo mensajería y avisos del sistema para nuevas comunicaciones.",
+  "version": "1.0.5.6.33.25.10.21.0",
+  "build": "V1.0.5.6.33.25.10.20.0-PLANIFICADOR-GUARDIA-MULTIPC-8H",
+  "name": "PLANIFICADOR-GUARDIA-MULTIPC-8H",
+  "notes": "Bloqueo transaccional multi-PC por analista+fecha. Antes de guardar, relee Firestore y bloquea cruces, duplicados y cualquier carga superior a la jornada configurada (8 h por defecto).",
   "features": [
-    "Saldo global por nombre + lote sin filtro por usuario/rol",
-    "Cada nueva actividad toma el último saldo confirmado",
-    "Lotes con saldo 0 quedan AGOTADOS y desaparecen de nuevas actividades",
-    "Reconciliación automática antes de visualizar consumos",
-    "Edición manual de inventario protegida con contraseña CALIDAD",
-    "Propagación del saldo vivo a actividades abiertas"
+    "Candado transaccional por analista y fecha entre computadoras",
+    "Validación contra agenda real del servidor antes de confirmar",
+    "Bloqueo estricto de carga > 8 h (o jornada configurada)",
+    "Bloqueo de cruces horarios y duplicados exactos",
+    "Escritura inmediata a Firestore antes de mostrar guardado"
   ],
-  "date": "2026-09-29",
+  "date": "2026-09-30",
   "changes": [
-    "Corrige guiones en reactivos líquidos: calcula saldo antes y después en mL desde peso, tara y densidad.",
-    "Renombra columnas a Antes, Consumido y Después para lectura inmediata.",
-    "Mantiene trazabilidad técnica completa sin ocultar los datos principales.",
-    "Mejora visual del Centro de Comunicaciones con estilo de mensajería tipo WhatsApp.",
-    "Amplía avisos nativos a comunicaciones técnicas, actividad, controles y conversaciones cuando el ERP está en segundo plano.",
-    "Agrupa avisos por actividad/categoría mediante tag para reducir duplicidad visual."
+    "Se elimina la ventana de carrera entre dos PCs que podían planificar simultáneamente",
+    "El guardado de planificación requiere validación online para garantizar consistencia multi-PC",
+    "La jornada se recalcula con datos del servidor dentro del candado antes de aceptar la actividad"
   ]
 }
