@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.0';
+const APP_VERSION='V1.0.5.6.33.25.10.29.0';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -842,8 +842,19 @@ async function reconcileVisibleInterface(reason='REMOTE'){
     await refreshNotificationBadge();
     if(!remoteChangeRelevantToView(active,reason))return;
     if(active==='planificador'&&plannerHasActiveDraft()){
-      // Los datos ya están reconciliados en IndexedDB. Se difiere únicamente el repintado
-      // para no cerrar selects, borrar búsquedas ni reiniciar una planificación en curso.
+      // 10.29 · FIX VISUAL MULTI-PC CON BORRADOR ACTIVO.
+      // Antes se detenía TODO el repintado si el jefe tenía una actividad seleccionada,
+      // una búsqueda escrita o incluso el foco en un control. El snapshot remoto sí
+      // llegaba a IndexedDB, pero Carga del día / Agenda / Vista ejecutiva quedaban con
+      // la fotografía anterior hasta cambiar de vista o recargar. Por eso el fallo era
+      // intermitente y afectaba especialmente a la PC que estaba planificando.
+      // Conservamos intacto el formulario (no renderPlanSelectors), pero refrescamos
+      // inmediatamente todos los paneles de solo lectura desde la misma planning local.
+      await renderDailyLoad();
+      await renderAgenda();
+      await renderExecutivePlanner();
+      await renderMandatoryPlanningAlerts();
+      lastInterfaceReconcileAt=Date.now();
       return;
     }
     if(active==='inicio')await renderDashboard();
