@@ -1,6 +1,6 @@
 {
-  "version": "1.0.5.6.33.25.10.29.0",
-  "build": "V1.0.5.6.33.25.10.29.0-PLANIFICADOR-VISTA-VIVA-MULTIPC",
+  "version": "1.0.5.6.33.25.10.30.0",
+  "build": "V1.0.5.6.33.25.10.30.0-PLANIFICADOR-VISTA-VIVA-MULTIPC",
   "name": "PLANIFICADOR-MULTIPC-RAPIDO",
   "notes": "Guardia multi-PC del planificador sin colección planningLocks: validación Firestore pre/post commit, máximo diario y cruces protegidos, con menor latencia.",
   "features": [

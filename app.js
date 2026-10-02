@@ -1049,7 +1049,43 @@ async function effectivePlanDuration(item,samples){
 }
 
 async function updatePlanPreview(){if(!$('#planCatalog'))return;const id=$('#planCatalog').value,item=(await getAll('catalog')).find(x=>x.id===id);$('#planSamplesLabel').classList.toggle('hidden',!item||item.timeMode!=='BY_SAMPLES');const dur=await effectivePlanDuration(item,$('#planSamples').value);$('#planDuration').value=dur.minutes?`${minutesText(dur.minutes)}${dur.source==='HISTORICO'?' · histórico':''}`:dur.detail;const start=timeToMinutes($('#planStart').value);$('#planEnd').value=dur.minutes?minutesToTime(addWorkingMinutes(start,dur.minutes)):'';const steps=item?(await getAll('compositeSteps')).filter(s=>s.catalogId===item.id).sort((a,b)=>a.order-b.order):[];$('#planBreakdown').classList.toggle('hidden',!steps.length);$('#planBreakdown').innerHTML=steps.length?`<b>Desglose del bloque · ${minutesText(dur.minutes)}</b>${steps.map(s=>`<span>${escapeHtml(s.name)} · ${minutesText(s.minutes)}</span>`).join('')}`:'';await renderHistoricalIntelligence();await renderDailyLoad();await renderAgenda()}
-async function planningForDate(date){return (await visiblePlanningRows()).filter(p=>p.date===date&&p.status!=='CANCELADO')}
+// 10.30 · FUENTE CANÓNICA DE AGENDA EN EL PLANIFICADOR.
+// El fallo intermitente restante ocurría cuando IndexedDB de la PC que planifica quedaba
+// una revisión detrás de Firestore: la línea de tiempo podía terminar correcta por un
+// repintado posterior, pero el motor de disponibilidad ya había calculado sobre la copia
+// local incompleta. En Planificador, las decisiones de horario/carga se toman ahora contra
+// una fotografía de servidor por FECHA, compartida por todos los cálculos del mismo ciclo.
+let plannerServerDayCache={date:'',at:0,rows:[],promise:null};
+async function serverPlanningForDate(date,force=false){
+  if(!date||!firebaseBridge.ready||!firebaseBridge.authUser)return null;
+  const now=Date.now();
+  if(!force&&plannerServerDayCache.date===date&&now-plannerServerDayCache.at<1800)return plannerServerDayCache.rows;
+  if(plannerServerDayCache.promise&&plannerServerDayCache.date===date)return plannerServerDayCache.promise;
+  plannerServerDayCache.date=date;
+  plannerServerDayCache.promise=(async()=>{
+    const {collection,getDocsFromServer,getDocs,query,where}=firebaseBridge.mods;
+    const reader=typeof getDocsFromServer==='function'?getDocsFromServer:getDocs;
+    let snap;
+    try{snap=await reader(query(collection(firebaseBridge.db,cloudCollectionFor('planning')),where('date','==',date)))}
+    catch(err){console.warn('Agenda canónica por fecha: consulta filtrada no disponible',err);snap=await reader(collection(firebaseBridge.db,cloudCollectionFor('planning')))}
+    const rows=snap.docs.map(d=>({...d.data(),id:d.data()?.id||d.id})).filter(p=>p.date===date&&p.status!=='CANCELADO');
+    // Hidratar también IndexedDB para que Agenda/Carga/Vista ejecutiva queden iguales.
+    for(const r of rows)await applyCloudRecord('planning',r.id,r);
+    plannerServerDayCache={date,at:Date.now(),rows,promise:null};
+    return rows;
+  })();
+  try{return await plannerServerDayCache.promise}catch(err){plannerServerDayCache.promise=null;throw err}
+}
+async function planningForDate(date){
+  const inPlanner=!!document.querySelector('#view-planificador.active');
+  if(inPlanner&&firebaseBridge.ready&&firebaseBridge.authUser){
+    try{
+      const remote=await serverPlanningForDate(date);
+      if(remote)return remote;
+    }catch(err){console.warn('Agenda canónica temporalmente no disponible; usando copia local',err)}
+  }
+  return (await visiblePlanningRows()).filter(p=>p.date===date&&p.status!=='CANCELADO');
+}
 function overlaps(aStart,aEnd,bStart,bEnd){return aStart<bEnd&&bStart<aEnd}
 function analystBusySegments(plans,analystId){
   const segs=[];
@@ -1226,6 +1262,7 @@ async function savePlan(){
     if(computedEnd>WORK_END)return toast('No se guardó: la actividad excede la jornada laboral de 17:00. Cambie hora, duración, analista o fecha.');
 
     // 1) Validación rápida contra el servidor antes de escribir.
+    plannerServerDayCache.at=0;
     let plans=await serverPlanningForDateAnalyst(date,analyst.id);
     const duplicate=exactPlanDuplicate(plans,analyst.id,item.id,date,start,dur);
     if(duplicate)return toast(`Actividad ya registrada: ${duplicate.catalogName} · ${duplicate.startTime}–${duplicate.endTime}`);
@@ -1259,7 +1296,7 @@ async function savePlan(){
       return toast(`No se guardó: la jornada de ${analyst.name} alcanzó el límite de ${analyst.dailyHours||8} h desde otra PC.`);
     }
 
-    await put('planning',rec);remoteCandidateId='';
+    await put('planning',rec);remoteCandidateId='';plannerServerDayCache.at=0;
     await audit('PLANIFICAR','PLANIFICADOR',rec.code,`${rec.catalogName} · ${rec.analystName} · ${rec.date} ${rec.startTime}-${rec.endTime} · guardia multi-PC 10.28`);
     $('#planNotes').value='';
     await refreshPlanner();
