@@ -1,0 +1,8 @@
+V28.21 · PRUEBA MULTI-PC
+- Se conservan los cambios y los datos locales.
+- El diagnóstico distingue pendientes por enviar y registros con error.
+- Indica el próximo reintento sin consultas extra a Firestore.
+- Ante fallos no relacionados con cuota, reintenta con espera de 30 s en lugar de bucle rápido.
+- El modo ahorro de 10 minutos permanece igual.
+- No se modifican reglas de inventario, cartas, muestras o planificación.
+IMPORTANTE: validar en una PC de prueba y confirmar que la cola local baja a 0 antes de desplegar a todas.

@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.20';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -65,6 +65,7 @@ async function queue(type,entity,payload){
 // 10.12 · Protección de cuota: no martillar Firestore cuando responde RESOURCE_EXHAUSTED.
 let firebaseQuotaPauseUntil=0;
 let firebaseQuotaFailures=0;
+let outboxRetryNotBefore=0; // 28.21: reintentos de fallos transitorios sin tormenta de escrituras
 function isFirebaseQuotaError(err){
   const t=String(err?.code||'')+' '+String(err?.message||err||'');
   return /resource-exhausted|quota exceeded|quota|too many requests|429/i.test(t);
@@ -86,6 +87,7 @@ async function hasOpenOutbox(){
 }
 function scheduleOutboxFlush(delay=250){
   if(quotaPauseRemaining()>0)return;
+  delay=Math.max(delay,outboxRetryNotBefore-Date.now());
   if(firebaseBridge.flushTimer)clearTimeout(firebaseBridge.flushTimer);
   firebaseBridge.flushTimer=setTimeout(async()=>{
     firebaseBridge.flushTimer=null;
@@ -479,6 +481,10 @@ async function flushOutbox(showToast=true){
     setSyncStateVisualOnly('CUOTA FIREBASE',`Pausa automática · reintento en ${Math.ceil(quotaPauseRemaining()/60000)} min`);
     return false;
   }
+  if(Date.now()<outboxRetryNotBefore){
+    scheduleOutboxFlush(outboxRetryNotBefore-Date.now());
+    return false;
+  }
   if(firebaseBridge.busy){
     firebaseBridge.flushRequested=true;
     scheduleOutboxFlush(350);
@@ -620,13 +626,18 @@ async function flushOutbox(showToast=true){
       firebaseBridge.lastError=open[0]?.lastError||`${open.length} cambio(s) pendientes`;
       setSyncStateVisualOnly(failed?'ERROR':'PENDIENTE',`${open.length} cambio(s) sin confirmar`);
       firebaseBridge.flushRequested=true;
-      if(quotaPauseRemaining()===0)scheduleOutboxFlush(2500);
+      if(failed && quotaPauseRemaining()===0){
+        // 28.21: errores no-cuota: esperar 30 s; una respuesta lenta no debe
+        // causar un bucle de reenvíos cada 2,5 s en seis computadoras.
+        outboxRetryNotBefore=Date.now()+30000;
+      }
+      if(quotaPauseRemaining()===0)scheduleOutboxFlush(failed?30000:2500);
       if(showToast)toast(`${open.length} cambio(s) siguen pendientes`);
       return false;
     }
 
     firebaseBridge.lastSyncAt=nowISO();
-    firebaseBridge.lastError=null;clearFirebaseQuotaBackoff();
+    firebaseBridge.lastError=null;outboxRetryNotBefore=0;clearFirebaseQuotaBackoff();
     await put('config',{key:'lastCloudSyncAt',value:firebaseBridge.lastSyncAt});
     setSyncState('SINCRONIZADO',sent?`${sent} cambio(s) confirmados en Firestore`:'Sin cambios pendientes');
     if(showToast)toast(sent?`${sent} cambio(s) confirmados`:'Todo está sincronizado');
@@ -637,7 +648,7 @@ async function flushOutbox(showToast=true){
     // 10.25: una confirmación de Outbox NO debe desmontar/reconstruir Cartas de Control.
     // Firestore/IndexedDB ya contienen el dato; la vista se actualiza sólo por una
     // reconciliación remota relevante y agrupada. Esto elimina el parpadeo continuo.
-    if(firebaseBridge.flushRequested&&quotaPauseRemaining()===0)scheduleOutboxFlush(400);
+    if(firebaseBridge.flushRequested&&quotaPauseRemaining()===0)scheduleOutboxFlush(Math.max(400,outboxRetryNotBefore-Date.now()));
   }
 }
 function shouldAcceptCloud(local,remote){
@@ -5465,7 +5476,7 @@ function smartSyncPanelUpdate(){
   const listeners=Array.isArray(firebaseBridge.unsubs)?firebaseBridge.unsubs.length:0;
   const quota=quotaPauseRemaining();
   const online=navigator.onLine;
-  const mode=!signedIn?'SIN SESIÓN':!online?'SIN CONEXIÓN':quota>0?'PAUSA POR CUOTA':smartSyncSleeping?'AHORRO FIREBASE':firebaseBridge.busy?'SINCRONIZANDO':listeners?'ACTIVO':'SIN ESCUCHADORES';
+  const mode=!signedIn?'SIN SESIÓN':!online?'SIN CONEXIÓN':quota>0?'PAUSA POR CUOTA':smartSyncSleeping?'AHORRO FIREBASE':firebaseBridge.busy?'ENVIANDO CAMBIOS':firebaseBridge.lastError?'REVISAR PENDIENTES':listeners?'ACTIVO':'SIN ESCUCHADORES';
   const color=!signedIn?'neutral':!online||quota?'red':smartSyncSleeping?'amber':firebaseBridge.busy?'blue':listeners?'green':'amber';
   const status=document.getElementById('smartSyncMode');
   if(status){status.textContent=mode;status.className='smart-sync-status '+color;}
@@ -5486,8 +5497,20 @@ function smartSyncPanelUpdate(){
 }
 async function smartSyncPendingUpdate(){
   const el=document.getElementById('smartSyncPending');if(!el)return;
-  try{const rows=await getAll('outbox');el.textContent=String(rows.filter(x=>x.status==='PENDIENTE'||x.status==='ERROR').length)}
-  catch{el.textContent='No disponible'}
+  try{
+    const rows=await getAll('outbox');
+    const open=rows.filter(x=>x.status==='PENDIENTE'||x.status==='ERROR');
+    const errors=open.filter(x=>x.status==='ERROR');
+    const waiting=open.filter(x=>x.status==='PENDIENTE');
+    el.textContent=String(open.length);
+    const detail=document.getElementById('smartSyncPendingDetail');
+    if(detail){
+      detail.textContent=`${waiting.length} por enviar · ${errors.length} con error`;
+      detail.title=errors.slice(0,3).map(x=>`${x.entity||'Registro'}: ${String(x.lastError||'Sin detalle').slice(0,150)}`).join('\n');
+    }
+    const retry=document.getElementById('smartSyncNextRetry');
+    if(retry)retry.textContent=quotaPauseRemaining()>0?`Pausa por cuota: ${smartSyncDuration(quotaPauseRemaining())}`:outboxRetryNotBefore>Date.now()?`En ${smartSyncDuration(outboxRetryNotBefore-Date.now())}`:firebaseBridge.busy?'En curso':open.length?'Programado / esperando conexión':'No necesario';
+  }catch{el.textContent='No disponible'}
 }
 function smartSyncWake(){
   smartSyncLastInteraction=Date.now();
