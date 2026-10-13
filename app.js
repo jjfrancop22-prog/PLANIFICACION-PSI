@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.17';
+const APP_VERSION='V1.0.5.6.33.25.10.28.18';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -5040,6 +5040,7 @@ async function submitFirebaseLogin(e){
       ae.textContent='';
     }
 
+    loginDiagStart();loginDiagStep('Autenticando credenciales');
     const cred=await firebaseBridge.authMods.signInWithEmailAndPassword(
       firebaseBridge.auth,
       email,
@@ -5059,6 +5060,7 @@ async function submitFirebaseLogin(e){
     setSyncState('SINCRONIZANDO','Inicio correcto · descargando información compartida…');
 
   }catch(err){
+    loginDiagStop('No se pudo autenticar: '+String(err?.code||err?.message||'error'));
     console.error('Firebase login',err);
     firebaseBridge.lastError=String(err?.message||err);
 
@@ -5123,11 +5125,49 @@ async function findERPUserForAuth(authUser){
   const localUsers=await getAll('users');
   return localUsers.find(u=>u.firebaseUid===authUser.uid)||null;
 }
+// 28.18 · Telemetría local de inicio. No realiza lecturas adicionales de Firebase.
+const loginDiag={started:0,phaseStart:0,phase:'',steps:[],timer:null,warningAt:30000};
+function loginDiagStart(){
+  if(loginDiag.timer)clearInterval(loginDiag.timer);
+  loginDiag.started=performance.now();loginDiag.phaseStart=loginDiag.started;
+  loginDiag.phase='Preparando sesión';loginDiag.steps=[];
+  const panel=document.getElementById('authLoginDiagnostics');if(panel)panel.hidden=false;
+  loginDiag.timer=setInterval(()=>loginDiagRender(),1000);
+  loginDiagRender();
+}
+function loginDiagStep(label){
+  if(!loginDiag.started)loginDiagStart();
+  const t=performance.now();
+  if(loginDiag.phase)loginDiag.steps.push({label:loginDiag.phase,ms:t-loginDiag.phaseStart});
+  loginDiag.phase=label;loginDiag.phaseStart=t;
+  loginDiagRender();
+}
+function loginDiagRender(final=false,problem=''){
+  const panel=document.getElementById('authLoginDiagnostics');if(!panel||!loginDiag.started)return;
+  const elapsed=Math.max(0,performance.now()-loginDiag.started);
+  const time=ms=>(ms/1000).toFixed(1)+' s';
+  const rows=loginDiag.steps.map(x=>'<div><span>✓ '+escapeHtml(x.label)+'</span><b>'+time(x.ms)+'</b></div>');
+  if(!final)rows.push('<div class="auth-diag-current"><span>◷ '+escapeHtml(loginDiag.phase)+'</span><b>'+time(performance.now()-loginDiag.phaseStart)+'</b></div>');
+  const detail=document.getElementById('authLoginDiagSteps');if(detail)detail.innerHTML=rows.join('');
+  const total=document.getElementById('authLoginDiagTotal');if(total)total.textContent='Tiempo total: '+time(elapsed);
+  const note=document.getElementById('authLoginDiagNote');if(note){
+    note.textContent=problem||(!final&&elapsed>loginDiag.warningAt?'La carga está tardando más de lo habitual. Compruebe la conexión; no cierre la pestaña si hay cambios locales pendientes.':final?'Carga finalizada. Tiempos medidos en este dispositivo.':'Los tiempos se miden en esta computadora, sin consultas adicionales.');
+  }
+  panel.hidden=false;
+}
+function loginDiagStop(problem=''){
+  if(!loginDiag.started)return;
+  if(loginDiag.phase)loginDiag.steps.push({label:loginDiag.phase,ms:performance.now()-loginDiag.phaseStart});
+  loginDiag.phase='';
+  if(loginDiag.timer)clearInterval(loginDiag.timer);loginDiag.timer=null;
+  loginDiagRender(true,problem);
+}
 async function handleFirebaseAuthState(authUser){
   firebaseBridge.authUser=authUser||null;
   refreshAuthUI();
 
   if(!authUser){
+    loginDiagStop();
     stopRealtimeSync();
     currentSessionUser=null;
     applyRoleUI();
@@ -5138,6 +5178,7 @@ async function handleFirebaseAuthState(authUser){
   }
 
   try{
+    loginDiagStart();loginDiagStep('Verificando perfil en Firebase');
     const gateStatus=$('#authGateConnection');
     if(gateStatus){gateStatus.textContent='SINCRONIZANDO… verificando perfil y datos';gateStatus.classList.add('syncing')}
     setSyncState('SINCRONIZANDO','Verificando perfil y sincronizando datos…');
@@ -5146,6 +5187,7 @@ async function handleFirebaseAuthState(authUser){
     let profile=await findERPUserForAuth(authUser);
 
     if(!profile){
+      loginDiagStop('El usuario no tiene un perfil ERP habilitado.');
       currentSessionUser={
         id:authUser.uid,
         name:'Perfil ERP pendiente',
@@ -5171,6 +5213,7 @@ async function handleFirebaseAuthState(authUser){
       updatedAt:nowISO()
     };
 
+    loginDiagStep('Guardando perfil local y permisos');
     // 2. Aplicar rol cloud inmediatamente.
     currentSessionUser=profile;
     await put('users',profile);
@@ -5178,9 +5221,11 @@ async function handleFirebaseAuthState(authUser){
     applyRoleUI();
     refreshAuthUI();
 
+    loginDiagStep('Comprobando estado de migración');
     // 3. Leer el estado global de migración desde Firestore.
     await refreshMigrationUI();
 
+    loginDiagStep('Descargando datos compartidos (Firebase)');
     // 4. Descargar estado compartido desde la nube.
     try{
       await pullFirebaseData(false);
@@ -5189,6 +5234,7 @@ async function handleFirebaseAuthState(authUser){
       firebaseBridge.lastError=String(syncErr?.message||syncErr);
     }
 
+    loginDiagStep('Vinculando analista y preparando interfaz');
     // 5. Resolver vínculo real de analista después de descargar analysts.
     profile=await resolveAnalystLink(profile);
     currentSessionUser=profile;
@@ -5223,6 +5269,7 @@ async function handleFirebaseAuthState(authUser){
       switchView('inicio');
     }
 
+    loginDiagStep('Verificando cambios pendientes y reconciliando nube');
     // 7. Limpiar confirmaciones de lectura heredadas de V1.0.5.6.15 antes de
     // confirmar la Outbox operativa. La campana ya usa un canal silencioso.
     try{await retireLegacyCommentReadOutbox()}catch(e){console.warn('Limpieza de lecturas heredadas',e)}
@@ -5233,13 +5280,16 @@ async function handleFirebaseAuthState(authUser){
     startRealtimeSync();
     await refreshMigrationUI();
 
+    loginDiagStep('Abriendo ERP');
     const gateDone=$('#authGateConnection');
     if(gateDone){gateDone.textContent='SINCRONIZACIÓN COMPLETA · abriendo ERP';gateDone.classList.remove('syncing')}
     setSyncState('SINCRONIZADO','Datos actualizados · sesión lista');
+    loginDiagStop();
     hideAuthGate();
     toast(`Bienvenido · ${profile.name}`);
 
   }catch(err){
+    loginDiagStop('Error de inicio: '+String(err?.code||err?.message||'desconocido'));
     console.error('Procesamiento de sesión Firebase',err);
     firebaseBridge.lastError=String(err?.message||err);
     toast(`No se pudo cargar el perfil ERP: ${err?.code||err?.message||'error'}`);

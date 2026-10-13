@@ -354,7 +354,18 @@ html[data-session-role="ANALISTA"] #digConfigSection,html[data-session-role="ANA
 .comm-closure-table{width:100%;border-collapse:collapse;font-size:13px}.comm-closure-table th{text-align:left;background:#edf5fa;color:#47647a}.comm-closure-table th,.comm-closure-table td{padding:8px 10px;border-bottom:1px solid #e0eaf0}.comm-closure-table th:last-child{text-align:right}
 .comm-closure-foot,.comm-closure-note{font-size:12px;color:#547087;line-height:1.6;margin-top:10px}
 
-/* 28.17: diferencia visual entre cierre histórico sin instantánea y evidencia nueva. */
+/* 28.18: diferencia visual entre cierre histórico sin instantánea y evidencia nueva. */
 .comm-closure-legacy{background:#f8fafc;border-color:#dce5ee}
 .comm-closure-legacy .comm-closure-head span{color:#6b7280}
 .comm-closure-legacy .comm-closure-note{line-height:1.5;margin:10px 0 0}
+
+/* 28.18: diagnóstico visible de sesión, compacto y adaptativo */
+.auth-login-diagnostics{margin-top:12px;border:1px solid #d8e5f0;border-radius:12px;padding:12px;background:#f5f9fd;color:#1b3551;font-size:12px;max-height:240px;overflow:auto}
+.auth-login-diagnostics[hidden]{display:none!important}
+.auth-diag-heading,.auth-diag-steps>div{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.auth-diag-heading{font-size:13px;margin-bottom:7px}
+.auth-diag-heading span{color:#3a6589;font-weight:700;white-space:nowrap}
+.auth-diag-steps>div{border-top:1px solid #e1eaf3;padding:5px 0}
+.auth-diag-steps b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.auth-diag-current{color:#075a98;font-weight:600}
+#authLoginDiagNote{margin:8px 0 0;color:#52697c;line-height:1.35}
