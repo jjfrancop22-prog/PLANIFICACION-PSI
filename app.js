@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.18';
+const APP_VERSION='V1.0.5.6.33.25.10.28.19';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -5227,8 +5227,10 @@ async function handleFirebaseAuthState(authUser){
 
     loginDiagStep('Descargando datos compartidos (Firebase)');
     // 4. Descargar estado compartido desde la nube.
+    let initialCloudPullOK=false;
     try{
       await pullFirebaseData(false);
+      initialCloudPullOK=!firebaseBridge.lastError;
     }catch(syncErr){
       console.warn('Sesión correcta; descarga inicial pendiente',syncErr);
       firebaseBridge.lastError=String(syncErr?.message||syncErr);
@@ -5276,7 +5278,22 @@ async function handleFirebaseAuthState(authUser){
     // Confirmar pendientes, volver a contrastar con nube y recién después activar live sync.
     // Esto protege el caso: cerrar sesión / cerrar APP / volver horas después.
     try{await flushOutbox(false)}catch(e){console.warn('Outbox pendiente al reanudar sesión',e)}
-    try{await pullFirebaseData(false)}catch(e){console.warn('Revisión cloud pendiente al reanudar sesión',e)}
+    // 28.19: Evitar una SEGUNDA descarga completa inmediatamente después de la primera.
+    // Solo se omite cuando la primera descarga fue satisfactoria y la Outbox
+    // ya no contiene operaciones pendientes. Si hubo escrituras o errores,
+    // conservar la reconciliación original para proteger la trazabilidad.
+    let pendingStartupWrites=true;
+    try{
+      const queue=await getAll('outbox');
+      pendingStartupWrites=queue.some(x=>x.status==='PENDIENTE'||x.status==='ERROR');
+    }catch(e){console.warn('No se pudo comprobar la cola local; se conserva revisión completa',e)}
+    if(!initialCloudPullOK||pendingStartupWrites){
+      loginDiagStep('Revalidando datos compartidos tras cambios locales');
+      try{await pullFirebaseData(false)}catch(e){console.warn('Revisión cloud pendiente al reanudar sesión',e)}
+    }else{
+      loginDiagStep('Activando sincronización en tiempo real');
+      console.info('Inicio 28.19: descarga inicial confirmada y cola vacía; se omite descarga duplicada.');
+    }
     startRealtimeSync();
     await refreshMigrationUI();
 
