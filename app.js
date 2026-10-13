@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21';
+const APP_VERSION='V1.0.5.6.33.25.10.28.22';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -65,7 +65,7 @@ async function queue(type,entity,payload){
 // 10.12 · Protección de cuota: no martillar Firestore cuando responde RESOURCE_EXHAUSTED.
 let firebaseQuotaPauseUntil=0;
 let firebaseQuotaFailures=0;
-let outboxRetryNotBefore=0; // 28.21: reintentos de fallos transitorios sin tormenta de escrituras
+let outboxRetryNotBefore=0; // 28.22: reintentos de fallos transitorios sin tormenta de escrituras
 function isFirebaseQuotaError(err){
   const t=String(err?.code||'')+' '+String(err?.message||err||'');
   return /resource-exhausted|quota exceeded|quota|too many requests|429/i.test(t);
@@ -627,7 +627,7 @@ async function flushOutbox(showToast=true){
       setSyncStateVisualOnly(failed?'ERROR':'PENDIENTE',`${open.length} cambio(s) sin confirmar`);
       firebaseBridge.flushRequested=true;
       if(failed && quotaPauseRemaining()===0){
-        // 28.21: errores no-cuota: esperar 30 s; una respuesta lenta no debe
+        // 28.22: errores no-cuota: esperar 30 s; una respuesta lenta no debe
         // causar un bucle de reenvíos cada 2,5 s en seis computadoras.
         outboxRetryNotBefore=Date.now()+30000;
       }
@@ -5553,13 +5553,14 @@ window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.
 window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 // 10.17 · Verificación silenciosa de integridad mientras el JEFE permanece planificando.
-// No reemplaza realtime ni hace polling agresivo: cada 3 min confirma el estado canónico
-// del servidor únicamente si la pestaña está visible y el Planificador está abierto.
+// Respaldo de integridad cada 15 min: realtime permanece activo y recibe cambios al instante.
+// Evita descargar toda la colección planning cada 3 min durante el trabajo del jefe.
+// Solo corre con pestaña visible y Planificador abierto; no toca outbox ni inventario.
 setInterval(()=>{
   if(document.hidden||smartSyncSleeping||!firebaseBridge.ready||!firebaseBridge.authUser)return;
   if(!document.querySelector('#view-planificador.active'))return;
   selfHealPlanningFromServer(true).then(()=>reconcileVisibleInterface('PLANNING_INTEGRITY')).catch(()=>{});
-},180000);
+},900000);
 // 10.8 · Heartbeat de transporte únicamente. Antes repintaba la vista cada 15 s y podía
 // cerrar el selector/reiniciar el formulario aunque no existiera ninguna acción del usuario.
 setInterval(async()=>{

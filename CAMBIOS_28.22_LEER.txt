@@ -1,0 +1,7 @@
+V28.22 PRUEBA - ahorro conservador de lecturas Firestore
+
+Cambio: la autorreparación de la colección planning mientras el JEFE está en el Planificador pasa de cada 3 minutos a cada 15 minutos.
+Se mantienen los escuchadores en tiempo real y el modo ahorro tras 10 minutos.
+NO se cambian escrituras, Outbox, inventario, muestras, cartas de control ni reglas Firestore.
+No se ha probado contra Firebase en producción. Probar primero en un equipo y conservar respaldo.
+El contador de escuchadores NO equivale a lecturas facturadas.
