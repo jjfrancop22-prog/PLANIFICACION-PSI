@@ -20,7 +20,12 @@ service cloud.firestore {
     match /planning/{id} {
       allow read: if activeUser();
       allow create, delete: if isBoss();
-      allow update: if activeUser();
+      // El cierre confirmado es irreversible mediante sincronización ordinaria.
+      // No afecta actividades sin cierre ni la edición de otros campos.
+      allow update: if activeUser() && (
+        !(resource.data.status == 'REALIZADO' || resource.data.get('completionCommittedAt', null) != null)
+        || (request.resource.data.status == 'REALIZADO' && request.resource.data.get('completionCommittedAt', null) != null)
+      );
     }
     match /planComments/{id} {
       allow read, create: if activeUser();

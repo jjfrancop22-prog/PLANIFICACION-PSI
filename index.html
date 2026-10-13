@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f4c81" />
   <title>ERP Planificación NextGen</title>
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="stylesheet" href="styles.css?v=6.33.25.10.30.0" />
+  <link rel="stylesheet" href="styles.css?v=6.33.25.10.28.17" />
 </head>
 <body>
 <div class="app-shell">
@@ -25,7 +25,7 @@
       <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
       <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
     </nav>
-    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.30.0 · Firebase Auth</small></div>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.28.17 · Firebase Auth</small></div>
   </aside>
 
   <main class="main">
@@ -367,7 +367,7 @@
 
 <dialog id="notificationsDialog" class="communications-dialog">
   <div class="dialog-head"><div><h3>🔔 Centro de Comunicaciones</h3><p>Centro de seguimiento operativo: prioriza acciones, consolida controles diarios y mantiene la trazabilidad técnica sin ruido de notificaciones.</p></div><button type="button" class="icon-btn" data-close="notificationsDialog">×</button></div>
-  <div id="commSummary" class="comm-summary"></div><div class="comm-smart-hint">La campana cuenta asuntos que requieren revisión. Las cartas individuales no notifican: se genera un único cierre cuando se completa el conjunto diario.</div><div class="comm-toolbar"><input id="commSearch" type="search" placeholder="Buscar analista, actividad, OT, equipo, carta o novedad…"/><select id="commStatusFilter"><option value="UNREAD">Requieren atención / nuevos</option><option value="OPEN" selected>En seguimiento</option><option value="ALL">Todos los asuntos</option><option value="CLOSED">Atendidos</option></select><select id="commTypeFilter"><option value="ALL">Todas las categorías</option><option value="CONTROL">📈 Cierre de controles diarios</option><option value="ACTIVIDAD">▶️ Apertura / cierre de actividades</option><option value="TECNICA">🧪 Datos técnicos: curva, estándares y reactivos</option><option value="CONVERSACION">💬 Comentarios / respuestas</option></select><button type="button" class="btn secondary" id="btnRefreshCommunications">↻ Actualizar</button></div>
+  <section id="openActivitiesAudit" class="card hidden" style="margin:12px 0;padding:14px"><h3 style="margin:0 0 6px">Actividades abiertas y pendientes de cierre</h3><p id="openActivitiesStats" style="margin:0 0 10px">Cargando…</p><input id="openActivitiesSearch" type="search" placeholder="Filtrar por analista, actividad o fecha" style="width:100%;margin-bottom:10px;padding:8px"><div style="max-height:210px;overflow:auto"><table style="width:100%;font-size:12px"><thead><tr><th>Fecha</th><th>Analista</th><th>Actividad</th><th>Horario</th><th>Estado</th><th>Inicio real</th><th>Revisión JEFE</th></tr></thead><tbody id="openActivitiesRows"></tbody></table></div><small>Revisión exclusiva del JEFE: cada cierre requiere confirmación y motivo. No modifica inventario. El cierre queda pendiente hasta confirmación de Firebase.</small></section><div id="commSummary" class="comm-summary"></div><div class="comm-smart-hint">La campana cuenta asuntos que requieren revisión. Las cartas individuales no notifican: se genera un único cierre cuando se completa el conjunto diario.</div><div class="comm-toolbar"><input id="commSearch" type="search" placeholder="Buscar analista, actividad, OT, equipo, carta o novedad…"/><select id="commStatusFilter"><option value="UNREAD">Requieren atención / nuevos</option><option value="OPEN" selected>En seguimiento</option><option value="ALL">Todos los asuntos</option><option value="CLOSED">Atendidos</option></select><select id="commTypeFilter"><option value="ALL">Todas las categorías</option><option value="CONTROL">📈 Cierre de controles diarios</option><option value="ACTIVIDAD">▶️ Apertura / cierre de actividades</option><option value="TECNICA">🧪 Datos técnicos: curva, estándares y reactivos</option><option value="CONVERSACION">💬 Comentarios / respuestas</option></select><button type="button" class="btn secondary" id="btnRefreshCommunications">↻ Actualizar</button></div>
   <div id="communicationsList" class="communications-list"></div>
 </dialog>
 
@@ -466,6 +466,15 @@
   </div>
 </div>
 
+<dialog id="operationalSamplesDialog"><form id="operationalSamplesForm">
+ <div class="dialog-head"><div><h3>📋 Registrar muestras</h3><p id="operationalSamplesHelp">Registro operativo independiente del inventario.</p></div><button type="button" class="icon-btn" data-close="operationalSamplesDialog">×</button></div>
+ <input type="hidden" id="operationalSamplesPlanId"/>
+ <div class="inline-alert info"><b id="operationalSamplesTitle"></b><br/>Guardar muestras no finaliza la actividad y no descuenta reactivos.</div>
+ <div class="form-grid"><label class="full">Cantidad real de muestras procesadas<input id="operationalSamplesCount" type="number" min="0" step="1" required placeholder="Ej. 18"/></label></div>
+ <div id="operationalSampleParameters"></div>
+ <div class="dialog-actions"><button type="button" class="btn secondary" data-close="operationalSamplesDialog">Cancelar</button><button type="submit" class="btn primary" id="operationalSamplesSave">💾 Guardar muestras sin finalizar</button></div>
+</form></dialog>
+
 <dialog id="finishActivityDialog"><form method="dialog" id="finishActivityForm">
   <div class="dialog-head">
     <div><h3 id="finishActivityTitle">Finalizar actividad</h3><p id="finishActivityHelp">Registre el resultado real de la ejecución.</p></div>
@@ -475,9 +484,10 @@
     <input type="hidden" id="finishTechnicalEditMode" value="0"/>
   <div class="finish-activity-summary" id="finishActivitySummary"></div>
   <div class="form-grid">
-    <label id="finishSamplesLabel" class="full">Número de muestras analizadas
+    <div id="finishSamplesReview" class="full hidden"></div>
+    <label id="finishSamplesLabel" class="full">Registro operativo · muestras procesadas
       <input id="finishActualSamples" type="number" min="0" step="1" placeholder="Ej. 18"/>
-      <small>Ingrese la cantidad que realmente procesó durante esta actividad.</small>
+      <small>Registro independiente del inventario. Indique cuántas muestras se procesaron realmente.</small>
     </label>
     <div id="finishCalibrationBlock" class="full calibration-finish hidden">
       <div class="calibration-finish-head">
@@ -496,12 +506,12 @@
     </div>
     <div id="finishReagentBlock" class="full reagent-finish hidden">
       <div class="calibration-finish-head">
-        <div><b>Consumo de reactivos / materiales</b><small>Marque únicamente los reactivos/envases que realmente utilizó. Los demás quedarán registrados como NO UTILIZADOS.</small></div>
+        <div><b>Inventario · consumos independientes del cierre</b><small>Marque únicamente los reactivos/envases que realmente utilizó. Los demás quedarán registrados como NO UTILIZADOS.</small></div>
         <span class="badge">OBLIGATORIO</span>
       </div>
       <div id="finishReagentRows" class="reagent-capture-list"></div>
       <div id="finishReagentValidation" class="inline-alert info">Complete todos los consumos configurados para poder finalizar.</div>
-      <button type="button" class="btn secondary" id="btnSaveReagentDraft">Guardar consumos sin finalizar</button>
+      <button type="button" class="btn secondary" id="btnSaveReagentDraft">💾 Guardar consumos sin finalizar</button>
     </div>
     <label class="full">Comentario final <span class="muted">(opcional)</span>
       <textarea id="finishActivityComment" rows="3" placeholder="Novedad, observación o condición de cierre..."></textarea>
@@ -698,7 +708,7 @@
 
 <div id="toast" class="toast"></div>
 <script src="firebase-config.js"></script>
-<script src="app.js?v=6.33.25.10.30.0"></script>
+<script src="app.js?v=6.33.25.10.28.17"></script>
 
 <script>
 (function(){
@@ -729,7 +739,7 @@
 
   window.addEventListener('load', async()=>{
     try{
-      const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.33.25.10.30.0',{scope:'./',updateViaCache:'none'});
+      const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.33.25.10.28.17',{scope:'./',updateViaCache:'none'});
       if(reg.waiting && navigator.serviceWorker.controller) showUpdate(reg.waiting);
 
       reg.addEventListener('updatefound',()=>{

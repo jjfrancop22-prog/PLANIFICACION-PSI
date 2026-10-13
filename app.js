@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.29.0';
+const APP_VERSION='V1.0.5.6.33.25.10.28.17';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -539,7 +539,29 @@ async function flushOutbox(showToast=true){
           // 10.7: en Firestore Web, la Promise de setDoc se resuelve cuando el backend
           // confirma la escritura. Una segunda lectura getDoc duplicaba la latencia y
           // mantenía innecesariamente el indicador en "Confirmando".
-          await setDoc(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
+          if(item.entity==='planning'){
+            // Protección multi-PC: una escritura vieja no puede reabrir un cierre confirmado.
+            // Transacción en servidor para comparar el estado actual y el timestamp.
+            const {runTransaction}=firebaseBridge.mods;
+            let remoteWinner=null;
+            await runTransaction(firebaseBridge.db,async tx=>{
+              const currentSnap=await tx.get(ref);
+              const current=currentSnap.exists()?currentSnap.data():null;
+              const closed=current?.status==='REALIZADO'||!!current?.completionCommittedAt;
+              const incomingClosed=payload.status==='REALIZADO'||!!payload.completionCommittedAt;
+              const remoteNewer=current && String(current.updatedAt||'')>String(payload.updatedAt||'');
+              if((closed&&!incomingClosed)||remoteNewer){remoteWinner=current;return;}
+              tx.set(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
+            });
+            if(remoteWinner){
+              // Evitar el falso ACK: reconciliar el documento remoto sin volver a encolar.
+              const canonical={...remoteWinner,id};delete canonical._cloudUpdatedAt;delete canonical._erpEntity;
+              await put('planning',canonical);
+              item.lastError='Cambio local obsoleto; se conservó la revisión confirmada en Firebase';
+            }
+          }else{
+            await setDoc(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
+          }
         }
 
         item.status='SINCRONIZADO';
@@ -661,6 +683,9 @@ async function applyCloudRecord(storeName,id,data){
       if(acknowledged){firebaseBridge.lastError=null;firebaseBridge.lastSyncAt=nowISO();}
     }
   }
+  // Nunca reabrir un cierre confirmado localmente por un snapshot antiguo.
+  // El servidor queda protegido por transacciones y reglas de Firestore.
+  if(storeName==='planning' && local && (local.status==='REALIZADO'||local.completionCommittedAt) && !(clean.status==='REALIZADO'||clean.completionCommittedAt))return;
   if(shouldAcceptCloud(local,clean))await put(storeName,clean);
 }
 async function pullFirebaseData(showToast=true){
@@ -842,19 +867,8 @@ async function reconcileVisibleInterface(reason='REMOTE'){
     await refreshNotificationBadge();
     if(!remoteChangeRelevantToView(active,reason))return;
     if(active==='planificador'&&plannerHasActiveDraft()){
-      // 10.29 · FIX VISUAL MULTI-PC CON BORRADOR ACTIVO.
-      // Antes se detenía TODO el repintado si el jefe tenía una actividad seleccionada,
-      // una búsqueda escrita o incluso el foco en un control. El snapshot remoto sí
-      // llegaba a IndexedDB, pero Carga del día / Agenda / Vista ejecutiva quedaban con
-      // la fotografía anterior hasta cambiar de vista o recargar. Por eso el fallo era
-      // intermitente y afectaba especialmente a la PC que estaba planificando.
-      // Conservamos intacto el formulario (no renderPlanSelectors), pero refrescamos
-      // inmediatamente todos los paneles de solo lectura desde la misma planning local.
-      await renderDailyLoad();
-      await renderAgenda();
-      await renderExecutivePlanner();
-      await renderMandatoryPlanningAlerts();
-      lastInterfaceReconcileAt=Date.now();
+      // Los datos ya están reconciliados en IndexedDB. Se difiere únicamente el repintado
+      // para no cerrar selects, borrar búsquedas ni reiniciar una planificación en curso.
       return;
     }
     if(active==='inicio')await renderDashboard();
@@ -899,9 +913,9 @@ async function selfHealPlanningFromServer(force=false){
 }
 async function reconcileAfterResume(force=false){
   if(!firebaseBridge.ready||!firebaseBridge.authUser)return;
-  // Al volver de minimizado/foco, primero resolver Outbox/nube y después repintar.
-  await resumeCloudSession(force);
-  await selfHealPlanningFromServer(force);
+  // 28.5: el listener reactivado recibe el snapshot inicial; NO descargar
+  // todas las colecciones ni ejecutar autorreparación en cada focus/pageshow.
+  if(typeof smartSyncWake==='function')smartSyncWake();
   await reconcileVisibleInterface('RESUME');
 }
 
@@ -982,9 +996,21 @@ async function renderPlanSelectors(){
 async function renderAnalystOptions(){if(!$('#planAnalyst'))return;const section=$('#planSection').value;const ana=(await getAll('analysts')).filter(a=>a.status==='ACTIVO'&&(a.competencies||[]).includes(section)).sort((a,b)=>a.name.localeCompare(b.name,'es'));const cur=$('#planAnalyst').value;$('#planAnalyst').innerHTML='<option value="">Seleccione o use sugerencia inteligente</option>'+ana.map(a=>`<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');if(ana.some(a=>a.id===cur))$('#planAnalyst').value=cur}
 
 
-const ACTUAL_SAMPLE_SECTIONS=['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS'];
+const ACTUAL_SAMPLE_SECTIONS=['RECEPCION_MUESTRAS','MICROBIOLOGIA','AASS','ENSAYOS_ANALITICOS'];
 function requiresActualSamples(section){return ACTUAL_SAMPLE_SECTIONS.includes(section)}
 
+const METAL_SAMPLE_NAMES=['Bario','Arsénico','Plomo','Plata','Cadmio','Selenio','Mercurio','Vanadio','Zinc','Cobalto','Cobre','Aluminio','Níquel'];
+function sampleParametersForPlan(p){
+ const section=String(p.section||'').toUpperCase(),name=String(p.catalogName||'');
+ if(section==='RECEPCION_MUESTRAS')return ['DQO','DBO5','Tensoactivos'];
+ if(section==='MICROBIOLOGIA')return ['Coliformes fecales','Coliformes totales','E. coli'];
+ if(section==='AASS'&&(/metal|absorci[oó]n at[oó]mica|metales/i.test(name)||/^\s*AASS(?:\s+y\/o\s+AASS(?:\([^)]*\))?)?(?:\s*[-–]\s*[^-–]+)?\s*$/i.test(name)))return METAL_SAMPLE_NAMES;
+ return [name||'Parámetro de la actividad'];
+}
+function sampleDetailsHtml(p,readOnly){
+ const params=sampleParametersForPlan(p),values=p.sampleParameterCounts||{};
+ return `<div class="sample-parameter-title"><b>Parámetros procesados</b><small>Complete únicamente los parámetros realizados; deje los demás vacíos.</small></div><div class="sample-parameter-grid">${params.map((name,i)=>`<label class="sample-parameter-item"><span>${escapeHtml(name)}</span><input data-sample-parameter="${i}" type="number" min="0" step="1" inputmode="numeric" value="${values[name]??''}" ${readOnly?'disabled':''} placeholder="Sin registrar"/></label>`).join('')}</div><p class="sample-parameter-note">Los parámetros pueden corresponder a una misma muestra. No se suman automáticamente para obtener muestras únicas.</p>`;
+}
 let historicalDurationOverride=null;
 let historicalOverrideCatalogId=null;
 
@@ -1049,43 +1075,7 @@ async function effectivePlanDuration(item,samples){
 }
 
 async function updatePlanPreview(){if(!$('#planCatalog'))return;const id=$('#planCatalog').value,item=(await getAll('catalog')).find(x=>x.id===id);$('#planSamplesLabel').classList.toggle('hidden',!item||item.timeMode!=='BY_SAMPLES');const dur=await effectivePlanDuration(item,$('#planSamples').value);$('#planDuration').value=dur.minutes?`${minutesText(dur.minutes)}${dur.source==='HISTORICO'?' · histórico':''}`:dur.detail;const start=timeToMinutes($('#planStart').value);$('#planEnd').value=dur.minutes?minutesToTime(addWorkingMinutes(start,dur.minutes)):'';const steps=item?(await getAll('compositeSteps')).filter(s=>s.catalogId===item.id).sort((a,b)=>a.order-b.order):[];$('#planBreakdown').classList.toggle('hidden',!steps.length);$('#planBreakdown').innerHTML=steps.length?`<b>Desglose del bloque · ${minutesText(dur.minutes)}</b>${steps.map(s=>`<span>${escapeHtml(s.name)} · ${minutesText(s.minutes)}</span>`).join('')}`:'';await renderHistoricalIntelligence();await renderDailyLoad();await renderAgenda()}
-// 10.30 · FUENTE CANÓNICA DE AGENDA EN EL PLANIFICADOR.
-// El fallo intermitente restante ocurría cuando IndexedDB de la PC que planifica quedaba
-// una revisión detrás de Firestore: la línea de tiempo podía terminar correcta por un
-// repintado posterior, pero el motor de disponibilidad ya había calculado sobre la copia
-// local incompleta. En Planificador, las decisiones de horario/carga se toman ahora contra
-// una fotografía de servidor por FECHA, compartida por todos los cálculos del mismo ciclo.
-let plannerServerDayCache={date:'',at:0,rows:[],promise:null};
-async function serverPlanningForDate(date,force=false){
-  if(!date||!firebaseBridge.ready||!firebaseBridge.authUser)return null;
-  const now=Date.now();
-  if(!force&&plannerServerDayCache.date===date&&now-plannerServerDayCache.at<1800)return plannerServerDayCache.rows;
-  if(plannerServerDayCache.promise&&plannerServerDayCache.date===date)return plannerServerDayCache.promise;
-  plannerServerDayCache.date=date;
-  plannerServerDayCache.promise=(async()=>{
-    const {collection,getDocsFromServer,getDocs,query,where}=firebaseBridge.mods;
-    const reader=typeof getDocsFromServer==='function'?getDocsFromServer:getDocs;
-    let snap;
-    try{snap=await reader(query(collection(firebaseBridge.db,cloudCollectionFor('planning')),where('date','==',date)))}
-    catch(err){console.warn('Agenda canónica por fecha: consulta filtrada no disponible',err);snap=await reader(collection(firebaseBridge.db,cloudCollectionFor('planning')))}
-    const rows=snap.docs.map(d=>({...d.data(),id:d.data()?.id||d.id})).filter(p=>p.date===date&&p.status!=='CANCELADO');
-    // Hidratar también IndexedDB para que Agenda/Carga/Vista ejecutiva queden iguales.
-    for(const r of rows)await applyCloudRecord('planning',r.id,r);
-    plannerServerDayCache={date,at:Date.now(),rows,promise:null};
-    return rows;
-  })();
-  try{return await plannerServerDayCache.promise}catch(err){plannerServerDayCache.promise=null;throw err}
-}
-async function planningForDate(date){
-  const inPlanner=!!document.querySelector('#view-planificador.active');
-  if(inPlanner&&firebaseBridge.ready&&firebaseBridge.authUser){
-    try{
-      const remote=await serverPlanningForDate(date);
-      if(remote)return remote;
-    }catch(err){console.warn('Agenda canónica temporalmente no disponible; usando copia local',err)}
-  }
-  return (await visiblePlanningRows()).filter(p=>p.date===date&&p.status!=='CANCELADO');
-}
+async function planningForDate(date){return (await visiblePlanningRows()).filter(p=>p.date===date&&p.status!=='CANCELADO')}
 function overlaps(aStart,aEnd,bStart,bEnd){return aStart<bEnd&&bStart<aEnd}
 function analystBusySegments(plans,analystId){
   const segs=[];
@@ -1262,7 +1252,6 @@ async function savePlan(){
     if(computedEnd>WORK_END)return toast('No se guardó: la actividad excede la jornada laboral de 17:00. Cambie hora, duración, analista o fecha.');
 
     // 1) Validación rápida contra el servidor antes de escribir.
-    plannerServerDayCache.at=0;
     let plans=await serverPlanningForDateAnalyst(date,analyst.id);
     const duplicate=exactPlanDuplicate(plans,analyst.id,item.id,date,start,dur);
     if(duplicate)return toast(`Actividad ya registrada: ${duplicate.catalogName} · ${duplicate.startTime}–${duplicate.endTime}`);
@@ -1296,7 +1285,7 @@ async function savePlan(){
       return toast(`No se guardó: la jornada de ${analyst.name} alcanzó el límite de ${analyst.dailyHours||8} h desde otra PC.`);
     }
 
-    await put('planning',rec);remoteCandidateId='';plannerServerDayCache.at=0;
+    await put('planning',rec);remoteCandidateId='';
     await audit('PLANIFICAR','PLANIFICADOR',rec.code,`${rec.catalogName} · ${rec.analystName} · ${rec.date} ${rec.startTime}-${rec.endTime} · guardia multi-PC 10.28`);
     $('#planNotes').value='';
     await refreshPlanner();
@@ -1622,6 +1611,20 @@ async function createTechnicalAlert(plan,kind,payload={}){
   return rec;
 }
 
+// 28.16: instantánea inmutable para avisos de cierre; no vuelve a calcular datos históricos.
+function activityClosureEvidence(plan){
+  const counts=plan.sampleParameterCounts||{};
+  const parameters=Object.entries(counts).filter(([k,v])=>k&&Number.isSafeInteger(Number(v))&&Number(v)>0).map(([name,count])=>({name:String(name),count:Number(count)}));
+  return {schema:1,planId:String(plan.id||''),code:String(plan.code||''),activity:String(plan.catalogName||''),section:String(plan.section||''),analyst:String(plan.analystName||''),date:String(plan.date||''),finishedAt:String(plan.actualFinishedAt||''),samples:Number.isSafeInteger(Number(plan.actualSamples))?Number(plan.actualSamples):null,parameters,samplesUpdatedAt:String(plan.operationalSamplesUpdatedAt||''),samplesUpdatedBy:String(plan.operationalSamplesUpdatedBy||'')};
+}
+function communicationClosureEvidenceCard(comment){
+  const e=comment?.closureEvidence;
+  if(comment?.lifecycleStage!=='FINALIZACION')return '';
+  // Avisos anteriores a 28.16: nunca atribuirles una instantánea que no se guardó.
+  if(!e)return `<div class="comm-closure-evidence comm-closure-legacy"><div class="comm-closure-head"><strong>📋 Registro de cierre anterior</strong><span>Sin instantánea de parámetros</span></div><p class="comm-closure-note">Este aviso se generó antes de incorporar la evidencia detallada de muestras. El número de muestras indicado arriba pertenece al mensaje original; no hay desglose histórico verificable por parámetro. Los próximos cierres mostrarán aquí el detalle registrado.</p></div>`;
+  const rows=(e.parameters||[]).map(x=>`<tr><td>${escapeHtml(x.name)}</td><td style="text-align:right"><b>${escapeHtml(String(x.count))}</b></td></tr>`).join('');
+  return `<div class="comm-closure-evidence"><div class="comm-closure-head"><strong>📋 Evidencia de cierre · Muestras procesadas</strong><span>Registro histórico</span></div><div class="comm-closure-total"><span>Muestras únicas</span><strong>${e.samples===null?'No aplica':escapeHtml(String(e.samples))}</strong></div>${rows?`<table class="comm-closure-table"><thead><tr><th>Parámetro</th><th>Cantidad</th></tr></thead><tbody>${rows}</tbody></table>`:'<p class="comm-closure-note">Sin desglose por parámetro en este cierre.</p>'}<div class="comm-closure-foot">${escapeHtml(e.analyst||'')} · ${escapeHtml(e.date||'')}${e.finishedAt?` · Cierre: ${escapeHtml(fmtDate(e.finishedAt))}`:''}${e.samplesUpdatedBy?`<br>Registro de muestras: ${escapeHtml(e.samplesUpdatedBy)}`:''}${e.samplesUpdatedAt?` · ${escapeHtml(fmtDate(e.samplesUpdatedAt))}`:''}${e.code?`<br>Referencia: ${escapeHtml(e.code)}`:''}</div></div>`;
+}
 async function createActivityLifecycleAlert(plan,stage){
   if(!plan||!technicalAlertActorIsAnalyst(plan))return null;
   const isStart=stage==='INGRESO';
@@ -1638,7 +1641,7 @@ async function createActivityLifecycleAlert(plan,stage){
     if(plan.actualSamples!==null&&plan.actualSamples!==undefined)parts.push(`${plan.actualSamples} muestra(s)`);
     text=`✅ FINALIZACIÓN DE ACTIVIDAD · ${plan.catalogName} · ${plan.analystName} finalizó a las ${formatActualStamp(plan.actualFinishedAt||nowISO())}${parts.length?` · ${parts.join(' · ')}`:''}.`;
   }
-  const rec={id,planId:plan.id,analystId:plan.analystId,analystName:plan.analystName,authorType:'SISTEMA',authorName:'Alerta de actividad',text,createdAt:nowISO(),threadStatus:'OPEN',readBy:[],notificationType:'ACTIVIDAD',lifecycleStage:isStart?'INGRESO':'FINALIZACION',priority:'INFO',actionRequired:'CONOCIMIENTO',autoGenerated:true,recipientRole:'JEFE',createdByRole:currentSessionUser?.role||'USUARIO',createdByName:actorName};
+  const rec={id,planId:plan.id,analystId:plan.analystId,analystName:plan.analystName,authorType:'SISTEMA',authorName:'Alerta de actividad',text,createdAt:nowISO(),threadStatus:'OPEN',readBy:[],notificationType:'ACTIVIDAD',lifecycleStage:isStart?'INGRESO':'FINALIZACION',closureEvidence:isStart?null:activityClosureEvidence(plan),priority:'INFO',actionRequired:'CONOCIMIENTO',autoGenerated:true,recipientRole:'JEFE',createdByRole:currentSessionUser?.role||'USUARIO',createdByName:actorName};
   await put('planComments',rec);await queue('CREATE','planComments',rec);
   return rec;
 }
@@ -1752,7 +1755,8 @@ async function refreshNotificationBadge(){
   if(!$('#notificationBadge'))return;
   const key=communicationUserKey();if(!key){$('#notificationBadge').classList.add('hidden');return}
   const threads=await communicationThreads();let n=0;
-  threads.forEach(t=>{const visible=t.items.filter(communicationDisplayableComment);if(visible.some(c=>communicationUnread(c,key))||(!t.closed&&communicationPriority({...t,items:visible}).rank>=4))n++});
+  // La campana representa asuntos ABIERTOS que requieren atención, no históricos no leídos.
+  threads.forEach(t=>{const visible=t.items.filter(communicationDisplayableComment);if(!t.closed&&communicationPriority({...t,items:visible}).rank>=3)n++});
   $('#notificationBadge').textContent=String(n);$('#notificationBadge').classList.toggle('hidden',n===0);$('#btnNotifications')?.classList.toggle('has-unread',n>0);
 }
 async function syncCommentReadReceipt(commentId,keys){
@@ -1824,30 +1828,55 @@ function communicationPriority(t){
 function communicationInventoryRows(comment){
   const rows=[];
   const items=comment?.technicalPayload?.reagents;
+  const num=v=>(v===null||v===undefined||v==='')?null:(Number.isFinite(Number(v))?Number(v):null);
   if(Array.isArray(items)&&items.length){
     for(const x of items.filter(x=>x&&x.usedInActivity&&!x.notUsed)){
-      const consumption=Number(x.consumptionValue??x.used), unit=x.consumptionUnit||x.unit||'';
-      const final=Number(x.stockRemaining??x.finalWeight??x.after);
-      const initial=(Number.isFinite(final)&&Number.isFinite(consumption))?final+consumption:null;
-      rows.push({name:x.name||'Reactivo / insumo',lot:x.lot||'—',initial:Number.isFinite(initial)?initial:null,consumption:Number.isFinite(consumption)?consumption:null,final:Number.isFinite(final)?final:null,unit,depleted:!!x.depleted});
+      const liquid=String(x.physicalState||'').toUpperCase().includes('LIQ');
+      const weight=String(x.mode||'').toUpperCase()==='WEIGHT'||(Array.isArray(x.containers)&&x.containers.length>0);
+      const envs=Array.isArray(x.containers)?x.containers.filter(e=>e&&e.usedInActivity!==false):[];
+      if(weight&&envs.length){
+        for(const e of envs){
+          const before=num(e.initialWeight),after=num(e.finalWeight),tare=num(e.tareWeight);
+          const usedG=before!==null&&after!==null?Math.max(0,before-after):num(e.used);
+          const density=num(x.density);
+          const consumption=liquid?(num(e.volumeUsedMl)??(density>0&&usedG!==null?usedG/density:null)):usedG;
+          rows.push({name:x.name||'Reactivo / insumo',lot:e.lot||x.lot||'—',container:e.label||e.containerType||'Frasco',before,consumption,after,unit:liquid?'mL':'g',kind:liquid?'LIQUIDO':'SOLIDO',weight:true,tare,depleted:!!e.depleted,estimated:false});
+        }
+      }else{
+        const consumption=num(x.consumptionValue??x.used),unit=x.consumptionUnit||x.unit||'unidad';
+        const after=num(x.stockRemaining);
+        const before=after!==null&&consumption!==null?after+consumption:null;
+        rows.push({name:x.name||'Reactivo / insumo',lot:x.lot||'—',container:'',before,consumption,after,unit,kind:'UNIDADES',weight:false,depleted:!!x.depleted,estimated:false});
+      }
     }
     if(rows.length)return rows;
   }
-  const text=String(comment?.text||'');
-  // Compatibilidad con avisos históricos ya guardados en Firestore.
+  // Los avisos históricos no siempre contienen pesos ni densidad: no inferir pesos
+  // a partir de consumos expresados en mL.
+  const txt=String(comment?.text||'');
   const re=/([^|·]+?)(?:\s*·\s*lote\s+([^:·|]+))?:\s*consumo\s+([\d.,]+)\s*([^·|]*?)(?:\s*·\s*PESO\s*\/\s*SALDO\s*FINAL\s+(?:stock final\s+)?([\d.,]+)\s*([^.|]*))?(?=\s*\|\||\.|$)/gi;
   let m;
-  while((m=re.exec(text))){
-    const consumption=Number(String(m[3]).replace(',','.')), final=m[5]?Number(String(m[5]).replace(',','.')):null, unit=(m[4]||m[6]||'').trim();
-    rows.push({name:m[1].replace(/.*INVENTARIO:\s*/i,'').trim(),lot:(m[2]||'—').trim(),initial:Number.isFinite(final)?final+consumption:null,consumption,final:Number.isFinite(final)?final:null,unit,depleted:/agotamiento|revisar baja/i.test(m[0])});
+  while((m=re.exec(txt))){
+    const consumption=num(String(m[3]).replace(',','.')),after=m[5]?num(String(m[5]).replace(',','.')):null;
+    const unit=(m[4]||m[6]||'').trim();
+    const isVolume=/\bml\b/i.test(unit);
+    rows.push({name:m[1].replace(/.*INVENTARIO:\s*/i,'').trim(),lot:(m[2]||'—').trim(),container:'',before:(!isVolume&&after!==null&&consumption!==null)?after+consumption:null,consumption,after,unit,kind:isVolume?'LIQUIDO':'HISTORICO',weight:false,depleted:/agotamiento|revisar baja/i.test(m[0]),estimated:true});
   }
   return rows;
 }
 function communicationInventoryCard(comment){
   const rows=communicationInventoryRows(comment);if(!rows.length)return '';
-  const body=rows.map(r=>`<tr><td><b>${escapeHtml(r.name)}</b>${r.lot&&r.lot!=='—'?`<small>Lote ${escapeHtml(r.lot)}</small>`:''}</td><td>${r.initial==null?'—':escapeHtml(String(Number(r.initial.toFixed(4))))}</td><td class="comm-consumption">− ${r.consumption==null?'—':escapeHtml(String(Number(r.consumption.toFixed(4))))}</td><td class="comm-final">${r.final==null?'—':escapeHtml(String(Number(r.final.toFixed(4))))}</td><td>${escapeHtml(r.unit||'—')}</td><td>${r.depleted?'<span class="comm-stock-alert">REVISAR</span>':'<span class="comm-stock-ok">REGISTRADO</span>'}</td></tr>`).join('');
-  const remaining=rows.filter(r=>r.final!=null).map(r=>`${r.name}: ${Number(r.final.toFixed(4))} ${r.unit||''}`.trim());
-  return `<div class="comm-inventory-card"><div class="comm-inventory-head"><b>📦 Movimiento de inventario</b><small>${remaining.length?`Saldo resultante · ${escapeHtml(remaining.join(' · '))}`:'Consumo registrado con trazabilidad'}</small></div><div class="comm-inventory-scroll"><table><thead><tr><th>Reactivo / insumo</th><th>Inicial</th><th>Consumo</th><th>Final</th><th>Unidad</th><th>Estado</th></tr></thead><tbody>${body}</tbody></table></div><div class="comm-ai-note"><b>IA · Seguimiento:</b> ${rows.some(r=>r.depleted)?'Hay un insumo que requiere revisión de inventario o reposición.':'Movimiento coherente registrado; el saldo final queda disponible para seguimiento.'}</div></div>`;
+  const fmt=v=>v===null||!Number.isFinite(v)?'—':escapeHtml(String(Number(v.toFixed(4))));
+  const body=rows.map(r=>{
+    const beforeUnit=r.weight?'g':r.unit;
+    const afterUnit=r.weight?'g':r.unit;
+    const badge=r.depleted?'<span class="comm-stock-alert">AGOTADO · REVISAR</span>':'<span class="comm-stock-ok">REGISTRADO</span>';
+    const detail=[r.lot&&r.lot!=='—'?`Lote ${escapeHtml(r.lot)}`:'',r.container?escapeHtml(r.container):''].filter(Boolean).join(' · ');
+    return `<tr><td class="comm-item-name"><b>${escapeHtml(r.name)}</b>${detail?`<small>${detail}</small>`:''}<span class="comm-inv-type">${r.weight?(r.kind==='LIQUIDO'?'LÍQUIDO · CONTROL POR PESO':'SÓLIDO · CONTROL POR PESO'):'CONTROL POR '+(r.kind==='UNIDADES'?'UNIDADES':'REGISTRO HISTÓRICO')}</span></td><td><span class="comm-value">${fmt(r.before)}</span><small>${escapeHtml(beforeUnit||'')}</small></td><td class="comm-consumption"><span class="comm-value">${r.consumption===null?'—':'− '+fmt(r.consumption)}</span><small>${escapeHtml(r.unit||'')}</small></td><td class="comm-final"><span class="comm-value">${fmt(r.after)}</span><small>${escapeHtml(afterUnit||'')}</small></td><td>${badge}</td></tr>`;
+  }).join('');
+  const hasWeight=rows.some(r=>r.weight),hasLiquid=rows.some(r=>r.kind==='LIQUIDO'&&r.weight);
+  const note=rows.some(r=>r.estimated)?'Algunos avisos antiguos no incluyen pesos verificables. Se muestra «—» cuando el dato no consta; no se estiman pesos a partir de mL.':hasLiquid?'Para líquidos, el consumo se expresa en mL y los pesos antes/después en g. Conversión mediante la densidad configurada.':'Los valores corresponden al movimiento registrado; esta tarjeta no modifica el inventario.';
+  return `<div class="comm-inventory-card"><div class="comm-inventory-head"><div><b>📦 Movimiento de inventario</b><small>Detalle del consumo por reactivo${hasWeight?' y frasco':''}</small></div><span class="comm-inv-summary">${rows.length} registro${rows.length===1?'':'s'}</span></div><div class="comm-inventory-scroll"><table><thead><tr><th>Reactivo / frasco</th><th>${hasWeight?'Peso antes (g) / saldo inicial':'Saldo antes'}</th><th>Consumo (g, mL o unidad)</th><th>${hasWeight?'Peso después (g) / saldo final':'Saldo después'}</th><th>Estado</th></tr></thead><tbody>${body}</tbody></table></div><div class="comm-ai-note"><b>Seguimiento:</b> ${escapeHtml(note)}${rows.some(r=>r.depleted)?' Hay un envase agotado que requiere revisión.':''}</div></div>`;
 }
 function communicationTechnicalSummary(text=''){
   const clean=String(text).replace(/^🧪\s*DATOS TÉCNICOS CONFIRMADOS\s*·?\s*/i,'');
@@ -1859,6 +1888,87 @@ function communicationCounts(t,key){
   const items=t.items.filter(communicationDisplayableComment);
   return {events:items.length,messages:items.filter(c=>communicationCategory(c)==='CONVERSACION').length,technical:items.filter(c=>communicationCategory(c)==='TECNICA').length,unread:items.filter(c=>communicationUnread(c,key)).length};
 }
+async function renderOpenActivitiesAudit(){
+  const box=$('#openActivitiesAudit');if(!box)return;
+  if(currentSessionUser?.role!=='JEFE'){box.classList.add('hidden');return}
+  box.classList.remove('hidden');
+  const plans=await getAll('planning');
+  const opened=plans.filter(p=>p.status==='EN PROCESO'||(p.actualStartedAt&&p.status!=='REALIZADO'&&p.status!=='CANCELADO'));
+  const today=new Date().toISOString().slice(0,10);
+  opened.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.startTime||'').localeCompare(String(b.startTime||'')));
+  const overdue=opened.filter(p=>String(p.date||'')<today).length;
+  const q=normalizeIdentityText($('#openActivitiesSearch')?.value||'');
+  const shown=opened.filter(p=>!q||normalizeIdentityText([p.analystName,p.catalogName,p.date,p.code].join(' ')).includes(q));
+  const comments=await getAll('planComments');
+  const closureEvidence=new Map();
+  for(const c of comments){
+    if(!c.planId)continue;
+    if(c.lifecycleStage==='FINALIZACION'||(/^AUTO-FINAL-/.test(String(c.id||''))&&/FINALIZACI[ÓO]N/i.test(String(c.text||'')))){
+      const previous=closureEvidence.get(c.planId);
+      if(!previous||String(c.createdAt||'')>String(previous.createdAt||''))closureEvidence.set(c.planId,c);
+    }
+  }
+  const withEvidence=opened.filter(p=>closureEvidence.has(p.id)||p.actualFinishedAt).length;
+  $('#openActivitiesStats').textContent=`${opened.length} abiertas · ${overdue} de fechas anteriores · ${withEvidence} con evidencia de cierre · ${opened.length-withEvidence} sin evidencia`;
+  $('#openActivitiesRows').innerHTML=shown.length?shown.map(p=>{
+    const evidence=closureEvidence.get(p.id),hasEvidence=!!(evidence||p.actualFinishedAt);
+    const label=hasEvidence?'Recuperar cierre':'Finalizar manualmente';
+    return `<tr><td>${escapeHtml(p.date||'—')}</td><td>${escapeHtml(p.analystName||'—')}</td><td>${escapeHtml(p.catalogName||'—')}</td><td>${escapeHtml(p.startTime||'—')}–${escapeHtml(p.endTime||'—')}</td><td>${escapeHtml(p.status||'—')}</td><td>${p.actualStartedAt?escapeHtml(formatActualStamp(p.actualStartedAt)):'—'}</td><td><small>${hasEvidence?'Cierre histórico detectado':'Sin evidencia de cierre'}</small><br><button type="button" class="btn secondary" data-chief-close="${escapeHtml(p.id)}">${label}</button></td></tr>`;
+  }).join(''):'<tr><td colspan="7">No hay actividades abiertas para este filtro.</td></tr>';
+  $('#openActivitiesRows').querySelectorAll('[data-chief-close]').forEach(b=>b.addEventListener('click',()=>chiefCloseOpenActivity(b.dataset.chiefClose)));
+}
+async function chiefCloseOpenActivity(id){
+  if(currentSessionUser?.role!=='JEFE')return toast('Solo el JEFE puede regularizar cierres');
+  const p=await getOne('planning',id);
+  if(!p||p.status==='REALIZADO'||p.status==='CANCELADO')return toast('Actividad ya cerrada o modificada: actualice la lista');
+  const evidence=(await getAll('planComments')).filter(c=>c.planId===id&&(c.lifecycleStage==='FINALIZACION'||(/^AUTO-FINAL-/.test(String(c.id||''))&&/FINALIZACI[ÓO]N/i.test(String(c.text||''))))).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')))[0];
+  const historical=!!(evidence||p.actualFinishedAt);
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||quotaPauseRemaining()>0)return alert('Firebase no puede confirmar el cierre. No se modificó nada.');
+  const open=(await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===id&&['PENDIENTE','ERROR'].includes(x.status));
+  if(open.length)return alert('Existen cambios pendientes para esta actividad. No se modificó nada.');
+  const detail=`${p.date||''} · ${p.analystName||''} · ${p.catalogName||''}`;
+  if(!confirm(`${historical?'RECUPERAR CIERRE HISTÓRICO':'FINALIZACIÓN MANUAL DEL JEFE'}\n${detail}\n\nLa modificación se aplicará únicamente cuando Firebase la confirme. No se tocará el inventario. ¿Continuar?`))return;
+  const reason=prompt('Justificación obligatoria (mínimo 12 caracteres):');
+  if(!reason||reason.trim().length<12)return alert('Operación cancelada: motivo insuficiente.');
+  // El evento de creación del comentario no demuestra por sí mismo la hora real de finalización.
+  // Si no existe actualFinishedAt, conservar únicamente el momento administrativo del cierre.
+  const operationAt=nowISO();
+  const {doc,runTransaction}=firebaseBridge.mods;
+  const ref=doc(firebaseBridge.db,cloudCollectionFor('planning'),id);
+  let committed=null;
+  try{
+    await runTransaction(firebaseBridge.db,async tx=>{
+      const snap=await tx.get(ref);
+      if(!snap.exists())throw new Error('La actividad no existe en Firebase. No se permite crearla desde la regularización.');
+      const remote=snap.data();
+      if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw new Error('Esta actividad ya fue finalizada en Firebase. Actualice la vista.');
+      if(remote.status==='CANCELADO')throw new Error('La actividad está cancelada en Firebase.');
+      if(String(remote.updatedAt||'')!==String(p.updatedAt||''))throw new Error('La actividad cambió en otra computadora. Actualice antes de corregir.');
+      const finished=remote.actualFinishedAt||p.actualFinishedAt||null;
+      const candidate={...remote,status:'REALIZADO',updatedAt:operationAt,
+        completionCommittedAt:operationAt,
+        completionCommittedBy:currentSessionUser?.email||'JEFE',
+        completionOperationId:`CHIEF-${id}-${operationAt}`,
+        chiefClosure:{mode:historical?'RECUPERACION_HISTORICA':'CIERRE_ADMINISTRATIVO',reason:reason.trim(),actor:currentSessionUser?.email||'JEFE',recordedAt:operationAt,evidenceId:evidence?.id||null,actualFinishVerified:!!finished}};
+      if(finished)candidate.actualFinishedAt=finished;
+      tx.set(ref,{...candidate,_cloudUpdatedAt:operationAt},{merge:true});
+      committed={...candidate,id};
+    });
+  }catch(err){
+    if(isFirebaseQuotaError(err))registerFirebaseQuotaError(err);
+    alert('NO SE CERRÓ: Firebase no confirmó la operación. '+String(err?.message||err));return;
+  }
+  if(!committed)return alert('No se recibió confirmación de cierre.');
+  // Solo actualizar IndexedDB DESPUÉS de confirmar la transacción del servidor.
+  try{
+    delete committed._cloudUpdatedAt;delete committed._erpEntity;
+    await put('planning',committed);
+    await audit(historical?'RECUPERAR_CIERRE_HISTORICO':'CIERRE_MANUAL_JEFE','CENTRO_COMUNICACIONES',p.code||p.id,`Confirmado Firebase · JEFE: ${currentSessionUser?.email||''} · Motivo: ${reason.trim()} · Evidencia: ${evidence?.id||'sin evento'} · Hora real conservada: ${committed.actualFinishedAt||'no verificada'} · Sin movimientos de inventario.`);
+  }catch(localErr){console.error('Firebase confirmó cierre, pero falló la copia local',localErr);alert('Firebase confirmó el cierre, pero falló la actualización local. Actualice desde nube cuando esté disponible.');return;}
+  toast('Cierre CONFIRMADO por Firebase; inventario sin cambios');
+  await renderOpenActivitiesAudit();await refreshSyncUI();
+}
+
 async function renderCommunications(){
   if(!$('#communicationsList'))return;
   const filter=$('#commStatusFilter')?.value||'OPEN', typeFilter=$('#commTypeFilter')?.value||'ALL', search=normalizeIdentityText($('#commSearch')?.value||''), key=communicationUserKey();
@@ -1876,12 +1986,12 @@ async function renderCommunications(){
   const selected=ts.find(t=>t.planId===selectedCommunicationPlanId);
   const cards=ts.map(t=>{const p=t.p||{},c=communicationCounts(t,key),pr=t.priority,last=t.items[t.items.length-1],meta=communicationCategoryMeta(last);return `<button type="button" class="comm-inbox-card ${t.planId===selectedCommunicationPlanId?'selected':''} ${c.unread?'unread':''}" data-comm-select="${t.planId}"><span class="comm-priority ${pr.cls}">${pr.icon} ${pr.label}</span><b>${escapeHtml(p.catalogName||'Actividad')}</b><small>${escapeHtml(p.analystName||t.items[0]?.analystName||'Analista')} · ${escapeHtml(p.date||'')}</small><span class="comm-preview">${meta.icon} ${escapeHtml(communicationCategory(last)==='TECNICA'?communicationTechnicalSummary(last.text):String(last.text||'').slice(0,110))}</span><span class="comm-card-counts"><em>${c.events} eventos</em>${c.messages?`<em>💬 ${c.messages}</em>`:''}${c.technical?`<em>🧪 ${c.technical}</em>`:''}${c.unread?`<strong>${c.unread} nuevo${c.unread>1?'s':''}</strong>`:''}</span></button>`}).join('');
   let detail=`<div class="comm-empty"><span>🔔</span><b>Sin asuntos en este filtro</b><small>Pruebe otra categoría o revise los asuntos completados.</small></div>`;
-  if(selected){const p=selected.p||{},c=communicationCounts(selected,key),pr=selected.priority;const timeline=selected.items.map((x,i)=>{const m=communicationCategoryMeta(x),tech=communicationCategory(x)==='TECNICA';return `<div class="comm-timeline-item ${m.className} ${communicationUnread(x,key)?'new':''}"><span class="comm-timeline-dot">${m.icon}</span><div><div class="comm-message-meta"><span class="comm-type-pill ${m.className}">${escapeHtml(m.label)}</span><small>${fmtDate(x.createdAt)}</small></div><b>${escapeHtml(x.authorName||x.author||'Sistema')}</b>${tech?`${communicationInventoryCard(x)||`<div class="comm-tech-summary">${escapeHtml(communicationTechnicalSummary(x.text))}</div>`}<details><summary>Ver trazabilidad técnica completa</summary><div class="comm-full-text">${escapeHtml(x.text)}</div></details>`:`<div class="comm-full-text">${escapeHtml(x.text)}</div>`}</div></div>`}).join('');detail=`<section class="comm-detail"><header><div><span class="comm-priority ${pr.cls}">${pr.icon} ${pr.label}</span><h3>${escapeHtml(p.catalogName||'Actividad')}</h3><p>${escapeHtml(p.analystName||selected.items[0]?.analystName||'Analista')} · ${escapeHtml(p.date||'')} ${p.startTime?`· ${p.startTime}`:''}</p></div><div class="comm-detail-stats"><span>${c.events}<small>eventos</small></span><span>${c.messages}<small>mensajes</small></span><span>${c.technical}<small>técnicos</small></span></div></header><div class="comm-timeline">${timeline}</div><footer class="comm-reply"><input data-comm-reply="${selected.planId}" placeholder="Escribir comentario o respuesta..."/><button class="btn primary compact" data-comm-send="${selected.planId}">Responder</button>${currentSessionUser.role==='JEFE'?`<button class="btn secondary compact" data-comm-close="${selected.planId}">${selected.closed?'Reabrir':'✓ Marcar atendido'}</button>`:''}</footer></section>`;}
+  if(selected){const p=selected.p||{},c=communicationCounts(selected,key),pr=selected.priority;const timeline=selected.items.map((x,i)=>{const m=communicationCategoryMeta(x),tech=communicationCategory(x)==='TECNICA';return `<div class="comm-timeline-item ${m.className} ${communicationUnread(x,key)?'new':''}"><span class="comm-timeline-dot">${m.icon}</span><div><div class="comm-message-meta"><span class="comm-type-pill ${m.className}">${escapeHtml(m.label)}</span><small>${fmtDate(x.createdAt)}</small></div><b>${escapeHtml(x.authorName||x.author||'Sistema')}</b>${tech?`${communicationInventoryCard(x)||`<div class="comm-tech-summary">${escapeHtml(communicationTechnicalSummary(x.text))}</div>`}<details><summary>Ver trazabilidad técnica completa</summary><div class="comm-full-text">${escapeHtml(x.text)}</div></details>`:`<div class="comm-full-text">${escapeHtml(x.text)}</div>${communicationClosureEvidenceCard(x)}`}</div></div>`}).join('');detail=`<section class="comm-detail"><header><div><span class="comm-priority ${pr.cls}">${pr.icon} ${pr.label}</span><h3>${escapeHtml(p.catalogName||'Actividad')}</h3><p>${escapeHtml(p.analystName||selected.items[0]?.analystName||'Analista')} · ${escapeHtml(p.date||'')} ${p.startTime?`· ${p.startTime}`:''}</p></div><div class="comm-detail-stats"><span>${c.events}<small>eventos</small></span><span>${c.messages}<small>mensajes</small></span><span>${c.technical}<small>técnicos</small></span></div></header><div class="comm-timeline">${timeline}</div><footer class="comm-reply"><input data-comm-reply="${selected.planId}" placeholder="Escribir comentario o respuesta..."/><button class="btn primary compact" data-comm-send="${selected.planId}">Responder</button>${currentSessionUser.role==='JEFE'?`<button class="btn secondary compact" data-comm-close="${selected.planId}">${selected.closed?'Reabrir':'✓ Marcar atendido'}</button>`:''}</footer></section>`;}
   $('#communicationsList').innerHTML=`<div class="comm-pro-layout"><aside class="comm-inbox">${cards||'<div class="comm-inbox-empty">Sin asuntos</div>'}</aside><main class="comm-detail-wrap">${detail}</main></div>`;
   $$('[data-comm-select]').forEach(b=>b.onclick=async()=>{selectedCommunicationPlanId=b.dataset.commSelect;await markThreadRead(selectedCommunicationPlanId);await renderCommunications()});
   $$('[data-comm-send]').forEach(b=>b.onclick=()=>replyCommunication(b.dataset.commSend)); $$('[data-comm-close]').forEach(b=>b.onclick=()=>toggleCommunicationClosed(b.dataset.commClose));
   $$('[data-comm-filter]').forEach(b=>b.onclick=()=>{$('#commStatusFilter').value=b.dataset.commFilter;renderCommunications()}); $$('[data-comm-type]').forEach(b=>b.onclick=()=>{$('#commTypeFilter').value=b.dataset.commType;renderCommunications()});
-  if(selected)await markThreadRead(selected.planId); await refreshNotificationBadge();
+  if(selected)await markThreadRead(selected.planId); await refreshNotificationBadge(); await renderOpenActivitiesAudit();
 }
 async function openCommunications(){await renderCommunications();$('#notificationsDialog').showModal()}
 async function replyCommunication(planId){
@@ -2032,7 +2142,7 @@ async function saveCalibrationDraft(){
   p.calibrationResult=c.result;p.updatedAt=nowISO();
   await put('planning',p);await queue('UPDATE','planning',p);
   await audit('GUARDAR_CURVA_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó avance de curva de ${p.catalogName}`);
-  toast('Lecturas guardadas sin finalizar · sin generar notificación');
+  resetTechnicalSnapshot();toast('Lecturas guardadas sin finalizar · sin generar notificación');
 }
 
 
@@ -2051,12 +2161,12 @@ async function latestConfirmedContainerRecord(reagent,container,excludePlanId=nu
   // INVENTARIO GLOBAL: nunca filtrar por usuario/rol. El saldo pertenece al lote, no al analista.
   const plans=await getAll('planning');let best=null;
   for(const p of plans){
-    if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;
+    if(p.id===excludePlanId||!p.reagentResult?.inventoryCommittedAt||!p.reagentResult?.items?.length)continue;
     for(const item of p.reagentResult.items){
       if(item.mode!=='WEIGHT'||!Array.isArray(item.containers))continue;
       for(const env of item.containers){
         if(!sameReagentContainer(reagent,container,item,env))continue;
-        const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
+        const stamp=Date.parse(p.reagentResult?.inventoryCommittedAt||p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
         if(!best||stamp>best.stamp)best={plan:p,item,container:env,stamp};
       }
     }
@@ -2189,12 +2299,58 @@ function collectReagentResult(p,requireComplete=true){
   return {ok:true,complete,result:{items,completed:complete,capturedAt:nowISO()}};
 }
 
+// Los consumos confirmados son independientes del cierre horario de la actividad.
+async function commitReagentConsumption(p,result){
+  if(!result?.completed)return {ok:false,text:'Complete o desmarque los consumos antes de guardarlos.'};
+  const previous=p.reagentResult;
+  const oldSignature=previous?.inventorySignature;
+  const signature=JSON.stringify(result.items||[]);
+  if(oldSignature===signature&&previous?.inventoryCommittedAt){
+    p.reagentResult={...result,inventoryCommittedAt:previous.inventoryCommittedAt,inventorySignature:signature};
+    return {ok:true,unchanged:true};
+  }
+  // Una corrección requiere reconciliar el saldo previo, no volver a descontar
+  // el consumo íntegro. Los valores finales son absolutos por envase.
+  const catalogs=await getAll('catalog');
+  for(const item of (result.items||[]).filter(x=>x.usedInActivity!==false&&!x.notUsed)){
+    const live=catalogs.flatMap(c=>c.reagentConfig||[]).find(r=>normalizeIdentityText(r.name||'')===normalizeIdentityText(item.name||'')&&normalizeIdentityText(r.lot||'')===normalizeIdentityText(item.lot||''));
+    if(!live)continue;
+    const old=(previous?.items||[]).find(x=>x.reagentId===item.reagentId);
+    if(item.mode==='COUNT'){
+      const baseline=Number(live.stockQuantity||0)+Number(old?.used||0);
+      if(Number(item.used)>baseline)return {ok:false,text:`Stock insuficiente de ${item.name}. Disponible: ${baseline}.`};
+      item.stockBefore=baseline;item.stockRemaining=Math.max(0,baseline-Number(item.used||0));
+    }
+  }
+  p.reagentResult={...result,inventoryCommittedAt:nowISO(),inventorySignature:signature};
+  p.updatedAt=nowISO();
+  await put('planning',p);await queue('UPDATE','planning',p);
+  await applyConfirmedReagentInventoryToCatalog(p);
+  await propagateLiveInventoryToOpenPlans();
+  return {ok:true};
+}
+
+// Protección de salida: no descartar accidentalmente registros técnicos sin guardar.
+let technicalSnapshot='';
+function technicalFormSnapshot(){
+ const form=document.querySelector('#finishActivityForm');if(!form)return '';
+ return JSON.stringify([...form.querySelectorAll('input,textarea,select')].filter(x=>x.id!=='finishActivityPlanId'&&x.id!=='finishTechnicalEditMode'&&x.type!=='hidden').map(x=>[x.id||x.name||'',x.type==='checkbox'?x.checked:x.value]));
+}
+function resetTechnicalSnapshot(){technicalSnapshot=technicalFormSnapshot()}
+function requestTechnicalDialogClose(){
+ const dialog=document.querySelector('#finishActivityDialog');if(!dialog?.open)return;
+ const mode=document.querySelector('#finishTechnicalEditMode')?.value;
+ if(mode!=='3'&&technicalSnapshot&&technicalFormSnapshot()!==technicalSnapshot){
+   if(!confirm('Hay cambios técnicos sin guardar. Si sale, se perderán los cambios NO guardados.\n\nPulse Cancelar para continuar y utilizar «Guardar consumos sin finalizar» o «Guardar datos técnicos».'))return;
+ }
+ dialog.close();technicalSnapshot='';
+}
 async function saveReagentDraft(){
   const p=await getOne('planning',$('#finishActivityPlanId').value);if(!p||!planHasReagents(p))return;
   const rr=collectReagentResult(p,false);if(!rr.ok)return toast(rr.text);
-  p.reagentResult=rr.result;p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p);
+  const committed=await commitReagentConsumption(p,rr.result);if(!committed.ok)return toast(committed.text);
   await audit('GUARDAR_CONSUMO_REACTIVOS_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó consumos parciales de ${p.catalogName}`);
-  toast('Consumos guardados sin finalizar · sin generar notificación');
+  resetTechnicalSnapshot();toast('Consumos guardados sin finalizar · inventario independiente del cierre');
 }
 
 
@@ -2210,11 +2366,13 @@ async function getTechnicalRequirementsForPlan(p){
   };
 }
 function technicalRequirementMenuHtml(p,req){
-  if(!req.curve&&!req.reagents)return '';
+  if(!req.curve&&!req.reagents&&!requiresActualSamples(p.section))return '';
   const doneCurve=!req.curve||!!p.calibrationResult?.completed;
   const doneReagents=!req.reagents||!!p.reagentResult?.completed;
-  const allDone=doneCurve&&doneReagents;
+  const doneSamples=!requiresActualSamples(p.section)||!!Object.keys(p.sampleParameterCounts||{}).length;
+  const allDone=doneCurve&&doneReagents&&doneSamples;
   const rows=[];
+  if(requiresActualSamples(p.section))rows.push(`<div class="tech-req-item ${doneSamples?'done':''}"><span class="tech-req-icon">${doneSamples?'✓':'1'}</span><span><b>Muestras por parámetro</b><small>${doneSamples?`${p.actualSamples??'—'} muestras · ${Object.keys(p.sampleParameterCounts||{}).length} parámetro(s)`: 'Registrar cantidades por parámetro desde Mi Jornada'}</small></span></div>`);
   if(req.curve)rows.push(`<div class="tech-req-item ${doneCurve?'done':''}"><span class="tech-req-icon">${doneCurve?'✓':'1'}</span><span><b>Curva de calibración</b><small>${doneCurve?'Datos registrados':'Registrar absorbancia 1, 2 y 3 por cada punto'}</small></span></div>`);
   if(req.reagents)rows.push(`<div class="tech-req-item ${doneReagents?'done':''}"><span class="tech-req-icon">${doneReagents?'✓':'2'}</span><span><b>Reactivos / materiales</b><small>${doneReagents?'Consumos registrados':'Registrar peso final o cantidad utilizada'}</small></span></div>`);
   const button=p.status==='REALIZADO'
@@ -2226,7 +2384,7 @@ function technicalRequirementMenuHtml(p,req){
 
 function mergeReagentConfigFromCatalog(oldCfg=[],newCfg=[]){const m=new Map((oldCfg||[]).map(x=>[x.id,x]));return (newCfg||[]).map((x,i)=>({...m.get(x.id),...JSON.parse(JSON.stringify(x)),order:x.order??i+1}))}
 function reagentIsDepleted(item){if(!item||item.mode!=='WEIGHT')return false;if(item.depleted===true)return true;const f=Number(item.finalWeight??item.after),t=Number(item.tareWeight);return Number.isFinite(f)&&Number.isFinite(t)&&f<=t+0.000001}
-async function latestConfirmedReagentRecord(reagent,excludePlanId=null){const key=reagentCycleKey(reagent),plans=await getAll('planning');let best=null;for(const p of plans){if(p.id===excludePlanId||p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;for(const item of p.reagentResult.items){if(reagentCycleKey(item)!==key)continue;const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;if(!best||stamp>best.stamp)best={plan:p,item,stamp}}}return best}
+async function latestConfirmedReagentRecord(reagent,excludePlanId=null){const key=reagentCycleKey(reagent),plans=await getAll('planning');let best=null;for(const p of plans){if(p.id===excludePlanId||!p.reagentResult?.inventoryCommittedAt||!p.reagentResult?.items?.length)continue;for(const item of p.reagentResult.items){if(reagentCycleKey(item)!==key)continue;const stamp=Date.parse(p.reagentResult?.inventoryCommittedAt||p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;if(!best||stamp>best.stamp)best={plan:p,item,stamp}}}return best}
 async function hydratePlanTechnicalRequirements(p){
   if(!p)return p;let changed=false;
   const catalog=await getAll('catalog');let item=catalog.find(x=>x.id===p.catalogId);
@@ -2281,10 +2439,78 @@ async function openTechnicalData(planId){
     if(submit){submit.classList.remove('hidden');submit.textContent='Guardar datos técnicos'}
     if(unlock)unlock.classList.add('hidden');
   }
-  $('#finishActivityDialog').showModal();
+  $('#finishActivityDialog').showModal();resetTechnicalSnapshot();
 }
 
+// Registro operativo independiente: no toca inventario ni cambia estado de la actividad.
+async function openOperationalSamples(planId){
+ const p=await getOne('planning',planId);
+ if(!p||!requiresActualSamples(p.section))return toast('Esta actividad no requiere registro de muestras');
+ if(!assertOwnPlan(p)&&currentSessionUser?.role!=='JEFE')return toast('No tiene permiso para consultar esta actividad');
+ const readOnly=p.status==='REALIZADO';
+ $('#operationalSamplesPlanId').value=p.id;
+ $('#operationalSamplesTitle').textContent=p.catalogName;
+ $('#operationalSamplesHelp').textContent=readOnly?'Actividad finalizada: consulta de muestras, sin modificar el cierre.':'Guarde las muestras procesadas sin finalizar la actividad ni modificar inventario.';
+ const single=String(p.section||'').toUpperCase()==='ENSAYOS_ANALITICOS';
+ const totalLabel=$('#operationalSamplesCount')?.closest('label');if(totalLabel)totalLabel.classList.toggle('hidden',single);
+ $('#operationalSamplesCount').required=!single;
+ $('#operationalSamplesCount').value=p.actualSamples??'';
+ $('#operationalSampleParameters').innerHTML=sampleDetailsHtml(p,readOnly);
+ $('#operationalSamplesCount').disabled=readOnly;
+ $('#operationalSamplesSave').classList.toggle('hidden',readOnly);
+ $('#operationalSamplesDialog').showModal();
+}
+async function saveOperationalSamples(event){
+ event.preventDefault();
+ const id=$('#operationalSamplesPlanId').value;
+ const p=await getOne('planning',id);
+ if(!p||!requiresActualSamples(p.section)||p.status==='REALIZADO')return toast('La actividad no admite cambios de muestras');
+ if(!assertOwnPlan(p)&&currentSessionUser?.role!=='JEFE')return toast('No tiene permiso para modificar esta actividad');
+ const input=$('#operationalSamplesCount');
+ const single=String(p.section||'').toUpperCase()==='ENSAYOS_ANALITICOS';
+ if(!single&&input.value.trim()==='')return toast('Ingrese la cantidad real de muestras');
+ const params=sampleParametersForPlan(p),counts={};let filled=0;
+ for(const field of document.querySelectorAll('#operationalSampleParameters [data-sample-parameter]')){
+   const value=field.value.trim();if(!value)continue;
+   const num=Number(value);if(!Number.isSafeInteger(num)||num<0)return toast('Revise las cantidades por parámetro: deben ser números enteros no negativos');
+   counts[params[Number(field.dataset.sampleParameter)]]=num;filled++;
+ }
+ if(!filled)return toast('Registre al menos un parámetro procesado');
+ if(Object.values(counts).every(v=>v===0))return toast('Registre al menos un parámetro con muestras procesadas');
+ const n=single?Number(counts[params[0]]):Number(input.value);
+ if(!Number.isSafeInteger(n)||n<0)return toast('Ingrese un número entero válido de muestras');
+ if(p.actualSamples===n&&JSON.stringify(p.sampleParameterCounts||{})===JSON.stringify(counts)){$('#operationalSamplesDialog').close();return toast('Las muestras ya estaban registradas')}
+ const previousCounts={...(p.sampleParameterCounts||{})};
+ p.sampleParameterCounts=counts;
+ p.sampleParameterHistory=p.sampleParameterHistory||[];
+ p.sampleParameterHistory.push({at:nowISO(),by:currentSessionUser?.name||currentSessionUser?.email||'Usuario',previous:p.actualSamples,previousParameters:previousCounts,current:n,parameters:counts});
+ p.sampleParameterCountsPrevious={...counts};
+ p.actualSamples=n;
+ p.operationalSamplesUpdatedAt=nowISO();
+ p.operationalSamplesUpdatedBy=currentSessionUser?.name||currentSessionUser?.email||'Usuario';
+ p.updatedAt=p.operationalSamplesUpdatedAt;
+ await put('planning',p);
+ await queue('UPDATE','planning',p);
+ await audit('REGISTRO_OPERATIVO_MUESTRAS','MI JORNADA',p.code,`${p.operationalSamplesUpdatedBy} registró ${n} muestras procesadas, sin finalizar ni consumir inventario`);
+ $('#operationalSamplesDialog').close();
+ toast('Muestras guardadas localmente · pendiente de confirmación de Firebase si hay cambios en cola');
+ await renderMyDay();
+}
 async function editCompletedTechnicalData(planId){return openTechnicalData(planId)}
+function validSampleRegistration(p){
+ if(!requiresActualSamples(p.section))return true;
+ const params=sampleParametersForPlan(p),counts=p.sampleParameterCounts||{};
+ const vals=params.map(k=>counts[k]).filter(v=>v!==undefined&&v!==null&&v!=='');
+ if(!vals.length||!vals.some(v=>Number.isSafeInteger(Number(v))&&Number(v)>0))return false;
+ if(vals.some(v=>!Number.isSafeInteger(Number(v))||Number(v)<0))return false;
+ const total=Number(p.actualSamples);
+ return Number.isSafeInteger(total)&&total>0;
+}
+function sampleClosureSummary(p){
+ const counts=p.sampleParameterCounts||{};
+ const rows=sampleParametersForPlan(p).filter(k=>Number(counts[k])>0);
+ return `<div class="sample-closure-review"><b>✓ Registro de muestras guardado</b><p><strong>${escapeHtml(String(p.actualSamples))}</strong> muestras ${String(p.section).toUpperCase()==='ENSAYOS_ANALITICOS'?'procesadas':'únicas procesadas'} · ${rows.length} parámetro(s)</p><div class="sample-closure-chips">${rows.map(k=>`<span>${escapeHtml(k)}: <b>${escapeHtml(String(counts[k]))}</b></span>`).join('')}</div><small>Resumen de solo lectura. Para corregirlo, utilice «Registrar muestras» en Mi Jornada.</small></div>`;
+}
 async function finishMyActivity(planId){
   const _guardPlan=await getOne('planning',planId);if(!_guardPlan||!assertOwnPlan(_guardPlan))return toast('No puede modificar actividades de otro analista');
   let p=await getOne('planning',planId);if(!p)return;
@@ -2296,6 +2522,7 @@ async function finishMyActivity(planId){
   if(!p.actualStartedAt)return toast('Primero debe iniciar la actividad');
 
   const needsSamples=requiresActualSamples(p.section),needsCurve=planRequiresCalibration(p),needsReagents=planHasReagents(p);
+  if(needsSamples&&!validSampleRegistration(p))return toast('Muestras pendientes: registre el total y al menos un parámetro procesado desde «Registrar muestras» antes de finalizar');
   if(needsSamples||needsCurve||needsReagents){
     $('#finishActivityPlanId').value=p.id;
     $('#finishTechnicalEditMode').value='0';
@@ -2304,14 +2531,15 @@ async function finishMyActivity(planId){
     setFinishTechnicalReadOnly(false);
     const _finishTitle=$('#finishActivityTitle');if(_finishTitle)_finishTitle.textContent='Finalizar actividad';
     $('#finishActivitySummary').innerHTML=`<b>${escapeHtml(p.catalogName)}</b><span>${escapeHtml(sectionMeta(p.section).label)} · ${p.startTime}–${p.endTime} · ${minutesText(p.durationMinutes)}</span>`;
-    $('#finishSamplesLabel').classList.toggle('hidden',!needsSamples);
-    $('#finishActualSamples').required=needsSamples;
+    $('#finishSamplesLabel').classList.add('hidden');
+    $('#finishActualSamples').required=false;
     $('#finishActualSamples').value=needsSamples?(p.actualSamples??''):'';
+    const sampleReview=$('#finishSamplesReview');if(sampleReview){sampleReview.classList.toggle('hidden',!needsSamples);sampleReview.innerHTML=needsSamples?sampleClosureSummary(p):'';}
     $('#finishActivityComment').value='';
     $('#finishActivityHelp').textContent=(needsCurve&&needsReagents)?'Antes de finalizar debe completar la curva de calibración y registrar los reactivos/materiales utilizados.':needsCurve?'Complete las lecturas requeridas de la curva antes de finalizar.':needsReagents?'Registre el consumo real de los reactivos/materiales antes de finalizar.':'Para cerrar esta actividad registre cuántas muestras procesó realmente.';
     renderFinishCalibration(p);await renderFinishReagents(p);
-    $('#finishActivityDialog').showModal();
-    setTimeout(()=>needsCurve?document.querySelector('[data-cal-reading]')?.focus():needsReagents?document.querySelector('[data-reag-count], [data-reag-final]')?.focus():$('#finishActualSamples').focus(),50);
+    $('#finishActivityDialog').showModal();resetTechnicalSnapshot();
+    setTimeout(()=>needsCurve?document.querySelector('[data-cal-reading]')?.focus():needsReagents?document.querySelector('[data-reag-count], [data-reag-final]')?.focus():$('#finishActivityComment').focus(),50);
     return;
   }
   await completeActivityRecord(p,null,'');
@@ -2437,7 +2665,7 @@ async function completeActivityRecord(p,actualSamples=null,finalComment='',calib
   if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;if(reagentResult!==undefined)p.reagentResult=reagentResult;
   await put('planning',p);await queue('UPDATE','planning',p);
   // Confirmar el saldo como inventario vivo: el siguiente uso parte del peso/stock final real.
-  await applyConfirmedReagentInventoryToCatalog(p);
+  if(!p.reagentResult?.inventoryCommittedAt&&p.reagentResult?.completed){const committed=await commitReagentConsumption(p,p.reagentResult);if(!committed.ok)throw Error(committed.text)}
   if(finalComment){
     const comment={id:uid('COM'),planId:p.id,analystId:p.analystId,authorName:p.analystName,text:finalComment,createdAt:nowISO()};
     await put('planComments',comment);await queue('CREATE','planComments',comment);
@@ -2471,8 +2699,7 @@ async function submitFinishActivity(e){
     if(!rr.ok)return toast(rr.text);
     if(!rr.complete)return toast('Complete todos los consumos de reactivos');
     reagentResult=rr.result;
-    const liveCheck=await validateReagentResultAgainstLiveInventory(reagentResult);
-    if(!liveCheck.ok){await renderFinishReagents(p);return toast(liveCheck.text)}
+    // El inventario se confirma al guardar los datos técnicos, no al cerrar el tiempo.
   }
   const comment=$('#finishActivityComment').value.trim();
 
@@ -2480,7 +2707,7 @@ async function submitFinishActivity(e){
 
   if(mode==='1'||mode==='2'){
     if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;
-    if(reagentResult!==undefined)p.reagentResult=reagentResult;
+    if(reagentResult!==undefined){const committed=await commitReagentConsumption(p,reagentResult);if(!committed.ok)return toast(committed.text)}
     p.technicalEditedAt=nowISO();
     p.technicalEditedBy=currentSessionUser?.name||currentSessionUser?.email||'Usuario';
     p.updatedAt=nowISO();
@@ -2492,20 +2719,21 @@ async function submitFinishActivity(e){
     await audit(mode==='1'?'EDITAR_DATOS_TECNICOS_POST_CIERRE':'GUARDAR_DATOS_TECNICOS_PREVIOS','MI JORNADA',p.code,`${p.technicalEditedBy} guardó datos técnicos de ${p.catalogName}`);
     const _corrected=(p.reagentResult?.items||[]).filter(x=>x.initialWeightCorrected);
     if(_corrected.length)await audit('CORREGIR_PESO_INICIAL_REACTIVO','MI JORNADA',p.code,`${p.technicalEditedBy} corrigió peso inicial de: ${_corrected.map(x=>`${x.name} (${x.initialWeight} g)`).join(', ')}`);
-    $('#finishActivityDialog').close();$('#finishTechnicalEditMode').value='0';
+    technicalSnapshot='';$('#finishActivityDialog').close();$('#finishTechnicalEditMode').value='0';
     toast(mode==='1'?'Datos técnicos actualizados · sin nueva notificación':'Datos técnicos guardados · sin notificar · ahora puede finalizar cuando corresponda');
     await renderMyDay();return;
   }
 
   if(p.status==='REALIZADO'){ $('#finishActivityDialog').close(); return toast('La actividad ya está finalizada') }
-  const samples=Number($('#finishActualSamples').value);
-  if(requiresActualSamples(p.section)&&(!Number.isFinite(samples)||samples<0))return toast('Ingrese el número de muestras analizadas');
+  if(requiresActualSamples(p.section)&&!validSampleRegistration(p))return toast('Registre el total y los parámetros procesados desde Mi Jornada antes de finalizar');
+  const samples=requiresActualSamples(p.section)?Number(p.actualSamples):null;
   const dailyGate=await assertDailyControlsBeforeDayClose(p);
   if(!dailyGate.ok){alert(dailyGate.message);await renderMyDay();return toast('Complete las cartas de control obligatorias antes de cerrar la jornada');}
+  if(reagentResult!==undefined){const committed=await commitReagentConsumption(p,reagentResult);if(!committed.ok)return toast(committed.text)}
   const claim=await claimActivityCompletion(p);
   if(!claim.ok){toast(claim.reason);return;}
   const submitBtn=$('#finishSubmitBtn');if(submitBtn)submitBtn.disabled=true;
-  $('#finishActivityDialog').close();
+  technicalSnapshot='';$('#finishActivityDialog').close();
   try{await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment,calibrationResult,reagentResult);}
   catch(err){releaseActivityCompletion(p.id);throw err;}
   finally{if(submitBtn)submitBtn.disabled=false;}
@@ -2784,6 +3012,7 @@ async function renderMyDay(){
         
         ${p.notes?`<div class="boss-note"><b>⚑ Instrucción del jefe</b><span>${escapeHtml(p.notes)}</span></div>`:''}
         ${ss.length?`<details class="myday-breakdown compact-breakdown" data-ui-key="breakdown-${p.id}"><summary>Ver desglose · ${ss.length} subactividades</summary><div>${ss.map(x=>`<span>• ${escapeHtml(x.name)} · ${minutesText(x.minutes)}</span>`).join('')}</div></details>`:''}
+        ${requiresActualSamples(p.section)?`<div class="operational-samples-panel"><div><b>📋 Registro de muestras</b><small>${p.actualSamples!==null&&p.actualSamples!==undefined?`${p.actualSamples} muestras · ${Object.keys(p.sampleParameterCounts||{}).length} parámetros registrados`:'Pendiente: registre las muestras por parámetro'}</small></div><button type="button" class="btn secondary compact" data-operational-samples="${p.id}">${p.status==='REALIZADO'?'Ver muestras':'Registrar muestras'}</button></div>`:''}
         ${technicalRequirementMenuHtml(p,_req)}
         <div class="myday-actions-row">${action}</div>${actual}
         <details class="comment-thread compact-comments" data-ui-key="comments-${p.id}" ${comments.length?'open':''}>
@@ -2806,6 +3035,7 @@ async function renderMyDay(){
     if(_input){_input.value=_myDayUi.focusValue;_input.focus({preventScroll:true});try{_input.setSelectionRange(_myDayUi.selectionStart,_myDayUi.selectionEnd)}catch(_){}}
   }
   window.scrollTo({left:_myDayUi.scrollX,top:_myDayUi.scrollY,behavior:'instant'});
+  $$('[data-operational-samples]').forEach(el=>el.onclick=()=>openOperationalSamples(el.dataset.operationalSamples));
   $$('[data-start-activity]').forEach(el=>el.onclick=()=>startMyActivity(el.dataset.startActivity));
   $$('[data-finish-activity]').forEach(el=>el.onclick=()=>finishMyActivity(el.dataset.finishActivity));$$('[data-open-technical]').forEach(b=>b.onclick=()=>openTechnicalData(b.dataset.openTechnical));$$('[data-edit-technical]').forEach(b=>b.onclick=()=>editCompletedTechnicalData(b.dataset.editTechnical));
   $$('[data-move-up]').forEach(el=>el.onclick=()=>moveMyActivity(el.dataset.moveUp,-1));
@@ -3228,7 +3458,7 @@ async function exportReagentConsumptionExcel(){
   // Inventario actual: último registro confirmado por reactivo/material (nombre + unidad).
   const latest=new Map();
   for(const p of allPlans){
-    const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
+    const stamp=Date.parse(p.reagentResult?.inventoryCommittedAt||p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
     for(const r of p.reagentResult.items||[]){
       const key=reagentCycleKey(r);
       const prev=latest.get(key);
@@ -3372,8 +3602,8 @@ async function buildReagentMasterProfiles(){
   // El último uso actualiza solamente SU MISMO lote; nunca reemplaza otro lote del mismo nombre.
   const latestUse=new Map();
   for(const p of plans){
-    if(p.status!=='REALIZADO'||!p.reagentResult?.items?.length)continue;
-    const stamp=Date.parse(p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
+    if(!p.reagentResult?.inventoryCommittedAt||!p.reagentResult?.items?.length)continue;
+    const stamp=Date.parse(p.reagentResult?.inventoryCommittedAt||p.actualFinishedAt||p.updatedAt||p.createdAt||0)||0;
     for(const item of p.reagentResult.items){
       const nameKey=normalizeIdentityText(item.name||''),lotKey=normalizeIdentityText(item.lot||'');
       if(!nameKey)continue;
@@ -3482,22 +3712,29 @@ function renderContainerLists(){
     if(r.mode!=='WEIGHT')return;
     const box=$(`[data-container-list="${i}"]`);if(!box)return;
     const arr=ensureReagentContainers(r);
-    box.innerHTML=arr.map((e,j)=>`<div class="container-config-row">
-      <label>Identificación<input data-container-label="${i}-${j}" value="${escapeHtml(e.label||`Frasco ${j+1}`)}" placeholder="Ej. Frasco principal"></label>
-      <label>Lote<input data-container-lot="${i}-${j}" value="${escapeHtml(e.lot||r.lot||'')}" placeholder="Ej. A12345"></label>
-      <label>Tipo<select data-container-type="${i}-${j}"><option value="FRASCO" ${e.containerType!=='SOBRE'?'selected':''}>FRASCO</option><option value="SOBRE" ${e.containerType==='SOBRE'?'selected':''}>SOBRE</option></select></label>
-      <label>Tara del envase (g)<input type="number" min="0" step="any" data-container-tare="${i}-${j}" value="${e.tareWeight??''}"></label>
-      <label>Peso del envase + contenido (g)<input type="number" min="0" step="any" data-container-initial="${i}-${j}" value="${e.initialWeight??''}"></label>
-      <button type="button" class="icon-btn" data-remove-container="${i}-${j}" ${arr.length===1?'disabled':''}>×</button>
-    </div>`).join('');
+    box.innerHTML=`<p class="inventory-container-hint">Registre cada frasco o sobre por separado, aunque pertenezcan al mismo lote. Los pesos son individuales.</p>`+arr.map((e,j)=>{
+      const tare=String(e.tareWeight??'').trim(),gross=String(e.initialWeight??'').trim();
+      const net=tare!==''&&gross!==''&&Number.isFinite(Number(tare))&&Number.isFinite(Number(gross))&&Number(gross)>=Number(tare)?(Number(gross)-Number(tare)).toFixed(2):'—';
+      return `<div class="container-config-row inventory-container-card">
+        <div class="inventory-container-title"><strong>${escapeHtml(e.label||`Frasco ${j+1}`)}</strong><span>Envase ${j+1} de ${arr.length}</span></div>
+        <label>Identificación<input data-container-label="${i}-${j}" value="${escapeHtml(e.label||`Frasco ${j+1}`)}" placeholder="Ej. Frasco 2"></label>
+        <label>Lote<input data-container-lot="${i}-${j}" value="${escapeHtml(e.lot||r.lot||'')}" placeholder="Ej. A12345"></label>
+        <label>Tipo<select data-container-type="${i}-${j}"><option value="FRASCO" ${e.containerType!=='SOBRE'?'selected':''}>FRASCO</option><option value="SOBRE" ${e.containerType==='SOBRE'?'selected':''}>SOBRE</option></select></label>
+        <label>Tara del envase (g)<input type="number" min="0" step="any" data-container-tare="${i}-${j}" value="${escapeHtml(String(e.tareWeight??''))}" placeholder="Ej. 490.4"></label>
+        <label>Peso del envase + contenido (g)<input type="number" min="0" step="any" data-container-initial="${i}-${j}" value="${escapeHtml(String(e.initialWeight??''))}" placeholder="Ej. 990.4"></label>
+        <div class="inventory-net">Contenido neto: <strong>${net} g</strong></div>
+        <button type="button" class="btn secondary mini-btn inventory-remove" data-remove-container="${i}-${j}" ${arr.length===1?'title="Debe existir al menos un envase; agregue otro antes de quitar este" disabled':''}>Quitar envase</button>
+      </div>`;
+    }).join('');
   });
-  $$('[data-container-label]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerLabel.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].label=el.value});
-  $$('[data-container-lot]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerLot.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].lot=el.value});
+  $$('[data-container-label]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerLabel.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].label=el.value;validateReagents()});
+  $$('[data-container-lot]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerLot.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].lot=el.value;validateReagents()});
   $$('[data-container-type]').forEach(el=>el.onchange=()=>{const [i,j]=el.dataset.containerType.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].containerType=el.value});
-  $$('[data-container-tare]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerTare.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].tareWeight=el.value;validateReagents()});
-  $$('[data-container-initial]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerInitial.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].initialWeight=el.value;validateReagents()});
-  $$('[data-remove-container]').forEach(btn=>btn.onclick=()=>{const [i,j]=btn.dataset.removeContainer.split('-').map(Number),arr=ensureReagentContainers(editingReagents[i]);if(arr.length>1){arr.splice(j,1);renderReagentRows()}});
+  $$('[data-container-tare]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerTare.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].tareWeight=el.value;const card=el.closest('.inventory-container-card');const gross=card?.querySelector('[data-container-initial]')?.value;const net=card?.querySelector('.inventory-net strong');if(net)net.textContent=el.value!==''&&gross!==''&&Number(gross)>=Number(el.value)?(Number(gross)-Number(el.value)).toFixed(2)+' g':'— g';validateReagents()});
+  $$('[data-container-initial]').forEach(el=>el.oninput=()=>{const [i,j]=el.dataset.containerInitial.split('-').map(Number);ensureReagentContainers(editingReagents[i])[j].initialWeight=el.value;const card=el.closest('.inventory-container-card');const tare=card?.querySelector('[data-container-tare]')?.value;const net=card?.querySelector('.inventory-net strong');if(net)net.textContent=el.value!==''&&tare!==''&&Number(el.value)>=Number(tare)?(Number(el.value)-Number(tare)).toFixed(2)+' g':'— g';validateReagents()});
+  $$('[data-remove-container]').forEach(btn=>btn.onclick=()=>{const [i,j]=btn.dataset.removeContainer.split('-').map(Number),arr=ensureReagentContainers(editingReagents[i]);if(arr.length>1&&confirm('¿Quitar este envase de la configuración? No modifica consumos históricos.')){arr.splice(j,1);renderReagentRows()}});
 }
+
 function renderReagentRows(){
   const box=$('#reagentRows');if(!box)return;
   box.innerHTML=reagentMasterDatalistHtml()+editingReagents.map((r,i)=>`<div class="reagent-row">
@@ -3530,11 +3767,12 @@ function renderReagentRows(){
   $$('[data-remove-reagent]').forEach(el=>el.onclick=()=>{editingReagents.splice(Number(el.dataset.removeReagent),1);renderReagentRows()});
   renderContainerLists();
   $$('[data-add-container]').forEach(btn=>btn.onclick=()=>{
-    const i=Number(btn.dataset.addContainer),r=editingReagents[i],arr=ensureReagentContainers(r);
-    dedupeReagentContainers(r);
-    const last=arr[arr.length-1];
-    // Evita crear varias filas vacías por doble clic o por pulsaciones repetidas.
-    if(last && !(String(last.tareWeight??'').trim()) && !(String(last.initialWeight??'').trim()) && arr.length>1){toast('Complete el frasco/sobre pendiente antes de agregar otro');return;}
+    const i=Number(btn.dataset.addContainer),r=editingReagents[i];
+    // dedupeReagentContainers sustituye r.containers por otro arreglo: obtener
+    // la referencia DESPUÉS de deduplicar para que el nuevo envase sí persista.
+    ensureReagentContainers(r);
+    const arr=dedupeReagentContainers(r);
+    // Permite registrar varios envases nuevos del mismo lote sin bloquear el botón.
     const used=new Set(arr.map(e=>normalizeIdentityText(e.label||'')));let n=1,label='Frasco principal';
     if(used.has(normalizeIdentityText(label))){do{n++;label=`Frasco ${n}`}while(used.has(normalizeIdentityText(label)));}
     arr.push({id:uid('ENV'),label,lot:r.lot||'',containerType:'FRASCO',tareWeight:'',initialWeight:'',status:'ACTIVO'});
@@ -3571,9 +3809,10 @@ function validateReagents(){
   else if(new Set(reagentLotKeys).size!==reagentLotKeys.length)out={level:'ERROR',text:'Ya existe este mismo reactivo con el mismo lote. Use un lote diferente o elimine la fila duplicada.'};
   else if(editingReagents.some(r=>r.mode!=='WEIGHT'&&(!Number.isFinite(Number(r.stockQuantity))||Number(r.stockQuantity)<0)))out={level:'ERROR',text:'Para materiales contables, registre el stock disponible.'};
   else if(editingReagents.some(r=>!(r.unit||'').trim()))out={level:'ERROR',text:'Defina la unidad de control de cada reactivo.'};
+  else if(editingReagents.some(r=>r.mode==='WEIGHT'&&(()=>{const keys=ensureReagentContainers(r).map(e=>normalizeIdentityText(e.lot||r.lot||'')+'|'+normalizeIdentityText(e.label||'')+'|'+String(e.containerType||'FRASCO'));return new Set(keys).size!==keys.length})()))out={level:'ERROR',text:'Hay dos envases con la misma identificación, tipo y lote. Identifique cada frasco por separado.'};
   else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>!(e.label||'').trim())))out={level:'ERROR',text:'Todos los frascos/sobres deben tener nombre.'};
-  else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>!Number.isFinite(Number(e.tareWeight))||Number(e.tareWeight)<0)))out={level:'ERROR',text:'Registre una tara válida para cada frasco/sobre.'};
-  else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>!Number.isFinite(Number(e.initialWeight))||Number(e.initialWeight)<=Number(e.tareWeight))))out={level:'ERROR',text:'El peso inicial de cada frasco/sobre debe ser mayor que su tara.'};
+  else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>String(e.tareWeight??'').trim()===''||!Number.isFinite(Number(e.tareWeight))||Number(e.tareWeight)<0)))out={level:'ERROR',text:'Registre una tara válida para cada frasco/sobre.'};
+  else if(editingReagents.some(r=>r.mode==='WEIGHT'&&ensureReagentContainers(r).some(e=>String(e.initialWeight??'').trim()===''||!Number.isFinite(Number(e.initialWeight))||Number(e.initialWeight)<=Number(e.tareWeight))))out={level:'ERROR',text:'El peso inicial de cada frasco/sobre debe ser mayor que su tara.'};
   else if(editingReagents.some(r=>r.mode==='WEIGHT' && r.physicalState==='LIQUID' && (r.density==='' || r.density===null || r.density===undefined || !Number.isFinite(Number(r.density)) || Number(r.density)<=0)))out={level:'ERROR',text:'Para cada reactivo LÍQUIDO, registre una densidad válida en g/mL.'};
   else out={level:'OK',text:`${editingReagents.length} reactivo(s)/material(es) configurado(s). Se permite el mismo reactivo con lotes diferentes; reactivo + lote no puede repetirse.`};
   el.textContent=out.text;el.className='inline-alert '+out.level.toLowerCase();return out;
@@ -3705,7 +3944,6 @@ async function loadCleanTimeRules(catalogId){
   return clean;
 }
 async function liveReagentConfigForEditor(config){
-  await reconcileInventoryFromConfirmedHistory();
   await buildReagentMasterProfiles();
   const master=new Map(reagentMasterProfiles.map(x=>[x.key,x.profile]));
   return (config||[]).map(raw=>{
@@ -3721,7 +3959,7 @@ async function liveReagentConfigForEditor(config){
     r._autofilled=true;r._masterSource='inventario vivo';return r;
   }).filter(Boolean);
 }
-async function editCatalog(id){await reconcileInventoryFromConfirmedHistory();const all=await getAll('catalog'),x=all.find(r=>r.id===id);if(!x)return;setCatalogSectionOptions();$('#catalogId').value=x.id;$('#catalogSection').value=x.section;$('#catalogName').value=x.name;$('#catalogFamily').value=x.family||'';$('#catalogTimeMode').value=x.timeMode||'FIXED';setDurationPicker(x.baseMinutes||0);$('#catalogStatus').value=x.status;$('#catalogDescription').value=x.description||'';editingRules=(await loadCleanTimeRules(id)).map(r=>({...r}));editingSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===id).sort((a,b)=>a.order-b.order).map(r=>({...r}));const cc=x.calibrationConfig||{};$('#catalogRequiresCalibration').checked=!!cc.enabled;$('#calibrationUnit').value=cc.unit||'';$('#calibrationReplicates').value=Math.max(1,Number(cc.replicates||3));editingCalibrationPoints=(cc.points||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(p=>({concentration:p.concentration}));editingReagents=(await liveReagentConfigForEditor((x.reagentConfig||[]).sort((a,b)=>(a.order||0)-(b.order||0)))).map(r=>({...r,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.density??null,tareWeight:r.tareWeight??null,containers:Array.isArray(r.containers)&&r.containers.length?r.containers.map(e=>({...e})):[]}));editingReagents.forEach(r=>{if(r.mode==='WEIGHT')dedupeReagentContainers(r)});$('#catalogUsesReagents').checked=sectionAllowsReagents(x.section)&&editingReagents.length>0;if(x.section==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration(x.name)&&!cc.enabled){$('#catalogRequiresCalibration').checked=true;if(!editingCalibrationPoints.length)editingCalibrationPoints=[{concentration:''},{concentration:''},{concentration:''}];}$('#catalogDialogTitle').textContent='Editar elemento';updateCatalogForm();updateCalibrationEditor();updateReagentEditor();$('#catalogDialog').showModal()}
+async function editCatalog(id){const all=await getAll('catalog'),x=all.find(r=>r.id===id);if(!x)return;setCatalogSectionOptions();$('#catalogId').value=x.id;$('#catalogSection').value=x.section;$('#catalogName').value=x.name;$('#catalogFamily').value=x.family||'';$('#catalogTimeMode').value=x.timeMode||'FIXED';setDurationPicker(x.baseMinutes||0);$('#catalogStatus').value=x.status;$('#catalogDescription').value=x.description||'';editingRules=(await loadCleanTimeRules(id)).map(r=>({...r}));editingSteps=(await getAll('compositeSteps')).filter(r=>r.catalogId===id).sort((a,b)=>a.order-b.order).map(r=>({...r}));const cc=x.calibrationConfig||{};$('#catalogRequiresCalibration').checked=!!cc.enabled;$('#calibrationUnit').value=cc.unit||'';$('#calibrationReplicates').value=Math.max(1,Number(cc.replicates||3));editingCalibrationPoints=(cc.points||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(p=>({concentration:p.concentration}));editingReagents=(await liveReagentConfigForEditor((x.reagentConfig||[]).sort((a,b)=>(a.order||0)-(b.order||0)))).map(r=>({...r,physicalState:r.mode==='WEIGHT'?(r.physicalState||'SOLID'):null,density:r.density??null,tareWeight:r.tareWeight??null,containers:Array.isArray(r.containers)&&r.containers.length?r.containers.map(e=>({...e})):[]}));editingReagents.forEach(r=>{if(r.mode==='WEIGHT')dedupeReagentContainers(r)});$('#catalogUsesReagents').checked=sectionAllowsReagents(x.section)&&editingReagents.length>0;if(x.section==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration(x.name)&&!cc.enabled){$('#catalogRequiresCalibration').checked=true;if(!editingCalibrationPoints.length)editingCalibrationPoints=[{concentration:''},{concentration:''},{concentration:''}];}$('#catalogDialogTitle').textContent='Editar elemento';updateCatalogForm();updateCalibrationEditor();updateReagentEditor();$('#catalogDialog').showModal()}
 function addRule(){editingRules.push({id:uid('TMP'),minSamples:'',maxSamples:'',minutes:''});renderRuleRows();updateCalibrationEditor()}
 function splitMinutes(total){const n=Math.max(0,Number(total||0));return {hours:Math.floor(n/60),minutes:n%60}}
 function setDurationPicker(total){const d=splitMinutes(total);$('#catalogBaseHours').value=d.hours;$('#catalogBaseMinutePart').value=String(d.minutes)}
@@ -5081,7 +5319,7 @@ async function refreshPlanner(){
 
 async function init(){db=await openDB();
     await purgeDeletedPlanningLocally();
-  firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#reassignPlanForm').addEventListener('submit',saveReassignPlan);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogName').addEventListener('input',()=>{if($('#catalogSection').value==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration($('#catalogName').value)&&!$('#catalogId').value){$('#catalogRequiresCalibration').checked=true;updateCalibrationEditor()}});$('#catalogRequiresCalibration').addEventListener('change',updateCalibrationEditor);$('#calibrationUnit').addEventListener('input',validateCalibrationConfig);$('#calibrationReplicates').addEventListener('input',validateCalibrationConfig);if($('#btnAddCalibrationPoint'))$('#btnAddCalibrationPoint').onclick=addCalibrationPoint;if($('#catalogUsesReagents'))$('#catalogUsesReagents').addEventListener('change',updateReagentEditor);if($('#btnAddReagent'))$('#btnAddReagent').onclick=addReagent;$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
+  firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>b.dataset.close==='finishActivityDialog'?requestTechnicalDialogClose():document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#reassignPlanForm').addEventListener('submit',saveReassignPlan);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogName').addEventListener('input',()=>{if($('#catalogSection').value==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration($('#catalogName').value)&&!$('#catalogId').value){$('#catalogRequiresCalibration').checked=true;updateCalibrationEditor()}});$('#catalogRequiresCalibration').addEventListener('change',updateCalibrationEditor);$('#calibrationUnit').addEventListener('input',validateCalibrationConfig);$('#calibrationReplicates').addEventListener('input',validateCalibrationConfig);if($('#btnAddCalibrationPoint'))$('#btnAddCalibrationPoint').onclick=addCalibrationPoint;if($('#catalogUsesReagents'))$('#catalogUsesReagents').addEventListener('change',updateReagentEditor);if($('#btnAddReagent'))$('#btnAddReagent').onclick=addReagent;$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
 $('#planActivitySearch').addEventListener('input',renderPlanSelectors);
 if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openCatalogFromPlanner;$('#planSamples').addEventListener('input',smartPlannerRecalculate);$('#planStart').addEventListener('input',updatePlanPreview);$('#planDate').addEventListener('change',async()=>{await smartPlannerRecalculate();await renderExecutivePlanner();await renderMandatoryPlanningAlerts();if($('#bossAIResults')){$('#bossAIResults').classList.add('hidden');$('#bossAIEmpty').classList.remove('hidden')}});$('#agendaStatus').addEventListener('change',renderAgenda);if($('#btnSuggestAnalyst'))$('#btnSuggestAnalyst').onclick=suggestAnalyst;if($('#btnOptimizeDay'))$('#btnOptimizeDay').onclick=analyzeBossDay;if($('#btnSavePlan'))$('#btnSavePlan').onclick=savePlan;$('#planAnalyst').addEventListener('change',autoScheduleSelectedAnalyst);}if($('#myDayDate')){$('#myDayDate').addEventListener('change',renderMyDay);if($('#btnMyDayToday'))$('#btnMyDayToday').onclick=()=>{$('#myDayDate').value=dateToday();renderMyDay()};$('#myDayAnalyst').addEventListener('change',renderMyDay);if($('#btnRestoreBossPlan'))$('#btnRestoreBossPlan').onclick=()=>restoreBossSchedule($('#myDayDate').value,$('#myDayAnalyst').value);}if($('#dailyMonitorDate')){
   $('#dailyMonitorDate').value=dateToday();
@@ -5103,6 +5341,7 @@ if($('#mgmtFrom')){
   $('#planningEditForm').addEventListener('submit',savePlanningEdit);
   $('#editPlanStart').addEventListener('input',previewPlanningEdit);
 }
+if($('#operationalSamplesForm'))$('#operationalSamplesForm').addEventListener('submit',saveOperationalSamples);
 if($('#finishActivityForm'))$('#finishActivityForm').addEventListener('submit',submitFinishActivity);if($('#btnSaveCalibrationDraft'))$('#btnSaveCalibrationDraft').onclick=saveCalibrationDraft;if($('#btnSaveReagentDraft'))$('#btnSaveReagentDraft').onclick=saveReagentDraft;if($('#btnUnlockTechnicalEdit'))$('#btnUnlockTechnicalEdit').onclick=unlockCompletedTechnicalEdit;
 if($('#microFreezerTemp'))$('#microFreezerTemp').addEventListener('input',previewMicroFreezer);if($('#microFreezerControlForm'))$('#microFreezerControlForm').addEventListener('submit',saveMicroFreezerControl);if($('#btnSaveMicroFreezerConfig'))$('#btnSaveMicroFreezerConfig').onclick=saveMicroFreezerConfig;if($('#incMicroTemp'))$('#incMicroTemp').addEventListener('input',previewIncMicro);if($('#incMicroControlForm'))$('#incMicroControlForm').addEventListener('submit',saveIncMicroControl);if($('#btnSaveIncMicroConfig'))$('#btnSaveIncMicroConfig').onclick=saveIncMicroConfig;if($('#microIncTemp'))$('#microIncTemp').addEventListener('input',previewMicroIncubator);if($('#microIncControlForm'))$('#microIncControlForm').addEventListener('submit',saveMicroIncubatorControl);if($('#btnSaveMicroIncConfig'))$('#btnSaveMicroIncConfig').onclick=saveMicroIncConfig;if($('#microEnvTempRaw'))['microEnvTempRaw','microEnvHumRaw'].forEach(id=>$('#'+id).addEventListener('input',previewMicroEnv));if($('#microEnvControlForm'))$('#microEnvControlForm').addEventListener('submit',saveMicroEnvControl);if($('#btnSaveMicroEnvConfig'))$('#btnSaveMicroEnvConfig').onclick=saveMicroEnvConfig;if($('#btnRefreshControlCharts'))$('#btnRefreshControlCharts').onclick=renderControlChartsManagement;if($('#ccChartSelect'))$('#ccChartSelect').addEventListener('change',renderControlChartsManagement);if($('#ccMonth'))$('#ccMonth').addEventListener('change',()=>{updateHistoricalButton();renderControlChartsManagement()});if($('#btnCcHistorical'))$('#btnCcHistorical').onclick=openHistoricalLoader;if($('#btnCcPdf'))$('#btnCcPdf').onclick=exportControlChartMC160208;if($('#btnCcMonthlyReport'))$('#btnCcMonthlyReport').onclick=monthlyReportCurrentChart;if($('#btnSaveHistoricalMonth'))$('#btnSaveHistoricalMonth').onclick=saveHistoricalMonth;if($('#btnCcCurrentMonth'))$('#btnCcCurrentMonth').onclick=()=>{$('#ccMonth').value=ccMonthNow();renderControlChartsManagement()};if($('#balanceEnvTempRaw'))['balanceEnvTempRaw','balanceEnvHumRaw'].forEach(id=>$('#'+id).addEventListener('input',previewBalanceEnv));if($('#balanceEnvControlForm'))$('#balanceEnvControlForm').addEventListener('submit',saveBalanceEnvControl);if($('#btnSaveBalanceEnvConfig'))$('#btnSaveBalanceEnvConfig').onclick=saveBalanceEnvConfig;if($('#metalsTempRaw'))['metalsTempRaw','metalsHumRaw'].forEach(id=>$('#'+id).addEventListener('input',previewMetals));if($('#metalsControlForm'))$('#metalsControlForm').addEventListener('submit',saveMetalsControl);if($('#btnSaveMetalsConfig'))$('#btnSaveMetalsConfig').onclick=saveMetalsConfig;if($('#oven314TempRaw'))$('#oven314TempRaw').addEventListener('input',previewOven314);if($('#oven314ControlForm'))$('#oven314ControlForm').addEventListener('submit',saveOven314Control);if($('#btnSaveOven314Config'))$('#btnSaveOven314Config').onclick=saveOven314Config;if($('#tpTempRaw'))$('#tpTempRaw').addEventListener('input',previewThermalPoint);if($('#thermalPointControlForm'))$('#thermalPointControlForm').addEventListener('submit',saveThermalPointControl);if($('#digTempRaw'))$('#digTempRaw').addEventListener('input',previewDigestor);if($('#digestorControlForm'))$('#digestorControlForm').addEventListener('submit',saveDigestorControl);if($('#btnSaveDigConfig'))$('#btnSaveDigConfig').onclick=saveDigestorConfig;if($('#fridge344TempRaw'))$('#fridge344TempRaw').addEventListener('input',previewFridge344);if($('#fridge344ControlForm'))$('#fridge344ControlForm').addEventListener('submit',saveFridge344Control);if($('#btnSaveFridge344Config'))$('#btnSaveFridge344Config').onclick=saveFridge344Config;if($('#fridgeTempRaw'))$('#fridgeTempRaw').addEventListener('input',previewFridge);if($('#fridgeControlForm'))$('#fridgeControlForm').addEventListener('submit',saveFridgeControl);if($('#btnSaveFridgeConfig'))$('#btnSaveFridgeConfig').onclick=saveFridgeConfig;if($('#balRead1'))['balRead1','balRead100'].forEach(id=>$('#'+id).addEventListener('input',previewBalance));if($('#balanceControlForm'))$('#balanceControlForm').addEventListener('submit',saveBalanceControl);if($('#distReading'))$('#distReading').addEventListener('input',previewDistiller);if($('#distillerControlForm'))$('#distillerControlForm').addEventListener('submit',saveDistillerControl);if($('#incTempRaw'))$('#incTempRaw').addEventListener('input',previewIncubator);if($('#incubatorControlForm'))$('#incubatorControlForm').addEventListener('submit',saveIncubatorControl);if($('#btnSaveIncConfig'))$('#btnSaveIncConfig').onclick=saveIncubatorConfig;if($('#phRead4'))['4','7','10'].forEach(x=>$('#phRead'+x).addEventListener('input',previewPH));if($('#condRead84'))['84','1413','1288'].forEach(x=>$('#condRead'+x).addEventListener('input',previewConductivity));if($('#conductivityControlForm'))$('#conductivityControlForm').addEventListener('submit',saveConductivityControl);if($('#phControlForm'))$('#phControlForm').addEventListener('submit',savePHControl);if($('#dbo5TempRaw'))$('#dbo5TempRaw').addEventListener('input',previewDBO5);if($('#dbo5HumRaw'))$('#dbo5HumRaw').addEventListener('input',previewDBO5);if($('#dbo5ControlForm'))$('#dbo5ControlForm').addEventListener('submit',saveDBO5Control);if($('#btnSaveConfig'))$('#btnSaveConfig').onclick=saveConfig;if($('#btnNewControlChart'))$('#btnNewControlChart').onclick=()=>openControlChartDef();if($('#chartDefLinkMode'))$('#chartDefLinkMode').addEventListener('change',()=>updateChartLinkMode());if($('#chartDefSection'))$('#chartDefSection').addEventListener('change',()=>refreshChartMethodOptions(''));if($('#chartDefMethodSelect'))$('#chartDefMethodSelect').addEventListener('change',()=>{const sel=$('#chartDefMethodSelect'),custom=$('#chartDefMethod'),opt=sel.options[sel.selectedIndex];if(sel.value==='CUSTOM'){custom.value='';custom.closest('label').classList.remove('hidden');custom.focus()}else{custom.value=opt?.dataset?.name||'';custom.closest('label').classList.add('hidden')}});if($('#controlChartDefForm'))$('#controlChartDefForm').addEventListener('submit',saveControlChartDef);if($('#btnBackup'))$('#btnBackup').onclick=backup;if($('#btnReset'))$('#btnReset').onclick=resetDB;if($('#localSessionSelect'))$('#localSessionSelect').addEventListener('change',changeLocalSession);if($('#btnFirebaseLogin'))$('#btnFirebaseLogin').onclick=openFirebaseLogin;
 if($('#btnFirebaseLogout'))$('#btnFirebaseLogout').onclick=firebaseLogout;if($('#btnNotifications'))$('#btnNotifications').onclick=async()=>{const p=await ensureSystemNotificationPermission(true);if(p==='granted')toast('Avisos del sistema activados · llegarán al completar todas las cartas');else if(p==='denied')toast('Notificaciones bloqueadas en el navegador/sistema');await openCommunications();};if($('#commStatusFilter'))$('#commStatusFilter').onchange=renderCommunications;if($('#commTypeFilter'))$('#commTypeFilter').onchange=renderCommunications;if($('#commSearch'))$('#commSearch').oninput=()=>{clearTimeout(window.__commSearchTimer);window.__commSearchTimer=setTimeout(renderCommunications,180)};if($('#btnRefreshCommunications'))$('#btnRefreshCommunications').onclick=renderCommunications;
@@ -5133,22 +5372,44 @@ init().catch(e=>{console.error(e);alert('No se pudo iniciar la base local: '+e.m
 let cloudResumeBusy=false;
 let lastCloudResumeAt=0;
 async function resumeCloudSession(force=false){
-  if(cloudResumeBusy||!firebaseBridge.ready||!firebaseBridge.authUser)return;
-  const now=Date.now();
-  if(!force&&now-lastCloudResumeAt<60000){scheduleOutboxFlush(80);return}
-  cloudResumeBusy=true;
-  lastCloudResumeAt=now;
-  try{
-    await flushOutbox(false);
-    await pullFirebaseData(false);
-    startRealtimeSync();
-  }catch(e){
-    console.warn('Reanudación de sincronización',e);
-  }finally{
-    cloudResumeBusy=false;
-    await refreshSyncUI();
-  }
+  if(!firebaseBridge.ready||!firebaseBridge.authUser)return;
+  smartSyncWake();
+  // El listener activo ya incorpora las modificaciones remotas.
+  // Evitar pullFirebaseData() completo en cada recuperación de foco.
+  if(quotaPauseRemaining()===0) scheduleOutboxFlush(1000);
+  await refreshSyncUI();
 }
+// 28.5 · Ahorro inteligente de lecturas para estaciones abiertas 08:00–17:00.
+// Detener listeners de Firestore tras 10 min sin interacción, sin desconectar
+// Firebase Auth, sin tocar IndexedDB ni borrar la cola de escrituras.
+const SMART_SYNC_IDLE_MS=10*60*1000;
+let smartSyncLastInteraction=Date.now();
+let smartSyncSleeping=false;
+let smartSyncWakeBusy=false;
+function smartSyncWake(){
+  smartSyncLastInteraction=Date.now();
+  if(!smartSyncSleeping||smartSyncWakeBusy)return;
+  if(!firebaseBridge.ready||!firebaseBridge.authUser)return;
+  smartSyncWakeBusy=true;
+  try{
+    smartSyncSleeping=false;
+    startRealtimeSync(); // snapshot inicial de servidor reconcilia los cambios
+    if(quotaPauseRemaining()===0)scheduleOutboxFlush(1000);
+    console.info('Sincronización inteligente: listeners reactivados');
+  }finally{smartSyncWakeBusy=false}
+}
+// Solo interacciones reales, no eventos de foco disparados por el navegador.
+['pointerdown','keydown','touchstart'].forEach(type=>document.addEventListener(type,()=>{
+  smartSyncLastInteraction=Date.now();
+  if(smartSyncSleeping)smartSyncWake();
+},{passive:true}));
+setInterval(()=>{
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||smartSyncSleeping)return;
+  if(Date.now()-smartSyncLastInteraction<SMART_SYNC_IDLE_MS)return;
+  stopRealtimeSync();
+  smartSyncSleeping=true;
+  console.info('Sincronización inteligente: modo ahorro tras 10 min sin actividad');
+},30000);
 window.addEventListener('online',()=>{if(firebaseBridge.ready)reconcileAfterResume(true);else initFirebaseBridge()});
 window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
@@ -5157,7 +5418,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseB
 // No reemplaza realtime ni hace polling agresivo: cada 3 min confirma el estado canónico
 // del servidor únicamente si la pestaña está visible y el Planificador está abierto.
 setInterval(()=>{
-  if(document.hidden||!firebaseBridge.ready||!firebaseBridge.authUser)return;
+  if(document.hidden||smartSyncSleeping||!firebaseBridge.ready||!firebaseBridge.authUser)return;
   if(!document.querySelector('#view-planificador.active'))return;
   selfHealPlanningFromServer(true).then(()=>reconcileVisibleInterface('PLANNING_INTEGRITY')).catch(()=>{});
 },180000);
@@ -5175,6 +5436,14 @@ setInterval(()=>{
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy){
     refreshSyncUI().catch(e=>console.warn('Watchdog de sincronización',e));
   }
-},2500);
+},15000);
 window.addEventListener('offline',()=>setSyncState('LOCAL','Sin conexión · cambios protegidos localmente'));
 if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',async event=>{if(event.data?.type==='OPEN_COMMUNICATIONS'){try{window.focus();await openCommunications()}catch(e){console.warn('Abrir comunicaciones desde notificación',e)}}});}
+
+if(document.getElementById("openActivitiesSearch"))document.getElementById("openActivitiesSearch").addEventListener("input",()=>renderOpenActivitiesAudit());
+
+// Escape y cierre nativo también requieren confirmar cambios pendientes.
+document.getElementById('finishActivityDialog')?.addEventListener('cancel',e=>{
+ const mode=document.getElementById('finishTechnicalEditMode')?.value;
+ if(mode!=='3'&&technicalSnapshot&&technicalFormSnapshot()!==technicalSnapshot){e.preventDefault();requestTechnicalDialogClose()}
+});

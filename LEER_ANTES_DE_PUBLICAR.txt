@@ -1,0 +1,7 @@
+VERSION EXPERIMENTAL 10.28.4
+- Blindaje de cierres mediante transacciones Firestore y comparación de revisión.
+- Incluye firestore.rules que DEBE desplegarse separadamente para protección también frente a clientes antiguos.
+- No recupera automáticamente los 27 cierres históricos; requiere auditoría y confirmación.
+- Probar con Firebase de ensayo: localhost NO aísla producción.
+- Si reglas no se despliegan, clientes antiguos todavía pueden sobrescribir cierres en el servidor.
+- Una reapertura autorizada necesitará flujo específico.

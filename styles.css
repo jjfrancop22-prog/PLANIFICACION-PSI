@@ -314,3 +314,47 @@ html[data-session-role="ANALISTA"] #digConfigSection,html[data-session-role="ANA
 
 /* 6.33.25.10.5 · Carga histórica universal */
 .cc-historical-dialog{width:min(96vw,1500px);max-width:1500px}.cc-historical-dialog .modal-body{max-height:92vh;overflow:auto}.cc-hist-table{max-height:62vh;border:1px solid var(--line,#dce5ef);border-radius:14px}.cc-hist-table thead{position:sticky;top:0;background:#f5f8fc;z-index:2}.cc-hist-table td{vertical-align:top;min-width:150px}.cc-hist-table td:first-child{min-width:120px}.cc-hist-table td:first-child small{display:block;color:#2f7d57;font-weight:700;margin-top:4px}.cc-hist-table input,.cc-hist-table select{width:100%;min-width:125px}.cc-hist-table label span{display:block;font-size:11px;color:#64748b;margin-bottom:4px}.cc-hist-existing{background:#f2fbf6}.cc-filters{flex-wrap:wrap}
+
+/* Registro operativo separado del formulario técnico */
+.operational-samples-panel{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #c9ddeb;border-radius:12px;background:#f4f9fc;margin:10px 0;flex-wrap:wrap}.operational-samples-panel>div{display:flex;flex-direction:column;gap:3px}.operational-samples-panel small{color:#49627b}
+
+/* Inventario inteligente: envases legibles en escritorio y móvil */
+.reagent-containers-box{min-width:0;padding:16px;background:#f6f9fc;border:1px solid #cbdbe9}
+.reagent-containers-head{flex-wrap:wrap;gap:12px}.reagent-containers-head b{font-size:15px}
+.inventory-container-hint{font-size:12px;color:#48637b;margin:8px 0 12px}
+.container-config-row.inventory-container-card{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:16px;margin:12px 0;background:white;border:1px solid #d8e5f0;border-radius:12px;align-items:end}
+.inventory-container-card label{min-width:0;display:flex;flex-direction:column;gap:5px;overflow-wrap:anywhere;font-size:12px}
+.inventory-container-card input,.inventory-container-card select{width:100%;min-width:0;box-sizing:border-box}
+.inventory-container-title{grid-column:1/-1;display:flex;justify-content:space-between;gap:10px;color:#174469}
+.inventory-container-title span{font-size:12px;color:#6a8193}.inventory-net{font-size:13px;padding:10px;background:#eef7fb;border-radius:8px}.inventory-remove{justify-self:end}
+@media(max-width:650px){.container-config-row.inventory-container-card{grid-template-columns:minmax(0,1fr)}.inventory-container-title{grid-column:1}.inventory-remove{justify-self:stretch}}
+
+/* 28.11 · Tarjeta de inventario legible y diferenciación de magnitudes */
+.comm-inventory-card{border-radius:16px;box-shadow:0 4px 20px rgba(25,67,46,.05)}
+.comm-inventory-head{padding:16px 18px;background:linear-gradient(110deg,#e9f7ee,#f3faf7);gap:14px}
+.comm-inventory-head b{font-size:17px}.comm-inventory-head small{display:block;text-align:left;font-size:12px;margin-top:4px}
+.comm-inv-summary{font-size:12px;font-weight:800;color:#246342;background:white;border-radius:999px;padding:6px 12px;white-space:nowrap}
+.comm-inventory-card table{font-size:13px;min-width:690px}.comm-inventory-card th{font-size:10px;padding:12px 14px;white-space:normal}
+.comm-inventory-card td{padding:14px;vertical-align:middle}.comm-inventory-card td small{font-size:11px;margin-top:3px}
+.comm-item-name{min-width:215px}.comm-item-name b{font-size:13px;line-height:1.4}
+.comm-value{font-size:16px;font-weight:800;white-space:nowrap}.comm-inv-type{display:inline-block;font-size:9px;font-weight:800;color:#547363;margin-top:7px;letter-spacing:.025em}
+.comm-ai-note{padding:13px 17px;font-size:12px;line-height:1.6}
+@media(max-width:760px){.comm-inventory-head{align-items:flex-start}.comm-inventory-card table{min-width:690px}}
+
+/* Registro de muestras por parametro · 28.13 */
+.sample-parameter-title{display:flex;flex-direction:column;gap:4px;margin:18px 0 10px;color:#1b4668}.sample-parameter-title small,.sample-parameter-note{font-size:12px;color:#61748a}.sample-parameter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.sample-parameter-item{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid #d9e5f0;border-radius:12px;background:#f7fafc}.sample-parameter-item span{font-weight:650}.sample-parameter-item input{width:100%;box-sizing:border-box;min-width:0}.sample-parameter-note{margin:10px 0 18px}
+
+/* V28.15: revisión de muestras en cierre sin captura duplicada */
+.sample-closure-review{padding:17px 20px;border:1px solid #b7dfd0;background:#f0faf6;border-radius:14px;color:#1d5140;margin:6px 0 12px}.sample-closure-review p{margin:8px 0}.sample-closure-review small{display:block;margin-top:12px;color:#547466}.sample-closure-chips{display:flex;flex-wrap:wrap;gap:7px}.sample-closure-chips span{border:1px solid #c9e3d9;background:white;border-radius:9px;padding:6px 10px;font-size:13px}
+
+/* 28.16 · Evidencia de muestras por parámetro en cierre del Centro de Comunicaciones */
+.comm-closure-evidence{margin-top:12px;border:1px solid #cfe0ec;border-radius:12px;background:#f7fbfe;padding:14px;color:#163b57;max-width:100%;overflow-x:auto}
+.comm-closure-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.comm-closure-head span{font-size:11px;color:#53738b;background:#eaf3f9;border-radius:15px;padding:4px 9px}
+.comm-closure-total{display:flex;justify-content:space-between;align-items:center;background:#e7f2f9;border-radius:9px;padding:9px 12px;margin-bottom:10px}.comm-closure-total strong{font-size:21px}
+.comm-closure-table{width:100%;border-collapse:collapse;font-size:13px}.comm-closure-table th{text-align:left;background:#edf5fa;color:#47647a}.comm-closure-table th,.comm-closure-table td{padding:8px 10px;border-bottom:1px solid #e0eaf0}.comm-closure-table th:last-child{text-align:right}
+.comm-closure-foot,.comm-closure-note{font-size:12px;color:#547087;line-height:1.6;margin-top:10px}
+
+/* 28.17: diferencia visual entre cierre histórico sin instantánea y evidencia nueva. */
+.comm-closure-legacy{background:#f8fafc;border-color:#dce5ee}
+.comm-closure-legacy .comm-closure-head span{color:#6b7280}
+.comm-closure-legacy .comm-closure-note{line-height:1.5;margin:10px 0 0}

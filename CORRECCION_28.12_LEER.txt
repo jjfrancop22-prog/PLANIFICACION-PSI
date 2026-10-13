@@ -1,0 +1,1 @@
+CORRECCIÓN PUNTUAL: Agregar frasco ahora utiliza el arreglo actualizado tras deduplicación. No altera datos históricos ni ejecuta migraciones. El único envase no se puede quitar sin agregar otro primero. Validar en localhost antes de publicar.

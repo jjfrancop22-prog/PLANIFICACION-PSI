@@ -1,0 +1,1 @@
+Versión experimental 28.10. Corrige alta de múltiples frascos, diseño de fichas de envases y validación de pesos vacíos y duplicados. NO ejecuta archivado masivo ni altera datos de Firebase. Antes de archivar inventario histórico se requiere respaldo y revisión de dependencias. Pruebas integradas pendientes.

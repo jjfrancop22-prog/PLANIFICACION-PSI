@@ -1,0 +1,1 @@
+Versión 28.17: los avisos históricos sin closureEvidence muestran una nota explícita en vez de aparentar que tienen desglose por parámetro. Los avisos nuevos siguen mostrando la instantánea guardada al cierre. Sin migraciones ni modificaciones de inventario. Requiere prueba funcional en localhost.
