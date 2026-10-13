@@ -369,3 +369,18 @@ html[data-session-role="ANALISTA"] #digConfigSection,html[data-session-role="ANA
 .auth-diag-steps b{font-variant-numeric:tabular-nums;white-space:nowrap}
 .auth-diag-current{color:#075a98;font-weight:600}
 #authLoginDiagNote{margin:8px 0 0;color:#52697c;line-height:1.35}
+
+/* 28.20 · Panel diagnóstico de sincronización (solo métricas locales). */
+.smart-sync-open{background:#edf5fb;border:1px solid #c9deed;border-radius:9px;padding:6px 9px;color:#17517c;font-size:11px;font-weight:750;cursor:pointer;white-space:nowrap}
+.smart-sync-dialog{width:min(690px,95vw);max-height:90vh;overflow:auto}
+.smart-sync-body{padding:24px}
+.smart-sync-header{display:flex;justify-content:space-between;align-items:start;gap:16px}
+.smart-sync-header h3{margin:0;font-size:21px}
+.smart-sync-header p{color:#60738b;font-size:12px;margin:5px 0 16px}
+.smart-sync-status{display:inline-block;border-radius:9px;padding:9px 14px;font-size:12px;font-weight:850;margin-bottom:16px}
+.smart-sync-status.green{background:#e9f7ee;color:#137a42}.smart-sync-status.amber{background:#fff3d9;color:#99620d}.smart-sync-status.red{background:#ffe9e7;color:#ad251d}.smart-sync-status.blue{background:#e8f2fc;color:#175c93}.smart-sync-status.neutral{background:#f0f3f7;color:#66758c}
+.smart-sync-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.smart-sync-grid>div{border:1px solid #e0e9f3;border-radius:10px;background:#f8fbff;padding:12px;min-width:0}
+.smart-sync-grid small{display:block;color:#62748a;font-size:11px;margin-bottom:5px}.smart-sync-grid strong{font-size:13px;overflow-wrap:anywhere}
+.smart-sync-note{font-size:12px;line-height:1.55;color:#4e6176;background:#f4f7fa;border-radius:9px;padding:12px;margin:14px 0 0}
+@media(max-width:650px){.smart-sync-grid{grid-template-columns:1fr}.smart-sync-open{font-size:10px}}

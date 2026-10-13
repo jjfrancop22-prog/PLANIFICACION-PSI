@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f4c81" />
   <title>ERP Planificación NextGen</title>
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="stylesheet" href="styles.css?v=6.33.25.10.28.19" />
+  <link rel="stylesheet" href="styles.css?v=6.33.25.10.28.20" />
 </head>
 <body>
 <div class="app-shell">
@@ -25,7 +25,7 @@
       <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
       <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
     </nav>
-    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.28.19 · Firebase Auth</small></div>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.28.20 · Firebase Auth</small></div>
   </aside>
 
   <main class="main">
@@ -44,6 +44,7 @@
         </div>
         <button type="button" class="notification-bell" id="btnNotifications" title="Centro de comunicaciones">🔔<span id="notificationBadge" class="notification-badge hidden">0</span></button>
         <div class="sync-cluster" title="Estado de sincronización">
+          <button type="button" class="smart-sync-open" id="btnSmartSyncInfo" title="Ver diagnóstico de ahorro Firebase y sincronización"><span id="smartSyncMini">⚪ Sin sesión</span> · Diagnóstico</button>
           <span id="syncDot" class="sync-dot local"></span>
           <div class="sync-copy"><b id="syncLabel">LOCAL</b><small id="syncDetail">Firebase no configurado</small></div>
           <button type="button" class="icon-btn sync-btn" id="btnSyncNow" title="Sincronizar ahora">↻</button>
@@ -709,7 +710,27 @@
 
 <div id="toast" class="toast"></div>
 <script src="firebase-config.js"></script>
-<script src="app.js?v=6.33.25.10.28.19"></script>
+<dialog id="smartSyncDialog" class="smart-sync-dialog" aria-label="Diagnóstico de sincronización inteligente">
+  <div class="smart-sync-body">
+    <div class="smart-sync-header"><div><h3>📡 Sincronización inteligente</h3><p>Diagnóstico local de esta computadora · No genera lecturas adicionales de Firestore.</p></div><button id="btnSmartSyncClose" class="icon-btn" type="button" aria-label="Cerrar">×</button></div>
+    <div id="smartSyncMode" class="smart-sync-status neutral">SIN SESIÓN</div>
+    <div class="smart-sync-grid">
+      <div><small>Última interacción</small><strong id="smartSyncLastActivity">—</strong></div>
+      <div><small>Tiempo sin actividad</small><strong id="smartSyncIdleTime">—</strong></div>
+      <div><small>Modo ahorro desde</small><strong id="smartSyncSleepSince">—</strong></div>
+      <div><small>Tiempo en ahorro</small><strong id="smartSyncSleepDuration">—</strong></div>
+      <div><small>Escuchadores activos</small><strong id="smartSyncListeners">—</strong></div>
+      <div><small>Cambios locales pendientes</small><strong id="smartSyncPending">—</strong></div>
+      <div><small>Última sincronización registrada</small><strong id="smartSyncLastCloud">—</strong></div>
+      <div><small>Última reactivación</small><strong id="smartSyncLastWake">—</strong></div>
+      <div><small>Estado de reactivación</small><strong id="smartSyncWakeResult">—</strong></div>
+      <div><small>Pausa por cuota Firebase</small><strong id="smartSyncQuota">—</strong></div>
+    </div>
+    <p class="smart-sync-note"><b>Regla:</b> tras 10 minutos sin interacción, se detienen los escuchadores de este ERP; al volver a utilizarlo, se reactivan. El contador de escuchadores mide suscripciones locales, no lecturas facturadas. La pausa no garantiza cero lecturas. No se borran datos ni cambios pendientes.</p>
+    <p class="smart-sync-note"><b>Seguridad:</b> por ahora no se cierra automáticamente la sesión a los 30 minutos. Cerrar sesión con datos pendientes o mientras se está trabajando puede interrumpir el flujo. Esta decisión se puede configurar posteriormente con validación de pendientes.</p>
+  </div>
+</dialog>
+<script src="app.js?v=6.33.25.10.28.20"></script>
 
 <script>
 (function(){
@@ -740,7 +761,7 @@
 
   window.addEventListener('load', async()=>{
     try{
-      const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.33.25.10.28.19',{scope:'./',updateViaCache:'none'});
+      const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.33.25.10.28.20',{scope:'./',updateViaCache:'none'});
       if(reg.waiting && navigator.serviceWorker.controller) showUpdate(reg.waiting);
 
       reg.addEventListener('updatefound',()=>{

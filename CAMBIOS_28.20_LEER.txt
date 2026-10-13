@@ -1,0 +1,1 @@
+28.20: Indicador semáforo y panel de diagnóstico local de sincronización (ahorro a 10 min, listeners, outbox, reactivación, cuota, fechas). Sin cierre de sesión automático a 30 minutos: recomendado mantener sesión con ahorro por seguridad de operaciones. No se modifican reglas de inventario, planificación ni Firestore. Prueba local antes de desplegar.

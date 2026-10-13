@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.19';
+const APP_VERSION='V1.0.5.6.33.25.10.28.20';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -176,7 +176,7 @@ async function refreshSyncUI(){
   }
   // 6.33.5: separar el estado del núcleo ERP de los pendientes exclusivos de Cartas.
   // Un permiso faltante de Cartas no debe hacer creer que todo Firebase dejó de funcionar.
-  if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy){
+  if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy&&!smartSyncSleeping){
     const chartOpen=[...pending,...errors].filter(x=>x.entity==='controlChartDefs'||x.entity==='controlChartRecords');
     const coreOpen=[...pending,...errors].filter(x=>x.entity!=='controlChartDefs'&&x.entity!=='controlChartRecords');
     if(coreOpen.length){
@@ -5453,6 +5453,42 @@ const SMART_SYNC_IDLE_MS=10*60*1000;
 let smartSyncLastInteraction=Date.now();
 let smartSyncSleeping=false;
 let smartSyncWakeBusy=false;
+let smartSyncSleepAt=0;
+let smartSyncLastWakeAt=0;
+let smartSyncLastWakeStatus='—';
+function smartSyncDuration(ms){
+  const secs=Math.max(0,Math.floor(ms/1000));
+  return secs>=3600?`${Math.floor(secs/3600)} h ${Math.floor(secs%3600/60)} min`:`${Math.floor(secs/60)} min ${secs%60} s`;
+}
+function smartSyncPanelUpdate(){
+  const signedIn=!!(firebaseBridge.ready&&firebaseBridge.authUser);
+  const listeners=Array.isArray(firebaseBridge.unsubs)?firebaseBridge.unsubs.length:0;
+  const quota=quotaPauseRemaining();
+  const online=navigator.onLine;
+  const mode=!signedIn?'SIN SESIÓN':!online?'SIN CONEXIÓN':quota>0?'PAUSA POR CUOTA':smartSyncSleeping?'AHORRO FIREBASE':firebaseBridge.busy?'SINCRONIZANDO':listeners?'ACTIVO':'SIN ESCUCHADORES';
+  const color=!signedIn?'neutral':!online||quota?'red':smartSyncSleeping?'amber':firebaseBridge.busy?'blue':listeners?'green':'amber';
+  const status=document.getElementById('smartSyncMode');
+  if(status){status.textContent=mode;status.className='smart-sync-status '+color;}
+  const mini=document.getElementById('smartSyncMini');
+  if(mini){mini.textContent=signedIn?(smartSyncSleeping?'🟡 Ahorro':quota?'🔴 Cuota':!online?'🔴 Sin red':listeners?'🟢 Activo':'🟠 Revisar'):'⚪ Sin sesión';}
+  const fields={
+    smartSyncLastActivity:new Date(smartSyncLastInteraction).toLocaleTimeString('es-EC'),
+    smartSyncIdleTime:smartSyncDuration(Date.now()-smartSyncLastInteraction),
+    smartSyncSleepSince:smartSyncSleepAt?new Date(smartSyncSleepAt).toLocaleTimeString('es-EC'):'—',
+    smartSyncSleepDuration:smartSyncSleeping?smartSyncDuration(Date.now()-smartSyncSleepAt):'—',
+    smartSyncListeners:String(listeners),
+    smartSyncLastCloud:firebaseBridge.lastSyncAt?new Date(firebaseBridge.lastSyncAt).toLocaleString('es-EC'):'—',
+    smartSyncLastWake:smartSyncLastWakeAt?new Date(smartSyncLastWakeAt).toLocaleTimeString('es-EC'):'—',
+    smartSyncWakeResult:smartSyncLastWakeStatus,
+    smartSyncQuota:quota?smartSyncDuration(quota):'Sin pausa'
+  };
+  Object.entries(fields).forEach(([id,value])=>{const el=document.getElementById(id);if(el)el.textContent=value;});
+}
+async function smartSyncPendingUpdate(){
+  const el=document.getElementById('smartSyncPending');if(!el)return;
+  try{const rows=await getAll('outbox');el.textContent=String(rows.filter(x=>x.status==='PENDIENTE'||x.status==='ERROR').length)}
+  catch{el.textContent='No disponible'}
+}
 function smartSyncWake(){
   smartSyncLastInteraction=Date.now();
   if(!smartSyncSleeping||smartSyncWakeBusy)return;
@@ -5460,9 +5496,13 @@ function smartSyncWake(){
   smartSyncWakeBusy=true;
   try{
     smartSyncSleeping=false;
+    smartSyncSleepAt=0;
+    smartSyncLastWakeAt=Date.now();
+    smartSyncLastWakeStatus="Escuchadores reactivados; esperando confirmación de Firebase";
     startRealtimeSync(); // snapshot inicial de servidor reconcilia los cambios
     if(quotaPauseRemaining()===0)scheduleOutboxFlush(1000);
     console.info('Sincronización inteligente: listeners reactivados');
+    smartSyncPanelUpdate();
   }finally{smartSyncWakeBusy=false}
 }
 // Solo interacciones reales, no eventos de foco disparados por el navegador.
@@ -5475,8 +5515,16 @@ setInterval(()=>{
   if(Date.now()-smartSyncLastInteraction<SMART_SYNC_IDLE_MS)return;
   stopRealtimeSync();
   smartSyncSleeping=true;
+  smartSyncSleepAt=Date.now();
+  smartSyncPanelUpdate();
   console.info('Sincronización inteligente: modo ahorro tras 10 min sin actividad');
 },30000);
+document.getElementById('btnSmartSyncInfo')?.addEventListener('click',()=>{
+  document.getElementById('smartSyncDialog')?.showModal();
+  smartSyncPanelUpdate();smartSyncPendingUpdate();
+});
+document.getElementById('btnSmartSyncClose')?.addEventListener('click',()=>document.getElementById('smartSyncDialog')?.close());
+setInterval(()=>{smartSyncPanelUpdate();if(document.getElementById('smartSyncDialog')?.open)smartSyncPendingUpdate()},5000);
 window.addEventListener('online',()=>{if(firebaseBridge.ready)reconcileAfterResume(true);else initFirebaseBridge()});
 window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
