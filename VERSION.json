@@ -1,5 +1,5 @@
 {
-  "version": "1.0.5.6.33.25.10.28.22",
+  "version": "1.0.5.6.33.25.10.28.23",
   "build": "V1.0.5.6.33.25.10.28.4-BLINDAJE-CIERRES-MULTIPC",
   "name": "BLINDAJE-CIERRES-MULTIPC",
   "notes": "Reduce consultas redundantes de inventario al abrir editor y frecuencia del watchdog visual; conserva validación de inventario al finalizar.",

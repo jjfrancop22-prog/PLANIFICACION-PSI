@@ -1899,10 +1899,67 @@ function communicationCounts(t,key){
   const items=t.items.filter(communicationDisplayableComment);
   return {events:items.length,messages:items.filter(c=>communicationCategory(c)==='CONVERSACION').length,technical:items.filter(c=>communicationCategory(c)==='TECNICA').length,unread:items.filter(c=>communicationUnread(c,key)).length};
 }
+// 28.23: conciliación conservadora de cierres históricos con evidencia CONFIRMADA.
+// Nunca fabrica horas, ni genera notificaciones, ni mueve inventario.
+let historicalAutoReconcileBusy=false;
+let historicalAutoReconcileLast=0;
+async function reconcileHistoricalClosuresSafely(){
+  if(historicalAutoReconcileBusy||Date.now()-historicalAutoReconcileLast<60000||
+     !firebaseBridge.ready||!firebaseBridge.authUser||firebaseBridge.busy||
+     quotaPauseRemaining()>0||currentSessionUser?.role!=='JEFE')return;
+  historicalAutoReconcileBusy=true;historicalAutoReconcileLast=Date.now();
+  try{
+    const [plans,comments,outbox]=await Promise.all([getAll('planning'),getAll('planComments'),getAll('outbox')]);
+    const events=new Map();
+    for(const c of comments){
+      if(!c.planId||c.lifecycleStage!=='FINALIZACION'||!c.closureEvidence?.finishedAt)continue;
+      if(!events.has(c.planId)||String(c.createdAt||'')>String(events.get(c.planId).createdAt||''))events.set(c.planId,c);
+    }
+    const {doc,getDoc,runTransaction}=firebaseBridge.mods;
+    let repaired=0;
+    for(const p of plans.filter(p=>p.status==='EN PROCESO'&&events.has(p.id)).slice(0,3)){
+      if(outbox.some(x=>x.entity==='planning'&&x.recordId===p.id&&['PENDIENTE','ERROR'].includes(x.status)))continue;
+      const event=events.get(p.id);
+      try{
+        // La evidencia debe existir en el servidor, no solo en IndexedDB.
+        const evSnap=await getDoc(doc(firebaseBridge.db,'planComments',event.id));
+        if(!evSnap.exists())continue;
+        const verified=evSnap.data();
+        if(verified.planId!==p.id||verified.lifecycleStage!=='FINALIZACION'||
+           !verified.closureEvidence?.finishedAt||verified.closureEvidence?.planId!==p.id||
+           verified.closureEvidence?.date!==p.date||
+           normalizeIdentityText(verified.closureEvidence?.analyst)!==normalizeIdentityText(p.analystName))continue;
+        const finish=verified.closureEvidence.finishedAt;
+        if(!Number.isFinite(Date.parse(finish)))continue;
+        const ref=doc(firebaseBridge.db,'planning',p.id);
+        let committed=null;
+        await runTransaction(firebaseBridge.db,async tx=>{
+          const snap=await tx.get(ref);
+          if(!snap.exists())return;
+          const remote=snap.data();
+          if(remote.status==='REALIZADO'||remote.completionCommittedAt){committed={...remote,id:p.id};return;}
+          if(remote.status!=='EN PROCESO'||remote.date!==p.date||
+             normalizeIdentityText(remote.analystName)!==normalizeIdentityText(p.analystName)||
+             (remote.actualFinishedAt&&remote.actualFinishedAt!==finish))return;
+          const at=nowISO();
+          committed={...remote,id:p.id,status:'REALIZADO',actualFinishedAt:finish,updatedAt:at,
+            completionCommittedAt:at,completionCommittedBy:'CONCILIACION_AUTOMATICA',
+            completionOperationId:`AUTO-RECOVERY-${p.id}-${event.id}`,
+            chiefClosure:{mode:'RECUPERACION_AUTOMATICA_VERIFICADA',actor:'SISTEMA',recordedAt:at,
+              evidenceId:event.id,actualFinishVerified:true,reason:'Cierre histórico verificado en Firebase'}};
+          tx.set(ref,{...committed,_cloudUpdatedAt:at},{merge:true});
+        });
+        if(committed){await put('planning',committed);repaired++;}
+      }catch(err){console.warn('Conciliación segura aplazada',p.id,err);}
+    }
+    if(repaired){toast(`${repaired} cierre(s) históricos conciliados con Firebase`);await refreshSyncUI();}
+  }finally{historicalAutoReconcileBusy=false;}
+}
 async function renderOpenActivitiesAudit(){
   const box=$('#openActivitiesAudit');if(!box)return;
   if(currentSessionUser?.role!=='JEFE'){box.classList.add('hidden');return}
   box.classList.remove('hidden');
+  await reconcileHistoricalClosuresSafely();
   const plans=await getAll('planning');
   const opened=plans.filter(p=>p.status==='EN PROCESO'||(p.actualStartedAt&&p.status!=='REALIZADO'&&p.status!=='CANCELADO'));
   const today=new Date().toISOString().slice(0,10);
@@ -5507,6 +5564,20 @@ async function smartSyncPendingUpdate(){
     if(detail){
       detail.textContent=`${waiting.length} por enviar · ${errors.length} con error`;
       detail.title=errors.slice(0,3).map(x=>`${x.entity||'Registro'}: ${String(x.lastError||'Sin detalle').slice(0,150)}`).join('\n');
+    }
+    const diagnostics=document.getElementById('smartSyncErrorDiagnostics');
+    if(diagnostics){
+      diagnostics.replaceChildren();
+      if(errors.length){
+        const title=document.createElement('strong');title.textContent=`Detalle de ${errors.length} operación(es) con error en ESTA computadora`;
+        diagnostics.append(title);
+        for(const x of errors.slice(0,25)){
+          const line=document.createElement('div');line.style.cssText='padding:7px 0;border-bottom:1px solid #dbe3eb;overflow-wrap:anywhere';
+          line.textContent=`${x.entity||'desconocido'} · ${x.recordId||x.id||'sin ID'} · ${String(x.lastError||'Error sin descripción').slice(0,300)}`;
+          diagnostics.append(line);
+        }
+        if(errors.length>25){const more=document.createElement('div');more.textContent=`Otros ${errors.length-25} errores no mostrados`;diagnostics.append(more);}
+      }else diagnostics.textContent='Sin errores locales en esta computadora.';
     }
     const retry=document.getElementById('smartSyncNextRetry');
     if(retry)retry.textContent=quotaPauseRemaining()>0?`Pausa por cuota: ${smartSyncDuration(quotaPauseRemaining())}`:outboxRetryNotBefore>Date.now()?`En ${smartSyncDuration(outboxRetryNotBefore-Date.now())}`:firebaseBridge.busy?'En curso':open.length?'Programado / esperando conexión':'No necesario';
