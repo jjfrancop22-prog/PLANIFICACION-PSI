@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.22';
+const APP_VERSION='V1.0.5.6.33.25.10.28.24';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -165,9 +165,10 @@ function setSyncState(state,detail=''){
 async function refreshSyncUI(){
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy)await reconcileConfirmedChartOutbox();
   const all=await getAll('outbox');
+  const blocked=all.filter(x=>x.status==='BLOQUEADO_PERMISOS');
   const pending=all.filter(x=>x.status==='PENDIENTE');
   const errors=all.filter(x=>x.status==='ERROR');
-  const open=pending.length+errors.length;
+  const open=pending.length+errors.length+blocked.length;
   if($('#syncPendingCount'))$('#syncPendingCount').textContent=String(open);
   if($('#syncLastAt'))$('#syncLastAt').textContent=firebaseBridge.lastSyncAt?fmtDate(firebaseBridge.lastSyncAt):'—';
   if($('#syncLastError'))$('#syncLastError').textContent=firebaseBridge.lastError||errors[0]?.lastError||'—';
@@ -180,9 +181,9 @@ async function refreshSyncUI(){
   // Un permiso faltante de Cartas no debe hacer creer que todo Firebase dejó de funcionar.
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy&&!smartSyncSleeping){
     const chartOpen=[...pending,...errors].filter(x=>x.entity==='controlChartDefs'||x.entity==='controlChartRecords');
-    const coreOpen=[...pending,...errors].filter(x=>x.entity!=='controlChartDefs'&&x.entity!=='controlChartRecords');
+    const coreOpen=[...pending,...errors,...blocked].filter(x=>x.entity!=='controlChartDefs'&&x.entity!=='controlChartRecords');
     if(coreOpen.length){
-      const coreErrors=coreOpen.filter(x=>x.status==='ERROR');
+      const coreErrors=coreOpen.filter(x=>x.status==='ERROR'||x.status==='BLOQUEADO_PERMISOS');
       setSyncStateVisualOnly(coreErrors.length?'ERROR':'PENDIENTE',`${coreOpen.length} cambio(s) del ERP sin confirmar`);
     }else if(chartOpen.length){
       const permission=chartOpen.some(x=>/permission|insufficient/i.test(String(x.lastError||'')));
@@ -514,6 +515,15 @@ async function flushOutbox(showToast=true){
 
     for(const item of items){
       try{
+        // 28.24: un ANALISTA no puede escribir catálogos ni configuración maestra.
+        // Conservar la operación intacta en Outbox para revisión del JEFE, sin reintentos.
+        if(currentSessionUser?.role!=='JEFE' && ['catalog','timeRules','compositeSteps','analysts','controlChartDefs'].includes(item.entity)){
+          item.status='BLOQUEADO_PERMISOS';
+          item.lastError='Operación protegida: este usuario no puede modificar '+item.entity+' en Firebase. Conservada para revisión del JEFE; no se reintentará automáticamente.';
+          item.blockedAt=nowISO();
+          await put('outbox',item);failed++;
+          continue;
+        }
         if(!FIREBASE_SYNC_STORES.includes(item.entity)){
           item.status='OMITIDO';
           item.lastError=`Entidad no sincronizable: ${item.entity}`;
@@ -583,6 +593,14 @@ async function flushOutbox(showToast=true){
           item.attempts=Number(item.attempts||0)+1;
           item.status='ERROR';item.lastError='Firebase quota/resource-exhausted · reintento automático diferido';
           await put('outbox',item);failed++;registerFirebaseQuotaError(err);break;
+        }
+        // Error de autorización definitivo: no saturar Firebase con reintentos
+        // ni eliminar el cambio local. Mantenerlo visible y exportable.
+        if(/permission-denied|missing or insufficient permissions/i.test(String(err?.code||'')+' '+String(err?.message||''))){
+          item.attempts=Number(item.attempts||0)+1;
+          item.status='BLOQUEADO_PERMISOS';item.blockedAt=nowISO();
+          item.lastError=String(err?.message||err);
+          await put('outbox',item);failed++;continue;
         }
         // Algunos Chrome/PWA pueden perder la respuesta de confirmación aunque
         // Firestore sí haya aplicado la escritura. Antes de pintar ERROR, leer
@@ -5556,24 +5574,24 @@ async function smartSyncPendingUpdate(){
   const el=document.getElementById('smartSyncPending');if(!el)return;
   try{
     const rows=await getAll('outbox');
-    const open=rows.filter(x=>x.status==='PENDIENTE'||x.status==='ERROR');
-    const errors=open.filter(x=>x.status==='ERROR');
+    const open=rows.filter(x=>x.status==='PENDIENTE'||x.status==='ERROR'||x.status==='BLOQUEADO_PERMISOS');
+    const errors=open.filter(x=>x.status==='ERROR'||x.status==='BLOQUEADO_PERMISOS');
     const waiting=open.filter(x=>x.status==='PENDIENTE');
     el.textContent=String(open.length);
     const detail=document.getElementById('smartSyncPendingDetail');
     if(detail){
-      detail.textContent=`${waiting.length} por enviar · ${errors.length} con error`;
+      detail.textContent=`${waiting.length} por enviar · ${errors.filter(x=>x.status==='ERROR').length} con error · ${errors.filter(x=>x.status==='BLOQUEADO_PERMISOS').length} bloqueados por permisos (conservados)`;
       detail.title=errors.slice(0,3).map(x=>`${x.entity||'Registro'}: ${String(x.lastError||'Sin detalle').slice(0,150)}`).join('\n');
     }
     const diagnostics=document.getElementById('smartSyncErrorDiagnostics');
     if(diagnostics){
       diagnostics.replaceChildren();
       if(errors.length){
-        const title=document.createElement('strong');title.textContent=`Detalle de ${errors.length} operación(es) con error en ESTA computadora`;
+        const title=document.createElement('strong');title.textContent=`Detalle de ${errors.length} operación(es) con error o bloqueadas en ESTA computadora (no eliminadas)`;
         diagnostics.append(title);
         for(const x of errors.slice(0,25)){
           const line=document.createElement('div');line.style.cssText='padding:7px 0;border-bottom:1px solid #dbe3eb;overflow-wrap:anywhere';
-          line.textContent=`${x.entity||'desconocido'} · ${x.recordId||x.id||'sin ID'} · ${String(x.lastError||'Error sin descripción').slice(0,300)}`;
+          line.textContent=`[${x.status}] ${x.entity||'desconocido'} · ${x.recordId||x.id||'sin ID'} · ${String(x.lastError||'Error sin descripción').slice(0,300)}`;
           diagnostics.append(line);
         }
         if(errors.length>25){const more=document.createElement('div');more.textContent=`Otros ${errors.length-25} errores no mostrados`;diagnostics.append(more);}
