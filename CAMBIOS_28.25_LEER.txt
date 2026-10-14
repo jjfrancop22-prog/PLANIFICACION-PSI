@@ -1,0 +1,7 @@
+V28.25 — Recuperación conservadora de cierres históricos.
+- Jefe: reconcilia cierres con evidencia de Firebase vinculada al ID, fecha, analista y actividad, incluso si el plan está PROGRAMADO.
+- No modifica inventario ni emite notificaciones nuevas.
+- No elimina las 12 operaciones de catálogo bloqueadas en Joe.
+- No reconstruye asignaciones faltantes automáticamente: Aceites + TPH requiere comprobar el registro en nube.
+- Probar primero en un sitio de prueba con las cuentas reales y respaldo previo.
+- Si Firestore no confirma el cierre, no se cambia el estado.

@@ -1935,7 +1935,7 @@ async function reconcileHistoricalClosuresSafely(){
     }
     const {doc,getDoc,runTransaction}=firebaseBridge.mods;
     let repaired=0;
-    for(const p of plans.filter(p=>p.status==='EN PROCESO'&&events.has(p.id)).slice(0,3)){
+    for(const p of plans.filter(p=>p.status!=='REALIZADO'&&p.status!=='CANCELADO'&&events.has(p.id)).slice(0,20)){
       if(outbox.some(x=>x.entity==='planning'&&x.recordId===p.id&&['PENDIENTE','ERROR'].includes(x.status)))continue;
       const event=events.get(p.id);
       try{
@@ -1946,19 +1946,21 @@ async function reconcileHistoricalClosuresSafely(){
         if(verified.planId!==p.id||verified.lifecycleStage!=='FINALIZACION'||
            !verified.closureEvidence?.finishedAt||verified.closureEvidence?.planId!==p.id||
            verified.closureEvidence?.date!==p.date||
+           (verified.closureEvidence?.activity&&normalizeIdentityText(verified.closureEvidence.activity)!==normalizeIdentityText(p.catalogName))||
            normalizeIdentityText(verified.closureEvidence?.analyst)!==normalizeIdentityText(p.analystName))continue;
         const finish=verified.closureEvidence.finishedAt;
         if(!Number.isFinite(Date.parse(finish)))continue;
-        const ref=doc(firebaseBridge.db,'planning',p.id);
+        const ref=doc(firebaseBridge.db,cloudCollectionFor('planning'),p.id);
         let committed=null;
         await runTransaction(firebaseBridge.db,async tx=>{
           const snap=await tx.get(ref);
           if(!snap.exists())return;
           const remote=snap.data();
           if(remote.status==='REALIZADO'||remote.completionCommittedAt){committed={...remote,id:p.id};return;}
-          if(remote.status!=='EN PROCESO'||remote.date!==p.date||
+          if(!['EN PROCESO','PROGRAMADO'].includes(remote.status)||remote.date!==p.date||
              normalizeIdentityText(remote.analystName)!==normalizeIdentityText(p.analystName)||
-             (remote.actualFinishedAt&&remote.actualFinishedAt!==finish))return;
+             (remote.actualFinishedAt&&remote.actualFinishedAt!==finish)||
+             (remote.catalogId&&p.catalogId&&remote.catalogId!==p.catalogId))return;
           const at=nowISO();
           committed={...remote,id:p.id,status:'REALIZADO',actualFinishedAt:finish,updatedAt:at,
             completionCommittedAt:at,completionCommittedBy:'CONCILIACION_AUTOMATICA',
@@ -1979,7 +1981,8 @@ async function renderOpenActivitiesAudit(){
   box.classList.remove('hidden');
   await reconcileHistoricalClosuresSafely();
   const plans=await getAll('planning');
-  const opened=plans.filter(p=>p.status==='EN PROCESO'||(p.actualStartedAt&&p.status!=='REALIZADO'&&p.status!=='CANCELADO'));
+  const knownClosures=new Set((await getAll('planComments')).filter(c=>c.lifecycleStage==='FINALIZACION'&&c.planId).map(c=>c.planId));
+  const opened=plans.filter(p=>p.status!=='REALIZADO'&&p.status!=='CANCELADO'&&(p.status==='EN PROCESO'||p.actualStartedAt||knownClosures.has(p.id)));
   const today=new Date().toISOString().slice(0,10);
   opened.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.startTime||'').localeCompare(String(b.startTime||'')));
   const overdue=opened.filter(p=>String(p.date||'')<today).length;
@@ -3032,6 +3035,11 @@ async function renderMyDay(){
     _myDayUi.selectionStart=_activeEl.selectionStart;_myDayUi.selectionEnd=_activeEl.selectionEnd;
   }
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
+  // La revisión de jefe recupera cierres históricos confirmados, incluso si el plan figura PROGRAMADO.
+  // Nunca se ejecuta en la cuenta del analista ni modifica muestras o inventario.
+  if(currentSessionUser?.role==='JEFE'&&!historicalAutoReconcileBusy&&Date.now()-historicalAutoReconcileLast>=60000){
+    await reconcileHistoricalClosuresSafely();
+  }
   await renderMyDayControlCharts(date,analystId);
   const plans=(await visiblePlanningRows()).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
   $('#myDayEmpty').classList.toggle('hidden',plans.length>0);
