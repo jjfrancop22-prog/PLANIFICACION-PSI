@@ -566,7 +566,10 @@ async function flushOutbox(showToast=true){
               const closed=current?.status==='REALIZADO'||!!current?.completionCommittedAt;
               const incomingClosed=payload.status==='REALIZADO'||!!payload.completionCommittedAt;
               const remoteNewer=current && String(current.updatedAt||'')>String(payload.updatedAt||'');
-              if((closed&&!incomingClosed)||remoteNewer){remoteWinner=current;return;}
+              if((closed&&!incomingClosed)||(remoteNewer&&!incomingClosed)){remoteWinner=current;return;}
+              // Un cierre válido tiene prioridad sobre una revisión PROGRAMADO/EN PROCESO
+              // más reciente. El cierre jamás debe perderse por diferencia de relojes entre PCs.
+              if(closed&&incomingClosed){remoteWinner=current;return;}
               tx.set(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
             });
             if(remoteWinner){
@@ -580,6 +583,12 @@ async function flushOutbox(showToast=true){
           }
         }
 
+        const latestQueued=await getOne('outbox',item.id);
+        if(latestQueued && latestQueued.status==='PENDIENTE' &&
+           !sameCloudFunctionalPayload(cloudPayloadFor(item.entity,latestQueued.payload||{}),cloudPayloadFor(item.entity,item.payload||{}))){
+          firebaseBridge.flushRequested=true;
+          continue; // El usuario guardó una revisión nueva mientras se enviaba esta.
+        }
         item.status='SINCRONIZADO';
         item.syncedAt=nowISO();
         item.lastError=null;
@@ -714,7 +723,14 @@ async function applyCloudRecord(storeName,id,data){
   }
   // Nunca reabrir un cierre confirmado localmente por un snapshot antiguo.
   // El servidor queda protegido por transacciones y reglas de Firestore.
-  if(storeName==='planning' && local && (local.status==='REALIZADO'||local.completionCommittedAt) && !(clean.status==='REALIZADO'||clean.completionCommittedAt))return;
+  if(storeName==='planning'){
+    const localClosed=local&&(local.status==='REALIZADO'||!!local.completionCommittedAt);
+    const cloudClosed=clean.status==='REALIZADO'||!!clean.completionCommittedAt;
+    if(localClosed&&!cloudClosed)return;
+    // El cierre confirmado en Firestore debe reemplazar incluso una copia local
+    // PROGRAMADO con updatedAt futuro por reloj incorrecto en otra PC.
+    if(cloudClosed&&!localClosed){await put(storeName,clean);return;}
+  }
   if(shouldAcceptCloud(local,clean))await put(storeName,clean);
 }
 async function pullFirebaseData(showToast=true){

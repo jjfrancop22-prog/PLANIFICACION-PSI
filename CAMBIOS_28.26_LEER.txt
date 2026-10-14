@@ -1,0 +1,5 @@
+V28.26 - Proteccion multi-PC de cierres
+1. Prioridad del cierre frente a cambios abiertos y diferencias de reloj.
+2. Lectura del cierre remoto prevalece sobre copia local PROGRAMADO.
+3. Evita confirmar revision de Outbox superada durante el envio.
+IMPORTANTE: probar primero en entorno de prueba. No borra pendientes ni inventario.
