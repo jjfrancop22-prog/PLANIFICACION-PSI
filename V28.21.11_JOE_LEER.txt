@@ -1,0 +1,6 @@
+V28.21.11 · DIAGNÓSTICO SEGURO JOE FRANCO
+- Corrige el ID PLAN-1791983455364-0D5RU (cero).
+- El botón Verificar cuatro actividades en Firebase identifica fecha, analista, estado, marcas locales y outbox.
+- SOLO LECTURA: no regulariza ni duplica inventario.
+- Para los 3 cierres: JEFE > Centro de comunicaciones > Actividades abiertas > Recuperar cierre, únicamente después de validar evidencia y con Firebase operativo.
+- Validar en pruebas antes de publicar en Netlify.

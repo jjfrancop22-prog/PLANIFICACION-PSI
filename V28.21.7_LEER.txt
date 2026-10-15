@@ -1,0 +1,7 @@
+FASE 1 AHORRO DE LECTURAS
+- Se elimina getDocsFromServer de planning cada 3 minutos en la vista Planificador.
+- Se conservan los listeners onSnapshot para cambios en tiempo real.
+- Se suprimen notificaciones de metadatos sin cambios de documentos.
+- NO se alteran datos, estados de Joe, Outbox ni consumos.
+- No publicar sin prueba local. Medir lecturas por hora en Firebase antes y despues con carga comparable.
+- Otras fuentes importantes de lecturas: listeners completos de 8 colecciones y reconexiones; requieren una fase posterior con consultas acotadas y pruebas multi-PC.

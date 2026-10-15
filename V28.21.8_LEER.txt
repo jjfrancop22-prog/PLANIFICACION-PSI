@@ -1,0 +1,6 @@
+V28.21.8 · Optimización conservadora de lecturas
+- Evita getDocsFromServer de toda la planificación al abrir Planificador si el listener de Firestore ya entregó un snapshot de servidor en los últimos 15 minutos.
+- Si el listener no está activo, se mantiene la recuperación al servidor.
+- Se conserva la actualización manual, el tiempo real, la Outbox y los datos.
+- No modifica los cierres históricos de Joe ni inventario.
+- Prueba local primero; medir lecturas en Firestore antes de publicar.

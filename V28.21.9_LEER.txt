@@ -1,0 +1,8 @@
+V28.21.9 · Optimización de lecturas por analista
+
+- En sesiones ANALISTA con analystId: planning y planComments se consultan y escuchan filtradas por analystId.
+- JEFE conserva consultas completas y la vista general.
+- Un snapshot filtrado no elimina actividades locales de otros usuarios.
+- No se cambian reglas de Firebase, inventario, consumos, ni cierres históricos.
+- IMPORTANTE: si el perfil no tiene analystId, conserva lectura completa como medida de compatibilidad; revisar vinculación.
+- Probar primero localmente; no publicar sin validar asignaciones nuevas, cierres, comentarios y reconexiones.

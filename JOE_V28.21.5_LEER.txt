@@ -1,0 +1,7 @@
+V28.21.5 — Prueba local JEFE, sin publicación.
+1. Mi Jornada > 14/10/2026 > Joe Franco > Verificar cuatro actividades en Firebase.
+2. El diagnóstico comprueba la vista local y consulta el servidor cuando SDK lo permite.
+3. Los tres cierres históricos solo se regularizan con el botón JEFE existente, previa confirmación y motivo; esta versión NO los modifica automáticamente.
+4. Después de una recuperación confirmada, se actualizan Mi Jornada y los paneles.
+5. No se modificaron consumos, inventario, cartas de control ni reglas Firebase.
+6. La visibilidad en la PC de Joe no puede confirmarse sin acceder a esa sesión.

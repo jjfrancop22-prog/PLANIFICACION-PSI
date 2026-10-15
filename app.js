@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.24';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.11';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -65,7 +65,7 @@ async function queue(type,entity,payload){
 // 10.12 · Protección de cuota: no martillar Firestore cuando responde RESOURCE_EXHAUSTED.
 let firebaseQuotaPauseUntil=0;
 let firebaseQuotaFailures=0;
-let outboxRetryNotBefore=0; // 28.22: reintentos de fallos transitorios sin tormenta de escrituras
+let outboxRetryNotBefore=0; // 28.21: reintentos de fallos transitorios sin tormenta de escrituras
 function isFirebaseQuotaError(err){
   const t=String(err?.code||'')+' '+String(err?.message||err||'');
   return /resource-exhausted|quota exceeded|quota|too many requests|429/i.test(t);
@@ -102,6 +102,20 @@ function minutesToTime(m){m=((Number(m)||0)%1440+1440)%1440;return `${String(Mat
 const FIREBASE_SYNC_STORES=['catalog','timeRules','compositeSteps','analysts','planning','planComments','controlChartDefs','controlChartRecords'];
 // 6.33.4: Cartas usan colecciones propias; el núcleo estable conserva sus colecciones originales.
 function cloudCollectionFor(storeName){return storeName}
+// V28.21.10: reducir lecturas por rol sin cambiar la estructura de documentos.
+// Una consulta filtrada NUNCA es un inventario completo de la colección.
+function analystScopedCollection(storeName){
+  return currentSessionUser?.role==='ANALISTA' && !!currentSessionUser?.analystId &&
+    (storeName==='planning'||storeName==='planComments');
+}
+function cloudReadReference(storeName){
+  const {collection,query,where}=firebaseBridge.mods;
+  const base=collection(firebaseBridge.db,cloudCollectionFor(storeName));
+  return analystScopedCollection(storeName)
+    ? query(base,where('analystId','==',currentSessionUser.analystId))
+    : base;
+}
+
 function cloudPayloadFor(storeName,payload){return sanitizeCloudObject(payload||{})}
 // 6.33.25.2: ACK funcional para Cartas. Firestore puede devolver una marca temporal
 // distinta aunque el contenido técnico ya esté confirmado. Esas marcas no deben
@@ -118,10 +132,19 @@ function sameCloudFunctionalPayload(payload={},cloud={}){
   );
 }
 let chartAckReconcileBusy=false;
+// V28.21.10: la comprobación individual de ACK no debe leer Firestore
+// cada 15 segundos desde el watchdog visual. El listener ya confirma los ACK.
+// Como respaldo, verificar como máximo cada 5 minutos y nunca para un
+// analista (no tiene permiso para corregir definiciones administrativas).
+let lastChartAckCheckAt=0;
+const CHART_ACK_CHECK_INTERVAL_MS=5*60*1000;
 async function reconcileConfirmedChartOutbox(){
   if(chartAckReconcileBusy||firebaseBridge.busy||!firebaseBridge.ready||!firebaseBridge.authUser)return 0;
+  if(currentSessionUser?.role==='ANALISTA')return 0;
+  if(Date.now()-lastChartAckCheckAt<CHART_ACK_CHECK_INTERVAL_MS)return 0;
   const open=(await getAll('outbox')).filter(x=>(x.entity==='controlChartDefs'||x.entity==='controlChartRecords')&&(x.status==='PENDIENTE'||x.status==='ERROR')&&x.type!=='DELETE');
   if(!open.length)return 0;
+  lastChartAckCheckAt=Date.now();
   chartAckReconcileBusy=true;let ack=0;
   try{
     const {doc,getDoc}=firebaseBridge.mods;
@@ -165,10 +188,9 @@ function setSyncState(state,detail=''){
 async function refreshSyncUI(){
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy)await reconcileConfirmedChartOutbox();
   const all=await getAll('outbox');
-  const blocked=all.filter(x=>x.status==='BLOQUEADO_PERMISOS');
   const pending=all.filter(x=>x.status==='PENDIENTE');
   const errors=all.filter(x=>x.status==='ERROR');
-  const open=pending.length+errors.length+blocked.length;
+  const open=pending.length+errors.length;
   if($('#syncPendingCount'))$('#syncPendingCount').textContent=String(open);
   if($('#syncLastAt'))$('#syncLastAt').textContent=firebaseBridge.lastSyncAt?fmtDate(firebaseBridge.lastSyncAt):'—';
   if($('#syncLastError'))$('#syncLastError').textContent=firebaseBridge.lastError||errors[0]?.lastError||'—';
@@ -181,9 +203,9 @@ async function refreshSyncUI(){
   // Un permiso faltante de Cartas no debe hacer creer que todo Firebase dejó de funcionar.
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy&&!smartSyncSleeping){
     const chartOpen=[...pending,...errors].filter(x=>x.entity==='controlChartDefs'||x.entity==='controlChartRecords');
-    const coreOpen=[...pending,...errors,...blocked].filter(x=>x.entity!=='controlChartDefs'&&x.entity!=='controlChartRecords');
+    const coreOpen=[...pending,...errors].filter(x=>x.entity!=='controlChartDefs'&&x.entity!=='controlChartRecords');
     if(coreOpen.length){
-      const coreErrors=coreOpen.filter(x=>x.status==='ERROR'||x.status==='BLOQUEADO_PERMISOS');
+      const coreErrors=coreOpen.filter(x=>x.status==='ERROR');
       setSyncStateVisualOnly(coreErrors.length?'ERROR':'PENDIENTE',`${coreOpen.length} cambio(s) del ERP sin confirmar`);
     }else if(chartOpen.length){
       const permission=chartOpen.some(x=>/permission|insufficient/i.test(String(x.lastError||'')));
@@ -327,10 +349,11 @@ async function pullFirebaseStore(storeName){
   const physical=cloudCollectionFor(storeName);
   // 10.15: planning debe reconstruirse desde el servidor, no desde una vista local/cacheada.
   // Esto evita que una PC conserve una agenda parcial hasta que el usuario borre IndexedDB.
+  const readRef=cloudReadReference(storeName);
   const snap=storeName==='planning' && typeof getDocsFromServer==='function'
-    ? await getDocsFromServer(collection(firebaseBridge.db,physical))
-    : await getDocs(collection(firebaseBridge.db,physical));
-  if(storeName==='planning')await reconcilePreviousSessionPlanningOutbox(snap.docs);
+    ? await getDocsFromServer(readRef)
+    : await getDocs(readRef);
+  if(storeName==='planning' && !analystScopedCollection(storeName))await reconcilePreviousSessionPlanningOutbox(snap.docs);
   let count=0;
   for(const d of snap.docs){
     const data=d.data();
@@ -338,7 +361,7 @@ async function pullFirebaseStore(storeName){
     await applyCloudRecord(storeName,d.id,data);
     count++;
   }
-  if(storeName==='planning'){
+  if(storeName==='planning' && !analystScopedCollection(storeName)){
     await reconcilePlanningAgainstCloud(new Set(snap.docs.map(d=>d.id)));
   }
   return count;
@@ -515,13 +538,13 @@ async function flushOutbox(showToast=true){
 
     for(const item of items){
       try{
-        // 28.24: un ANALISTA no puede escribir catálogos ni configuración maestra.
-        // Conservar la operación intacta en Outbox para revisión del JEFE, sin reintentos.
-        if(currentSessionUser?.role!=='JEFE' && ['catalog','timeRules','compositeSteps','analysts','controlChartDefs'].includes(item.entity)){
+        // Joe / analistas: los catálogos son de solo lectura según firestore.rules.
+        // Conservar la operación para auditoría, sin reintentar escrituras prohibidas.
+        if(currentSessionUser?.role==='ANALISTA' && ['catalog','timeRules','compositeSteps','analysts','controlChartDefs'].includes(item.entity)){
           item.status='BLOQUEADO_PERMISOS';
-          item.lastError='Operación protegida: este usuario no puede modificar '+item.entity+' en Firebase. Conservada para revisión del JEFE; no se reintentará automáticamente.';
-          item.blockedAt=nowISO();
-          await put('outbox',item);failed++;
+          item.lastError='Escritura administrativa retenida: solo JEFE puede modificar '+item.entity;
+          item.blockedAt=item.blockedAt||nowISO();
+          await put('outbox',item);
           continue;
         }
         if(!FIREBASE_SYNC_STORES.includes(item.entity)){
@@ -566,10 +589,19 @@ async function flushOutbox(showToast=true){
               const closed=current?.status==='REALIZADO'||!!current?.completionCommittedAt;
               const incomingClosed=payload.status==='REALIZADO'||!!payload.completionCommittedAt;
               const remoteNewer=current && String(current.updatedAt||'')>String(payload.updatedAt||'');
-              if((closed&&!incomingClosed)||(remoteNewer&&!incomingClosed)){remoteWinner=current;return;}
-              // Un cierre válido tiene prioridad sobre una revisión PROGRAMADO/EN PROCESO
-              // más reciente. El cierre jamás debe perderse por diferencia de relojes entre PCs.
-              if(closed&&incomingClosed){remoteWinner=current;return;}
+              // V28.21.6: antes de subir una revisión ABIERTA, comprobar el evento
+              // determinístico de cierre de esta misma actividad. No permite que
+              // una copia antigua vuelva a escribir EN PROCESO tras una finalización.
+              // La lectura es parte de la misma transacción que decide la escritura.
+              if(!incomingClosed && current && !closed){
+                const closeRef=doc(firebaseBridge.db,cloudCollectionFor('planComments'),`AUTO-FINAL-${id}`);
+                const closeSnap=await tx.get(closeRef);
+                const ev=closeSnap.exists()?closeSnap.data():null;
+                if(ev?.planId===id && ev?.lifecycleStage==='FINALIZACION'){
+                  throw new Error('CIERRE_HISTORICO_PROTEGIDO: hay evento de finalización confirmado; no se sobrescribe la planificación abierta. Requiere conciliación por JEFE.');
+                }
+              }
+              if((closed&&!incomingClosed)||remoteNewer){remoteWinner=current;return;}
               tx.set(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
             });
             if(remoteWinner){
@@ -583,12 +615,6 @@ async function flushOutbox(showToast=true){
           }
         }
 
-        const latestQueued=await getOne('outbox',item.id);
-        if(latestQueued && latestQueued.status==='PENDIENTE' &&
-           !sameCloudFunctionalPayload(cloudPayloadFor(item.entity,latestQueued.payload||{}),cloudPayloadFor(item.entity,item.payload||{}))){
-          firebaseBridge.flushRequested=true;
-          continue; // El usuario guardó una revisión nueva mientras se enviaba esta.
-        }
         item.status='SINCRONIZADO';
         item.syncedAt=nowISO();
         item.lastError=null;
@@ -602,14 +628,6 @@ async function flushOutbox(showToast=true){
           item.attempts=Number(item.attempts||0)+1;
           item.status='ERROR';item.lastError='Firebase quota/resource-exhausted · reintento automático diferido';
           await put('outbox',item);failed++;registerFirebaseQuotaError(err);break;
-        }
-        // Error de autorización definitivo: no saturar Firebase con reintentos
-        // ni eliminar el cambio local. Mantenerlo visible y exportable.
-        if(/permission-denied|missing or insufficient permissions/i.test(String(err?.code||'')+' '+String(err?.message||''))){
-          item.attempts=Number(item.attempts||0)+1;
-          item.status='BLOQUEADO_PERMISOS';item.blockedAt=nowISO();
-          item.lastError=String(err?.message||err);
-          await put('outbox',item);failed++;continue;
         }
         // Algunos Chrome/PWA pueden perder la respuesta de confirmación aunque
         // Firestore sí haya aplicado la escritura. Antes de pintar ERROR, leer
@@ -654,7 +672,7 @@ async function flushOutbox(showToast=true){
       setSyncStateVisualOnly(failed?'ERROR':'PENDIENTE',`${open.length} cambio(s) sin confirmar`);
       firebaseBridge.flushRequested=true;
       if(failed && quotaPauseRemaining()===0){
-        // 28.22: errores no-cuota: esperar 30 s; una respuesta lenta no debe
+        // 28.21: errores no-cuota: esperar 30 s; una respuesta lenta no debe
         // causar un bucle de reenvíos cada 2,5 s en seis computadoras.
         outboxRetryNotBefore=Date.now()+30000;
       }
@@ -723,13 +741,18 @@ async function applyCloudRecord(storeName,id,data){
   }
   // Nunca reabrir un cierre confirmado localmente por un snapshot antiguo.
   // El servidor queda protegido por transacciones y reglas de Firestore.
-  if(storeName==='planning'){
-    const localClosed=local&&(local.status==='REALIZADO'||!!local.completionCommittedAt);
-    const cloudClosed=clean.status==='REALIZADO'||!!clean.completionCommittedAt;
-    if(localClosed&&!cloudClosed)return;
-    // El cierre confirmado en Firestore debe reemplazar incluso una copia local
-    // PROGRAMADO con updatedAt futuro por reloj incorrecto en otra PC.
-    if(cloudClosed&&!localClosed){await put(storeName,clean);return;}
+  if(storeName==='planning' && local && (local.status==='REALIZADO'||local.completionCommittedAt) && !(clean.status==='REALIZADO'||clean.completionCommittedAt))return;
+  // Un cierre confirmado por Firestore prevalece sobre una copia local abierta,
+  // incluso cuando el reloj local tenga updatedAt más reciente.
+  if(storeName==='planning' && (clean.status==='REALIZADO'||clean.completionCommittedAt) && local && !(local.status==='REALIZADO'||local.completionCommittedAt)){
+    await put(storeName,clean);
+    // Neutralizar solamente las revisiones antiguas de ESTA planificación.
+    for(const op of (await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===clean.id&&(x.status==='PENDIENTE'||x.status==='ERROR'))){
+      if(op.payload?.status!=='REALIZADO'&&!op.payload?.completionCommittedAt){
+        op.status='CONFLICTO_LOCAL';op.lastError='Estado local anterior al cierre confirmado en Firebase';await put('outbox',op);
+      }
+    }
+    return;
   }
   if(shouldAcceptCloud(local,clean))await put(storeName,clean);
 }
@@ -755,6 +778,7 @@ async function pullFirebaseData(showToast=true){
   }
 }
 function stopRealtimeSync(){
+  lastPlanningAuthoritativeSnapshotAt=0;
   firebaseBridge.unsubs.forEach(fn=>{try{fn()}catch{}});
   firebaseBridge.unsubs=[];
 }
@@ -765,7 +789,8 @@ function startRealtimeSync(){
   FIREBASE_SYNC_STORES.forEach(storeName=>{
     let listenerReady=false;
     const physical=cloudCollectionFor(storeName);
-    const unsub=onSnapshot(collection(firebaseBridge.db,physical),{includeMetadataChanges:true},async snap=>{
+    // V28.21.7: evitar eventos extra de metadatos; los cambios de documentos siguen en tiempo real.
+    const unsub=onSnapshot(cloudReadReference(storeName),async snap=>{
       let changed=false, incomingComments=[];
       // 10.25: los snapshots producidos por nuestras propias escrituras pendientes
       // no son un cambio remoto nuevo y no deben provocar un repintado.
@@ -822,10 +847,14 @@ function startRealtimeSync(){
       // IDs que existen AHORA en Firestore y retiramos cualquier planificación local
       // huérfana (salvo cambios locales todavía pendientes de subir).
       if(storeName==='planning' && !snap.metadata.fromCache){
+        lastPlanningAuthoritativeSnapshotAt=Date.now();
         // 10.15: jamás interpretar un snapshot de caché como listado canónico.
         // Un snapshot parcial/cacheado no puede borrar actividades válidas de IndexedDB.
-        const pruned=await reconcilePlanningAgainstCloud(new Set(snap.docs.map(d=>d.id)));
-        if(pruned)changed=true;
+        // Un snapshot filtrado por analista no autoriza borrar otras asignaciones locales.
+        if(!analystScopedCollection(storeName)){
+          const pruned=await reconcilePlanningAgainstCloud(new Set(snap.docs.map(d=>d.id)));
+          if(pruned)changed=true;
+        }
       }
       if(changed){
         firebaseBridge.lastSyncAt=nowISO();
@@ -940,9 +969,17 @@ async function reconcileVisibleInterface(reason='REMOTE'){
   }
 }
 let lastPlanningServerHealAt=0;
+let lastPlanningAuthoritativeSnapshotAt=0; // Fecha del último snapshot planning confirmado por servidor
 async function selfHealPlanningFromServer(force=false){
   if(!firebaseBridge.ready||!firebaseBridge.authUser)return 0;
   const now=Date.now();
+  // Si el listener ya entregó una vista completa desde el servidor, evitar
+  // descargar de nuevo TODA la planificación al entrar al Planificador.
+  // Conservamos el botón de actualización manual y la ruta de recuperación
+  // cuando el listener no está activo o no existe confirmación reciente.
+  if(!force && firebaseBridge.unsubs.length && !smartSyncSleeping &&
+     lastPlanningAuthoritativeSnapshotAt>0 &&
+     now-lastPlanningAuthoritativeSnapshotAt<15*60*1000)return 0;
   if(!force && now-lastPlanningServerHealAt<120000)return 0;
   lastPlanningServerHealAt=now;
   try{
@@ -1933,72 +1970,12 @@ function communicationCounts(t,key){
   const items=t.items.filter(communicationDisplayableComment);
   return {events:items.length,messages:items.filter(c=>communicationCategory(c)==='CONVERSACION').length,technical:items.filter(c=>communicationCategory(c)==='TECNICA').length,unread:items.filter(c=>communicationUnread(c,key)).length};
 }
-// 28.23: conciliación conservadora de cierres históricos con evidencia CONFIRMADA.
-// Nunca fabrica horas, ni genera notificaciones, ni mueve inventario.
-let historicalAutoReconcileBusy=false;
-let historicalAutoReconcileLast=0;
-async function reconcileHistoricalClosuresSafely(){
-  if(historicalAutoReconcileBusy||Date.now()-historicalAutoReconcileLast<60000||
-     !firebaseBridge.ready||!firebaseBridge.authUser||firebaseBridge.busy||
-     quotaPauseRemaining()>0||currentSessionUser?.role!=='JEFE')return;
-  historicalAutoReconcileBusy=true;historicalAutoReconcileLast=Date.now();
-  try{
-    const [plans,comments,outbox]=await Promise.all([getAll('planning'),getAll('planComments'),getAll('outbox')]);
-    const events=new Map();
-    for(const c of comments){
-      if(!c.planId||c.lifecycleStage!=='FINALIZACION'||!c.closureEvidence?.finishedAt)continue;
-      if(!events.has(c.planId)||String(c.createdAt||'')>String(events.get(c.planId).createdAt||''))events.set(c.planId,c);
-    }
-    const {doc,getDoc,runTransaction}=firebaseBridge.mods;
-    let repaired=0;
-    for(const p of plans.filter(p=>p.status!=='REALIZADO'&&p.status!=='CANCELADO'&&events.has(p.id)).slice(0,20)){
-      if(outbox.some(x=>x.entity==='planning'&&x.recordId===p.id&&['PENDIENTE','ERROR'].includes(x.status)))continue;
-      const event=events.get(p.id);
-      try{
-        // La evidencia debe existir en el servidor, no solo en IndexedDB.
-        const evSnap=await getDoc(doc(firebaseBridge.db,'planComments',event.id));
-        if(!evSnap.exists())continue;
-        const verified=evSnap.data();
-        if(verified.planId!==p.id||verified.lifecycleStage!=='FINALIZACION'||
-           !verified.closureEvidence?.finishedAt||verified.closureEvidence?.planId!==p.id||
-           verified.closureEvidence?.date!==p.date||
-           (verified.closureEvidence?.activity&&normalizeIdentityText(verified.closureEvidence.activity)!==normalizeIdentityText(p.catalogName))||
-           normalizeIdentityText(verified.closureEvidence?.analyst)!==normalizeIdentityText(p.analystName))continue;
-        const finish=verified.closureEvidence.finishedAt;
-        if(!Number.isFinite(Date.parse(finish)))continue;
-        const ref=doc(firebaseBridge.db,cloudCollectionFor('planning'),p.id);
-        let committed=null;
-        await runTransaction(firebaseBridge.db,async tx=>{
-          const snap=await tx.get(ref);
-          if(!snap.exists())return;
-          const remote=snap.data();
-          if(remote.status==='REALIZADO'||remote.completionCommittedAt){committed={...remote,id:p.id};return;}
-          if(!['EN PROCESO','PROGRAMADO'].includes(remote.status)||remote.date!==p.date||
-             normalizeIdentityText(remote.analystName)!==normalizeIdentityText(p.analystName)||
-             (remote.actualFinishedAt&&remote.actualFinishedAt!==finish)||
-             (remote.catalogId&&p.catalogId&&remote.catalogId!==p.catalogId))return;
-          const at=nowISO();
-          committed={...remote,id:p.id,status:'REALIZADO',actualFinishedAt:finish,updatedAt:at,
-            completionCommittedAt:at,completionCommittedBy:'CONCILIACION_AUTOMATICA',
-            completionOperationId:`AUTO-RECOVERY-${p.id}-${event.id}`,
-            chiefClosure:{mode:'RECUPERACION_AUTOMATICA_VERIFICADA',actor:'SISTEMA',recordedAt:at,
-              evidenceId:event.id,actualFinishVerified:true,reason:'Cierre histórico verificado en Firebase'}};
-          tx.set(ref,{...committed,_cloudUpdatedAt:at},{merge:true});
-        });
-        if(committed){await put('planning',committed);repaired++;}
-      }catch(err){console.warn('Conciliación segura aplazada',p.id,err);}
-    }
-    if(repaired){toast(`${repaired} cierre(s) históricos conciliados con Firebase`);await refreshSyncUI();}
-  }finally{historicalAutoReconcileBusy=false;}
-}
 async function renderOpenActivitiesAudit(){
   const box=$('#openActivitiesAudit');if(!box)return;
   if(currentSessionUser?.role!=='JEFE'){box.classList.add('hidden');return}
   box.classList.remove('hidden');
-  await reconcileHistoricalClosuresSafely();
   const plans=await getAll('planning');
-  const knownClosures=new Set((await getAll('planComments')).filter(c=>c.lifecycleStage==='FINALIZACION'&&c.planId).map(c=>c.planId));
-  const opened=plans.filter(p=>p.status!=='REALIZADO'&&p.status!=='CANCELADO'&&(p.status==='EN PROCESO'||p.actualStartedAt||knownClosures.has(p.id)));
+  const opened=plans.filter(p=>p.status==='EN PROCESO'||(p.actualStartedAt&&p.status!=='REALIZADO'&&p.status!=='CANCELADO'));
   const today=new Date().toISOString().slice(0,10);
   opened.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.startTime||'').localeCompare(String(b.startTime||'')));
   const overdue=opened.filter(p=>String(p.date||'')<today).length;
@@ -2028,6 +2005,9 @@ async function chiefCloseOpenActivity(id){
   if(!p||p.status==='REALIZADO'||p.status==='CANCELADO')return toast('Actividad ya cerrada o modificada: actualice la lista');
   const evidence=(await getAll('planComments')).filter(c=>c.planId===id&&(c.lifecycleStage==='FINALIZACION'||(/^AUTO-FINAL-/.test(String(c.id||''))&&/FINALIZACI[ÓO]N/i.test(String(c.text||''))))).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')))[0];
   const historical=!!(evidence||p.actualFinishedAt);
+  // V28.21.4: la regularización histórica exige evidencia de FINALIZACION
+  // confirmada en Firestore, no solo una notificación almacenada localmente.
+  if(!evidence || evidence.planId!==id || evidence.lifecycleStage!=='FINALIZACION')return alert('No existe evidencia de finalización válida para esta actividad. No se modificó nada.');
   if(!firebaseBridge.ready||!firebaseBridge.authUser||quotaPauseRemaining()>0)return alert('Firebase no puede confirmar el cierre. No se modificó nada.');
   const open=(await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===id&&['PENDIENTE','ERROR'].includes(x.status));
   if(open.length)return alert('Existen cambios pendientes para esta actividad. No se modificó nada.');
@@ -2038,8 +2018,13 @@ async function chiefCloseOpenActivity(id){
   // El evento de creación del comentario no demuestra por sí mismo la hora real de finalización.
   // Si no existe actualFinishedAt, conservar únicamente el momento administrativo del cierre.
   const operationAt=nowISO();
-  const {doc,runTransaction}=firebaseBridge.mods;
+  const {doc,runTransaction,getDoc}=firebaseBridge.mods;
   const ref=doc(firebaseBridge.db,cloudCollectionFor('planning'),id);
+  try{
+    const cloudEvidence=await getDoc(doc(firebaseBridge.db,cloudCollectionFor('planComments'),evidence.id));
+    const ev=cloudEvidence.exists()?cloudEvidence.data():null;
+    if(!ev || ev.planId!==id || ev.lifecycleStage!=='FINALIZACION')return alert('El evento de cierre no está confirmado en Firebase. No se modificó nada.');
+  }catch(err){return alert('No se pudo validar la evidencia en Firebase: '+String(err?.message||err));}
   let committed=null;
   try{
     await runTransaction(firebaseBridge.db,async tx=>{
@@ -2048,6 +2033,7 @@ async function chiefCloseOpenActivity(id){
       const remote=snap.data();
       if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw new Error('Esta actividad ya fue finalizada en Firebase. Actualice la vista.');
       if(remote.status==='CANCELADO')throw new Error('La actividad está cancelada en Firebase.');
+      if(String(remote.analystId||'')!==String(p.analystId||'')||String(remote.date||'')!==String(p.date||''))throw new Error('La identidad o fecha de la actividad cambió; no se permite conciliar.');
       if(String(remote.updatedAt||'')!==String(p.updatedAt||''))throw new Error('La actividad cambió en otra computadora. Actualice antes de corregir.');
       const finished=remote.actualFinishedAt||p.actualFinishedAt||null;
       const candidate={...remote,status:'REALIZADO',updatedAt:operationAt,
@@ -2071,7 +2057,7 @@ async function chiefCloseOpenActivity(id){
     await audit(historical?'RECUPERAR_CIERRE_HISTORICO':'CIERRE_MANUAL_JEFE','CENTRO_COMUNICACIONES',p.code||p.id,`Confirmado Firebase · JEFE: ${currentSessionUser?.email||''} · Motivo: ${reason.trim()} · Evidencia: ${evidence?.id||'sin evento'} · Hora real conservada: ${committed.actualFinishedAt||'no verificada'} · Sin movimientos de inventario.`);
   }catch(localErr){console.error('Firebase confirmó cierre, pero falló la copia local',localErr);alert('Firebase confirmó el cierre, pero falló la actualización local. Actualice desde nube cuando esté disponible.');return;}
   toast('Cierre CONFIRMADO por Firebase; inventario sin cambios');
-  await renderOpenActivitiesAudit();await refreshSyncUI();
+  await renderOpenActivitiesAudit();await renderMyDay();await renderAgenda();await renderDailyLoad();await refreshSyncUI();
 }
 
 async function renderCommunications(){
@@ -2789,6 +2775,12 @@ async function submitFinishActivity(e){
   e.preventDefault();
   let p=await getOne('planning',$('#finishActivityPlanId').value);if(!p)return;
   p=await hydratePlanTechnicalRequirements(p);
+  // V28.21.3: impedir un segundo cierre si ya existe evidencia histórica exacta.
+  const priorClosure=(await getAll('planComments')).some(c=>c.planId===p.id&&c.lifecycleStage==='FINALIZACION');
+  if(p.status==='REALIZADO'||priorClosure){
+    alert('Cierre previo detectado para esta actividad. No se permite finalizar otra vez. Solicite al JEFE la conciliación verificada en Firebase.');
+    return;
+  }
   const mode=$('#finishTechnicalEditMode')?.value||'0';
 
   let calibrationResult=undefined;
@@ -3051,11 +3043,6 @@ async function renderMyDay(){
     _myDayUi.selectionStart=_activeEl.selectionStart;_myDayUi.selectionEnd=_activeEl.selectionEnd;
   }
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
-  // La revisión de jefe recupera cierres históricos confirmados, incluso si el plan figura PROGRAMADO.
-  // Nunca se ejecuta en la cuenta del analista ni modifica muestras o inventario.
-  if(currentSessionUser?.role==='JEFE'&&!historicalAutoReconcileBusy&&Date.now()-historicalAutoReconcileLast>=60000){
-    await reconcileHistoricalClosuresSafely();
-  }
   await renderMyDayControlCharts(date,analystId);
   const plans=(await visiblePlanningRows()).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
   $('#myDayEmpty').classList.toggle('hidden',plans.length>0);
@@ -3083,11 +3070,76 @@ async function renderMyDay(){
       </div>
     </div>`:'';
   const steps=await getAll('compositeSteps'),allComments=await getAll('planComments'),catalogForRequirements=await getAll('catalog');
+  // V28.21.3: evidencias de cierre vinculadas por ID exacto, solo diagnóstico.
+  // Una notificación NO autoriza a modificar automáticamente el estado en Firestore.
+  const joeClosureMap=new Map();
+  for(const c of allComments){
+    if(c.planId && c.lifecycleStage==='FINALIZACION'){
+      const prev=joeClosureMap.get(c.planId);
+      if(!prev || String(c.createdAt||'')>String(prev.createdAt||''))joeClosureMap.set(c.planId,c);
+    }
+  }
+  const joeDiscrepancies=plans.filter(p=>p.status!=='REALIZADO' && (joeClosureMap.has(p.id)||p.actualFinishedAt));
+  // V28.21.3: consulta diagnóstica exclusivamente de lectura sobre los cuatro IDs
+  // originales de Joe, para identificar asignación y existencia en Firestore.
+  const joeOriginalIds=['PLAN-1791983455364-0D5RU','PLAN-1791983475472-P4BVA','PLAN-1791984302158-CHYL1','PLAN-1791984327041-5XRAX'];
+  const joeDeletedIds=await getDeletedPlanningIds();
+  if(date==='2026-10-14'&&analystId==='ANA-1788444774891-HQXWD'){
+    const checker=document.createElement('div');
+    checker.style.cssText='margin:12px 0;padding:12px;border:1px solid #b9d2eb;border-radius:10px;background:#f0f7ff';
+    checker.innerHTML='<strong>Diagnóstico Joe · 4 asignaciones originales (V28.21.6)</strong><br><small>Solo lectura. Compara registros locales, marcas de eliminación y Firebase sin crear ni modificar actividades.</small><br><button type="button" class="btn secondary compact" id="joeCloudCheck">Verificar cuatro actividades en Firebase</button><pre id="joeCloudCheckResult" style="white-space:pre-wrap;font-size:12px;max-height:300px;overflow:auto"></pre>';
+    $('#myDaySummary').appendChild(checker);
+    checker.querySelector('#joeCloudCheck').onclick=async()=>{
+      const output=checker.querySelector('#joeCloudCheckResult');
+      if(!firebaseBridge.ready||!firebaseBridge.authUser){output.textContent='Firebase no está conectado; no se modificó nada.';return;}
+      output.textContent='Consultando Firebase (solo lectura)…';
+      const {doc,getDoc,getDocFromServer}=firebaseBridge.mods, lines=[];
+      const serverRead=typeof getDocFromServer==='function'?getDocFromServer:getDoc;
+      const localRows=await visiblePlanningRows();
+      for(const id of joeOriginalIds){
+        try{
+          const local=await getOne('planning',id);
+          const snap=await serverRead(doc(firebaseBridge.db,cloudCollectionFor('planning'),id));
+          const remote=snap.exists()?snap.data():null;
+          const inDay=localRows.some(x=>x.id===id&&x.date===date&&x.analystId===analystId&&x.status!=='CANCELADO');
+          const pending=(await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===id&&['PENDIENTE','ERROR'].includes(x.status));
+          const reasons=[];
+          if(!remote)reasons.push('NO EXISTE EN FIREBASE');
+          else{
+            if(String(remote.analystId||'')!==analystId)reasons.push('ASIGNADA A OTRO ID DE ANALISTA');
+            if(String(remote.date||'')!==date)reasons.push('FECHA DIFERENTE');
+            if(remote.status==='CANCELADO')reasons.push('CANCELADA');
+            if(remote.status==='REALIZADO')reasons.push('YA FINALIZADA EN SERVIDOR');
+          }
+          if(joeDeletedIds.has(id))reasons.push('MARCA LOCAL DE ELIMINACIÓN');
+          if(remote&&!local)reasons.push('EXISTE EN FIREBASE PERO FALTA EN INDEXEDDB');
+          if(pending.length)reasons.push('OUTBOX PENDIENTE/ERROR');
+          if(remote&&!inDay&&!reasons.length)reasons.push('REVISAR FILTRO DE JORNADA / SINCRONIZACIÓN');
+          lines.push(`${id}\n  LOCAL: ${local?.status||'NO EXISTE'} · analista=${local?.analystId||'—'} · fecha=${local?.date||'—'} · marcado eliminado local=${joeDeletedIds.has(id)?'SI':'NO'} · visible en Mi Jornada=${inDay?'SI':'NO'}\n  FIREBASE: ${remote?.status||'NO EXISTE'} · analista=${remote?.analystId||'—'} · fecha=${remote?.date||'—'} · cierre=${remote?.completionCommittedAt||'—'}\n  OUTBOX planificación pendiente/error=${pending.length} · lectura=${typeof getDocFromServer==='function'?'SERVIDOR':'SDK (puede usar caché)'}\n  DIAGNÓSTICO: ${reasons.join(' / ')||'Sin discrepancia de asignación o fecha'}`);
+        }catch(err){lines.push(`${id}: lectura no disponible (${String(err?.code||err?.message||err)})`);}
+      }
+      output.textContent=lines.join('\n\n');
+    };
+  }
+
+  if(joeDiscrepancies.length && currentSessionUser?.role==='JEFE'){
+    const warning=document.createElement('div');
+    warning.style.cssText='margin:12px 0;padding:14px;border:1px solid #e6b450;border-radius:10px;background:#fff8e8;color:#633d00';
+    warning.innerHTML=`<strong>⚠ ${joeDiscrepancies.length} actividad(es) con evidencia de cierre y estado abierto</strong><br><small>El historial y la planificación no coinciden. No se modificó Firebase ni el inventario. Evite finalizar de nuevo. <button type="button" id="joeExportDiagnostic" style="margin-left:8px;padding:6px 10px">Exportar diagnóstico JSON</button></small>`;
+    $('#myDaySummary').appendChild(warning);
+    warning.querySelector('#joeExportDiagnostic').onclick=async()=>{
+      const outbox=(await getAll('outbox')).filter(x=>x.entity==='planning'&&plans.some(p=>p.id===x.recordId));
+      const report={build:APP_VERSION,date,analystId,generatedAt:nowISO(),records:plans.map(p=>({id:p.id,code:p.code,catalogName:p.catalogName,status:p.status,updatedAt:p.updatedAt,actualStartedAt:p.actualStartedAt||null,actualFinishedAt:p.actualFinishedAt||null,completionCommittedAt:p.completionCommittedAt||null,completionOperationId:p.completionOperationId||null,closureEvents:allComments.filter(c=>c.planId===p.id&&c.lifecycleStage==='FINALIZACION').map(c=>({id:c.id,createdAt:c.createdAt,lifecycleStage:c.lifecycleStage})),pendingOutbox:outbox.filter(x=>x.recordId===p.id).map(x=>({id:x.id,status:x.status,type:x.type,lastError:x.lastError||null,payloadStatus:x.payload?.status||null}))}))};
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=document.createElement('a');a.href=url;a.download=`diagnostico_jornada_${date}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
+    };
+  }
   $('#myDayCards').innerHTML=plans.map((p,index)=>{
     let _catReq=catalogForRequirements.find(x=>x.id===p.catalogId);if(!_catReq)_catReq=catalogForRequirements.find(x=>x.section===p.section&&normalizeIdentityText(x.name)===normalizeIdentityText(p.catalogName));
     const _req={curve:planRequiresCalibration(p)||!!(_catReq?.calibrationConfig?.enabled&&_catReq.calibrationConfig?.points?.length),reagents:planHasReagents(p)||!!_catReq?.reagentConfig?.length};
     const ss=steps.filter(x=>x.catalogId===p.catalogId).sort((a,b)=>a.order-b.order);
-    const comments=allComments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));    const st=timeToMinutes(p.startTime),en=timeToMinutes(p.endTime);
+    const comments=allComments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
+    const joeClosureConflict=p.status!=='REALIZADO'&&(joeClosureMap.has(p.id)||!!p.actualFinishedAt);    const st=timeToMinutes(p.startTime),en=timeToMinutes(p.endTime);
     const isNow=p.id===active?.id,isNext=!isNow&&p.id===next?.id;
     const late=today&&p.status==='PROGRAMADO'&&nowMin>st&&!isNow;
     let smartLabel=isNow?'AHORA':isNext?'SIGUIENTE':late?'ATRASADA':'';
@@ -3098,7 +3150,7 @@ async function renderMyDay(){
     const action=p.status==='PROGRAMADO'
       ?(futureDay?`${flex}<button class="btn secondary myday-action future-locked" disabled>🗓 Disponible el ${formatShortDate(p.date)}</button>`:`${flex}<button class="btn primary myday-action" data-start-activity="${p.id}">▶ Iniciar actividad</button>`)
       :p.status==='EN PROCESO'
-        ?`<button class="btn primary myday-action" data-finish-activity="${p.id}">✓ Finalizar actividad</button>`
+        ?joeClosureConflict?`<button class="btn secondary myday-action" disabled title="Existe evidencia de finalización; requiere conciliación por JEFE">⚠ Cierre pendiente de conciliación</button>`:`<button class="btn primary myday-action" data-finish-activity="${p.id}">✓ Finalizar actividad</button>`
         :`<span class="done-pill">✓ Finalizada${p.actualFinishedAt?` · ${formatActualStamp(p.actualFinishedAt)}`:''}</span>`;
     let actual='';
     if(p.actualStartedAt){
@@ -3120,6 +3172,9 @@ async function renderMyDay(){
           <span class="status-pill status-${p.status.replaceAll(' ','-')}">${p.status}</span>
         </div>
         
+        ${joeClosureConflict?`<div style="padding:10px;margin:8px 0;border:1px solid #e6b450;border-radius:8px;background:#fff8e8;color:#633d00"><b>⚠ Cierre histórico detectado · estado actual ${escapeHtml(p.status)}</b><br><small>No vuelva a finalizar: requiere verificación de la planificación en Firebase.</small></div>`:''}
+        ${joeClosureConflict&&date==='2026-10-14'&&analystId==='ANA-1788444774891-HQXWD'&&currentSessionUser?.role==='JEFE'?`<button type="button" class="btn secondary compact" data-joe-reconcile="${escapeHtml(p.id)}">Revisar y recuperar cierre en Firebase (JEFE)</button>`:''}
+
         ${p.notes?`<div class="boss-note"><b>⚑ Instrucción del jefe</b><span>${escapeHtml(p.notes)}</span></div>`:''}
         ${ss.length?`<details class="myday-breakdown compact-breakdown" data-ui-key="breakdown-${p.id}"><summary>Ver desglose · ${ss.length} subactividades</summary><div>${ss.map(x=>`<span>• ${escapeHtml(x.name)} · ${minutesText(x.minutes)}</span>`).join('')}</div></details>`:''}
         ${requiresActualSamples(p.section)?`<div class="operational-samples-panel"><div><b>📋 Registro de muestras</b><small>${p.actualSamples!==null&&p.actualSamples!==undefined?`${p.actualSamples} muestras · ${Object.keys(p.sampleParameterCounts||{}).length} parámetros registrados`:'Pendiente: registre las muestras por parámetro'}</small></div><button type="button" class="btn secondary compact" data-operational-samples="${p.id}">${p.status==='REALIZADO'?'Ver muestras':'Registrar muestras'}</button></div>`:''}
@@ -3135,6 +3190,12 @@ async function renderMyDay(){
       </div>
     </article>`;
   }).join('');
+  // Reutiliza la transacción protegida existente: exige confirmación, motivo
+  // documentado, coincidencia updatedAt y ACK del servidor. No toca inventario.
+  $('#myDayCards').querySelectorAll('[data-joe-reconcile]').forEach(b=>b.addEventListener('click',async()=>{
+    await chiefCloseOpenActivity(b.dataset.joeReconcile);
+    await renderMyDay();
+  }));
   // Restaura exactamente lo que el usuario tenía abierto antes del refresco.
   // Los comentarios con historial siguen abiertos por defecto solo en la primera carga.
   if(_myDayUi.open.size){
@@ -5598,28 +5659,14 @@ async function smartSyncPendingUpdate(){
   const el=document.getElementById('smartSyncPending');if(!el)return;
   try{
     const rows=await getAll('outbox');
-    const open=rows.filter(x=>x.status==='PENDIENTE'||x.status==='ERROR'||x.status==='BLOQUEADO_PERMISOS');
-    const errors=open.filter(x=>x.status==='ERROR'||x.status==='BLOQUEADO_PERMISOS');
+    const open=rows.filter(x=>x.status==='PENDIENTE'||x.status==='ERROR');
+    const errors=open.filter(x=>x.status==='ERROR');
     const waiting=open.filter(x=>x.status==='PENDIENTE');
     el.textContent=String(open.length);
     const detail=document.getElementById('smartSyncPendingDetail');
     if(detail){
-      detail.textContent=`${waiting.length} por enviar · ${errors.filter(x=>x.status==='ERROR').length} con error · ${errors.filter(x=>x.status==='BLOQUEADO_PERMISOS').length} bloqueados por permisos (conservados)`;
+      detail.textContent=`${waiting.length} por enviar · ${errors.length} con error`;
       detail.title=errors.slice(0,3).map(x=>`${x.entity||'Registro'}: ${String(x.lastError||'Sin detalle').slice(0,150)}`).join('\n');
-    }
-    const diagnostics=document.getElementById('smartSyncErrorDiagnostics');
-    if(diagnostics){
-      diagnostics.replaceChildren();
-      if(errors.length){
-        const title=document.createElement('strong');title.textContent=`Detalle de ${errors.length} operación(es) con error o bloqueadas en ESTA computadora (no eliminadas)`;
-        diagnostics.append(title);
-        for(const x of errors.slice(0,25)){
-          const line=document.createElement('div');line.style.cssText='padding:7px 0;border-bottom:1px solid #dbe3eb;overflow-wrap:anywhere';
-          line.textContent=`[${x.status}] ${x.entity||'desconocido'} · ${x.recordId||x.id||'sin ID'} · ${String(x.lastError||'Error sin descripción').slice(0,300)}`;
-          diagnostics.append(line);
-        }
-        if(errors.length>25){const more=document.createElement('div');more.textContent=`Otros ${errors.length-25} errores no mostrados`;diagnostics.append(more);}
-      }else diagnostics.textContent='Sin errores locales en esta computadora.';
     }
     const retry=document.getElementById('smartSyncNextRetry');
     if(retry)retry.textContent=quotaPauseRemaining()>0?`Pausa por cuota: ${smartSyncDuration(quotaPauseRemaining())}`:outboxRetryNotBefore>Date.now()?`En ${smartSyncDuration(outboxRetryNotBefore-Date.now())}`:firebaseBridge.busy?'En curso':open.length?'Programado / esperando conexión':'No necesario';
@@ -5649,6 +5696,10 @@ function smartSyncWake(){
 setInterval(()=>{
   if(!firebaseBridge.ready||!firebaseBridge.authUser||smartSyncSleeping)return;
   if(Date.now()-smartSyncLastInteraction<SMART_SYNC_IDLE_MS)return;
+  // La pantalla Mi Jornada debe recibir asignaciones aunque el analista
+  // no toque el equipo. Un listener ocioso no factura lecturas por minuto:
+  // dormirlo obligaría a una lectura inicial completa al reactivarlo.
+  if(currentSessionUser?.role==='ANALISTA')return;
   stopRealtimeSync();
   smartSyncSleeping=true;
   smartSyncSleepAt=Date.now();
@@ -5665,15 +5716,11 @@ window.addEventListener('online',()=>{if(firebaseBridge.ready)reconcileAfterResu
 window.addEventListener('pageshow',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 window.addEventListener('focus',()=>{if(firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&firebaseBridge.ready&&firebaseBridge.authUser)reconcileAfterResume(false)});
-// 10.17 · Verificación silenciosa de integridad mientras el JEFE permanece planificando.
-// Respaldo de integridad cada 15 min: realtime permanece activo y recibe cambios al instante.
-// Evita descargar toda la colección planning cada 3 min durante el trabajo del jefe.
-// Solo corre con pestaña visible y Planificador abierto; no toca outbox ni inventario.
-setInterval(()=>{
-  if(document.hidden||smartSyncSleeping||!firebaseBridge.ready||!firebaseBridge.authUser)return;
-  if(!document.querySelector('#view-planificador.active'))return;
-  selfHealPlanningFromServer(true).then(()=>reconcileVisibleInterface('PLANNING_INTEGRITY')).catch(()=>{});
-},900000);
+// V28.21.7: se retira la lectura COMPLETA de planning cada 3 minutos.
+// El listener de planning ya recibe los cambios en tiempo real y reconcilia los IDs.
+// La consulta de recuperación al servidor sigue disponible al abrir Planificador
+// (selfHealPlanningFromServer con intervalo mínimo de 120 s) y en sincronización manual.
+// No se modifica la Outbox, las escrituras, el inventario ni las reglas de seguridad.
 // 10.8 · Heartbeat de transporte únicamente. Antes repintaba la vista cada 15 s y podía
 // cerrar el selector/reiniciar el formulario aunque no existiera ninguna acción del usuario.
 setInterval(async()=>{

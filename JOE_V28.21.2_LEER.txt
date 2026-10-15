@@ -1,0 +1,5 @@
+V28.21.2 - DIAGNÓSTICO NO DESTRUCTIVO
+Esta versión NO cambia automáticamente estados de actividades ni restaura asignaciones.
+Como JEFE: Mi Jornada > 14/10/2026 > Joe Franco. Si existe evidencia de finalización ligada al mismo planId, se muestra alerta y botón Exportar diagnóstico JSON.
+No publicar en producción todavía. No pulsar Finalizar de nuevo. No borrar los 12 errores.
+El JSON incluye identificadores técnicos, no credenciales.

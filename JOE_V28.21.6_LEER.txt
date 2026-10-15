@@ -1,0 +1,4 @@
+V28.21.6 — Protección adicional de sincronización de planificación abierta ante cierre histórico confirmado.
+No ejecuta recuperación automática ni modifica Firebase por sí sola.
+La recuperación por JEFE exige evidencia de FINALIZACION y coincidencia de analista/fecha.
+Validar localmente antes de publicar. No borrar los 12 errores locales de Joe.

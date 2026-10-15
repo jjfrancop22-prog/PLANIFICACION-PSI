@@ -1,0 +1,7 @@
+V28.21.10 - Ahorro de lecturas fase 3 (conservador)
+Base: V28.21.9.
+1) Evita lecturas getDoc de cartas cada 15 segundos por el watchdog: respaldo maximo una vez cada 5 minutos en JEFE, con confirmacion por listener conservada.
+2) Los analistas NO desconectan sus listeners por 10 minutos de inactividad: siguen recibiendo nuevas actividades y se evitan relecturas completas al reactivarse.
+3) Se conserva la sincronizacion, la Outbox, los consumos y los cierres; no se modifica Firebase.
+Pruebas: node --check app.js. Validacion funcional multi-PC pendiente.
+No publicar en produccion sin prueba de analista y jefe.

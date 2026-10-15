@@ -1,0 +1,7 @@
+V28.21.4 - PRUEBA LOCAL. No publicar hasta validar con Joe.
+1) La regularizacion JEFE exige evidencia de finalizacion confirmada en Firestore.
+2) Solo aparecen botones de recuperacion en las actividades de Joe del 14/10/2026.
+3) Diagnostico muestra marcas de eliminacion local para las cuatro asignaciones.
+4) No se han modificado datos de Firebase ni inventario al generar el ZIP.
+5) NO borre datos locales ni vuelva a finalizar actividades.
+6) Antes de recuperar cierres, exporte respaldo y confirme identidad/fecha.
