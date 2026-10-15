@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.38';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.43';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -5879,14 +5879,45 @@ async function master32Rows(){
   }
   return {catalogs,products:[...products.values()].sort((a,b)=>a.profile.name.localeCompare(b.profile.name,'es'))};
 }
+// Consulta de movimientos confirmados; no genera descuentos ni escribe inventario.
+async function master32ConsumptionData(){
+  const plans=await getAll('planning'), map=new Map();
+  for(const p of plans){
+    if(!p.reagentResult?.inventoryCommittedAt)continue;
+    for(const item of p.reagentResult.items||[]){
+      if(!item||item.notUsed||item.usedInActivity===false)continue;
+      const key=master32Key(item),used=Number(item.consumptionValue??item.used);
+      const row={id:p.id,key,at:p.reagentResult.inventoryCommittedAt,analyst:p.analystName||'—',activity:p.title||p.activityName||p.name||p.code||'Actividad',code:p.code||p.id,before:item.stockBefore,after:item.stockRemaining,used:Number.isFinite(used)?used:null,unit:item.consumptionUnit||item.unit||'unidad',mode:item.mode};
+      if(!map.has(key))map.set(key,[]);
+      map.get(key).push(row);
+    }
+  }
+  for(const rows of map.values())rows.sort((a,b)=>Date.parse(b.at||0)-Date.parse(a.at||0));
+  return map;
+}
 async function renderReagentMaster32(){
   const root=$('#master32Body');if(!root)return;
-  const {products}=await master32Rows();
+  const [{products},history]=await Promise.all([master32Rows(),master32ConsumptionData()]);
   const q=normalizeIdentityText($('#master32Search')?.value||'');
   const visible=products.filter(x=>!q||normalizeIdentityText(x.profile.name+' '+x.profile.lot).includes(q));
-  root.innerHTML=visible.length?visible.map(x=>{const r=x.profile;return `<tr><td><b>${escapeHtml(r.name)}</b><br><small>${escapeHtml(r.mode==='WEIGHT'?'Por peso':'Contable')}</small></td><td>${escapeHtml(r.lot||'—')}</td><td>${r.mode==='COUNT'?`${Number(r.stockQuantity||0)} ${escapeHtml(r.unit||'unidad')}`:'Control por envase'}</td><td>${x.assignments.size}</td><td><button class="btn secondary compact" data-master32-edit="${escapeHtml(x.key)}">Editar / asignar</button></td></tr>`}).join(''):'<tr><td colspan="5">Sin productos. Puede registrar uno nuevo o asignar productos existentes.</td></tr>';
+  root.innerHTML=visible.length?visible.map(x=>{
+    const r=x.profile,rows=history.get(x.key)||[],latest=rows[0];
+    const adjusted=Date.parse(r.stockAdjustedAt||0)||0,commit=Date.parse(latest?.at||0)||0;
+    const available=r.mode==='COUNT'?(latest&&commit>adjusted&&Number.isFinite(Number(latest.after))?Number(latest.after):Number(r.stockQuantity||0)):null;
+    const consumed=rows.reduce((sum,e)=>sum+(Number.isFinite(e.used)?e.used:0),0);
+    return `<tr><td><b>${escapeHtml(r.name)}</b><br><small>${escapeHtml(r.mode==='WEIGHT'?'Por peso':'Contable')}</small></td><td>${escapeHtml(r.lot||'—')}</td><td>${available!==null?`${available} ${escapeHtml(r.unit||'unidad')}`:'Control por envase'}<br><small>${latest?'Último consumo: '+escapeHtml(fmtDate(latest.at)):'Sin consumos confirmados'}</small></td><td>${rows.length?`${Number(consumed.toFixed(4))} ${escapeHtml(latest.unit)} · ${rows.length} movimiento(s)`:'—'}</td><td>${x.assignments.size}</td><td><button class="btn secondary compact" data-master32-history="${escapeHtml(x.key)}">Ver movimientos</button> <button class="btn secondary compact" data-master32-edit="${escapeHtml(x.key)}">Editar / asignar</button></td></tr>`;
+  }).join(''):'<tr><td colspan="6">Sin productos. Puede registrar uno nuevo o asignar productos existentes.</td></tr>';
   $$('[data-master32-edit]').forEach(b=>b.onclick=()=>openMaster32(b.dataset.master32Edit));
-  $('#master32Total').textContent=`${products.length} productos/lotes registrados en las fichas`;
+  $$('[data-master32-history]').forEach(b=>b.onclick=()=>showMaster32History(b.dataset.master32History));
+  $('#master32Total').textContent=`${products.length} productos/lotes registrados en las fichas · historial de consumos confirmados`;
+}
+async function showMaster32History(key){
+  const [data,master]=await Promise.all([master32ConsumptionData(),master32Rows()]);
+  const product=master.products.find(p=>p.key===key),rows=data.get(key)||[];
+  let dialog=$('#master32HistoryDialog');
+  if(!dialog){dialog=document.createElement('dialog');dialog.id='master32HistoryDialog';dialog.style.cssText='width:min(1000px,95vw);max-height:85vh;border:0;border-radius:16px;padding:24px';document.body.appendChild(dialog)}
+  dialog.innerHTML=`<div style="display:flex;justify-content:space-between;gap:16px;align-items:center"><h2>Movimientos · ${escapeHtml(product?.profile?.name||'Reactivo')} · lote ${escapeHtml(product?.profile?.lot||'—')}</h2><button class="btn secondary" id="closeMaster32History">Cerrar</button></div><p>Solo consumos registrados en actividades con confirmación de inventario. No realiza bajas ni modifica saldos.</p><div style="overflow:auto;max-height:55vh"><table><thead><tr><th>Fecha</th><th>Analista</th><th>Actividad</th><th>Consumo</th><th>Antes</th><th>Después</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${escapeHtml(fmtDate(r.at))}</td><td>${escapeHtml(r.analyst)}</td><td>${escapeHtml(r.activity)}<br><small>${escapeHtml(r.code)}</small></td><td>${r.used??'—'} ${escapeHtml(r.unit)}</td><td>${r.before??'—'}</td><td>${r.after??'—'}</td></tr>`).join(''):'<tr><td colspan="6">No hay movimientos confirmados en los datos sincronizados de esta computadora.</td></tr>'}</tbody></table></div>`;
+  $('#closeMaster32History').onclick=()=>dialog.close();dialog.showModal();
 }
 async function openMaster32(key=''){
   if(currentSessionUser?.role!=='JEFE')return toast('Solo el JEFE puede editar el catálogo');
@@ -6066,6 +6097,27 @@ async function smartSyncPendingUpdate(){
     if(detail){
       detail.textContent=`${waiting.length} por enviar · ${errors.length} con error`;
       detail.title=errors.slice(0,3).map(x=>`${x.entity||'Registro'}: ${String(x.lastError||'Sin detalle').slice(0,150)}`).join('\n');
+    }
+    // Diagnóstico legible de la cola LOCAL, sin lecturas extra ni borrar operaciones.
+    const errorBox=document.getElementById('smartSyncErrorList');
+    if(errorBox){
+      errorBox.replaceChildren();
+      const issues=rows.filter(x=>x.status==='ERROR'||x.status==='CONFLICTO_LOCAL');
+      errorBox.hidden=!issues.length;
+      const heading=document.createElement('strong');
+      heading.textContent=`Operaciones que requieren revisión (${issues.length})`;
+      errorBox.appendChild(heading);
+      for(const op of issues.slice(0,12)){
+        const card=document.createElement('div');card.className='smart-sync-error-card';
+        const title=document.createElement('b');
+        title.textContent=`${op.status} · ${op.entity||'Registro'} · ${op.recordId||op.payload?.id||op.id}`;
+        const reason=document.createElement('div');
+        reason.textContent=String(op.lastError||'El sistema no registró la causa del error.');
+        const meta=document.createElement('small');
+        meta.textContent=`Operación: ${op.type||'—'} · Intentos: ${Number(op.attempts||0)} · ${op.updatedAt||op.createdAt||''}`;
+        card.append(title,reason,meta);errorBox.appendChild(card);
+      }
+      if(issues.length>12){const more=document.createElement('small');more.textContent=`${issues.length-12} operaciones adicionales`;errorBox.appendChild(more)}
     }
     const retry=document.getElementById('smartSyncNextRetry');
     if(retry)retry.textContent=quotaPauseRemaining()>0?`Pausa por cuota: ${smartSyncDuration(quotaPauseRemaining())}`:outboxRetryNotBefore>Date.now()?`En ${smartSyncDuration(outboxRetryNotBefore-Date.now())}`:firebaseBridge.busy?'En curso':open.length?'Programado / esperando conexión':'No necesario';

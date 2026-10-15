@@ -9,3 +9,5 @@ Prueba: comparar lecturas de Firebase en ventanas equivalentes antes/después, c
 V28.21.34: apertura de actividades mediante transacción Firestore confirmada antes de notificar; bloqueo de regresión PROGRAMADO. Prueba controlada, no verificada contra Firebase de producción.
 
 V28.21.35: catálogo por peso con formulario de envases equivalente a la ficha: lote individual, tara, peso bruto, cálculo neto y volumen líquido según densidad. No probado contra Firebase en vivo.
+
+V28.21.42: panel de errores locales visible, sin depender de tooltip; sin eliminación automática de conflictos ni modificaciones a consumos.
