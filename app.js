@@ -185,6 +185,23 @@ function setSyncState(state,detail=''){
   // 10.7: no lanzar refresh asíncrono desde aquí. Ese patrón podía terminar
   // después de la confirmación real y dejar visualmente "SINCRONIZANDO".
 }
+// V28.21.41: conciliación conservadora de revisiones de planificación.
+// Solo se confirma una operación cuando su evidencia sustantiva está presente
+// en Firebase. No repite movimientos ni modifica inventario.
+function planningOperationCoveredByCloud(payload,remote){
+  if(!payload||!remote||planStage(remote.status)<planStage(payload.status))return false;
+  if(['id','date','analystId'].some(k=>payload[k]!==undefined && JSON.stringify(payload[k])!==JSON.stringify(remote[k])))return false;
+  const keys=['actualSamples','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
+  const normalize=v=>{
+    if(Array.isArray(v))return v.map(normalize);
+    if(v&&typeof v==='object')return Object.fromEntries(Object.entries(v)
+      .filter(([k])=>!['capturedAt','inventoryCommittedAt','inventorySignature','catalogExpandedAt','updatedAt'].includes(k))
+      .sort(([a],[b])=>a.localeCompare(b)).map(([k,val])=>[k,normalize(val)]));
+    return v;
+  };
+  return keys.every(k=>payload[k]===undefined||payload[k]===null||
+    JSON.stringify(normalize(payload[k]))===JSON.stringify(normalize(remote[k])));
+}
 // V28.21.30 · Resolver únicamente conflictos locales redundantes, con lectura
 // EXCLUSIVA del servidor. No toca planning remoto ni inventario; conserva la
 // operación íntegra como evidencia. Una diferencia técnica bloquea el archivo.
@@ -229,18 +246,16 @@ async function reconcileRedundantPlanningConflicts(){
         const snap=await sdk.getDocFromServer(sdk.doc(firebaseBridge.db,cloudCollectionFor('planning'),id));
         if(!snap.exists())continue;
         const remote=snap.data()||{};
-        if(remote.status!=='REALIZADO'||!remote.completionCommittedAt)continue;
+        if(planStage(remote.status)<0)continue;
         for(const op of ops){
           const payload=cloudPayloadFor('planning',op.payload||{});
-          if(['id','date','analystId'].some(k=>payload[k]!==undefined&&!equal(payload[k],remote[k])))continue;
-          const different=Object.keys(payload).filter(k=>!ignored.has(k)&&payload[k]!==undefined&&!equal(payload[k],remote[k]));
-          if(different.length)continue;
+          if(!planningOperationCoveredByCloud(payload,remote))continue;
           // Releer la operación local antes de archivarla: nunca cambiar otra revisión.
           const fresh=await getOne('outbox',op.id);
           if(!fresh||fresh.status!=='CONFLICTO_LOCAL'||!equal(fresh.payload,op.payload))continue;
           fresh.status='ARCHIVADO_CONFIRMADO_FIREBASE';
           fresh.archivedAt=nowISO();
-          fresh.archiveReason='Revisión local redundante; Firebase REALIZADO y campos sustantivos idénticos';
+          fresh.archiveReason='Operación ya reflejada en Firebase; estado y evidencia técnica verificados';
           fresh.archiveServerCompletionAt=remote.completionCommittedAt;
           // Se conservan payload, lastError y blockedAt para trazabilidad.
           await put('outbox',fresh);resolved++;
@@ -420,7 +435,7 @@ async function reconcilePreviousSessionPlanningOutbox(cloudDocs){
     }
     // Una revisión antigua con el MISMO estado no debe bloquear la jornada.
     // La nube manda y la revisión local queda neutralizada (no reenviada).
-    if(cloud && planStage(cloud.status)>=planStage(payload.status) && planStage(payload.status)>=0){
+    if(cloud && planningOperationCoveredByCloud(payload,cloud)){
       item.status='SUPERSEDIDO';item.syncedAt=nowISO();
       item.lastError='Revisión local sustituida por estado confirmado en Firebase';
       await put('outbox',item);acknowledged++;continue;
@@ -761,6 +776,11 @@ async function flushOutbox(showToast=true){
               // Evitar el falso ACK: reconciliar el documento remoto sin volver a encolar.
               const canonical={...remoteWinner,id};delete canonical._cloudUpdatedAt;delete canonical._erpEntity;
               await put('planning',canonical);
+              // Si la operación ya está reflejada en Firebase, no es conflicto.
+              if(planningOperationCoveredByCloud(payload,remoteWinner)){
+                item.status='SINCRONIZADO';item.syncedAt=nowISO();item.lastError=null;
+                await put('outbox',item);continue;
+              }
               // No informar SINCRONIZADO cuando el cambio no se aplicó.
               item.status='CONFLICTO_LOCAL';
               item.syncedAt=null;
@@ -920,7 +940,10 @@ async function applyCloudRecord(storeName,id,data){
     // Neutralizar solamente las revisiones antiguas de ESTA planificación.
     for(const op of (await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===clean.id&&(x.status==='PENDIENTE'||x.status==='ERROR'))){
       if(op.payload?.status!=='REALIZADO'&&!op.payload?.completionCommittedAt){
-        op.status='CONFLICTO_LOCAL';op.lastError='Estado local anterior al cierre confirmado en Firebase';await put('outbox',op);
+        if(planningOperationCoveredByCloud(op.payload||{},clean)){
+          op.status='SINCRONIZADO';op.syncedAt=nowISO();op.lastError=null;
+        }else{op.status='CONFLICTO_LOCAL';op.lastError='Estado local anterior al cierre confirmado en Firebase';}
+        await put('outbox',op);
       }
     }
     return;
