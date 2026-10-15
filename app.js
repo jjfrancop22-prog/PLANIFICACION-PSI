@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.47';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.48';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -3069,6 +3069,195 @@ async function verifyActivityCloudClosure(planId, timeoutMs=18000){
   }
   return {ok:false,reason:'La confirmación sigue pendiente. No vuelva a finalizar; revise sincronización.'};
 }
+// V28.21.48: recuperación explícita por JEFE de consumos adicionales retenidos
+// en Outbox. No modifica un consumo ya confirmado; solo incorpora reactivos
+// ausentes en servidor cuya evidencia original y saldo se pueden verificar.
+function recoveryReagentKey(item){
+  return [item?.name,item?.lot,item?.mode,item?.unit].map(x=>normalizeIdentityText(x||'')).join('|');
+}
+function recoveryCoreMatches(a,b){
+  if(!a||!b||['id','date','analystId','catalogId','actualStartedAt'].some(k=>a[k]!==b[k]))return false;
+  return ['actualSamples','sampleParameterCounts','calibrationResult','operationalSamplesResult','sampleResult']
+    .every(k=>samePlanningTechnicalValue(a[k]??null,b[k]??null));
+}
+function buildReagentRecoveryProposal(local,remote,outbox,catalogs){
+  if(!local||local.status!=='REALIZADO'||!local.actualFinishedAt||!local.completionCommittedAt||
+    !remote||!['EN PROCESO','REALIZADO'].includes(remote.status)||!recoveryCoreMatches(local,remote))
+    throw Error('El cierre local y la identidad, muestras o curva del servidor no coinciden.');
+  if(!remote.reagentResult?.completed)throw Error('El servidor no conserva un resultado técnico completo de referencia.');
+  const base=remote.reagentResult.items||[],byKey=new Map(base.map(x=>[recoveryReagentKey(x),x]));
+  if(byKey.size!==base.length)throw Error('Hay identidades de reactivos duplicadas en el servidor.');
+  const candidates=[];
+  for(const op of outbox){
+    const p=op.payload,r=p?.reagentResult;
+    if(op.entity!=='planning'||op.recordId!==local.id||op.type==='DELETE'||!recoveryCoreMatches(p,remote)||
+      !r?.completed||!r.inventoryCommittedAt||!Array.isArray(r.items)||
+      !Number.isFinite(Date.parse(r.inventoryCommittedAt))||Date.parse(r.inventoryCommittedAt)>Date.parse(local.actualFinishedAt))continue;
+    const map=new Map(r.items.map(x=>[recoveryReagentKey(x),x]));
+    if(map.size!==r.items.length||!base.every(x=>samePlanningTechnicalValue(x,map.get(recoveryReagentKey(x)))))continue;
+    const extra=r.items.filter(x=>!byKey.has(recoveryReagentKey(x)));
+    if(!extra.length||!extra.every(x=>x.mode==='COUNT'&&x.usedInActivity===true&&x.notUsed===false&&
+      Number.isFinite(x.stockBefore)&&Number.isFinite(x.stockRemaining)&&Number.isFinite(x.used)&&x.used>0&&
+      x.stockRemaining>=0&&Math.abs(x.stockBefore-x.used-x.stockRemaining)<1e-9))continue;
+    if(extra.some(x=>!(remote.reagentConfig||[]).some(c=>recoveryReagentKey(c)===recoveryReagentKey(x))))continue;
+    if(extra.some(x=>!(local.reagentResult?.items||[]).some(y=>recoveryReagentKey(x)===recoveryReagentKey(y)&&
+      (samePlanningTechnicalValue(x,y)||(y.notUsed===true&&y.usedInActivity===false&&y.used===0&&
+        y.stockBefore===x.stockRemaining&&y.stockRemaining===x.stockRemaining)))))continue;
+    const targets=catalogs.filter(c=>(c.reagentConfig||[]).some(x=>extra.some(e=>recoveryReagentKey(e)===recoveryReagentKey(x))));
+    if(!targets.length)continue;
+    candidates.push({sourceOperationId:op.id,sourceAt:r.inventoryCommittedAt,result:JSON.parse(JSON.stringify(r)),extra,
+      catalogIds:targets.map(c=>c.id).sort(),expectedRemoteResult:JSON.parse(JSON.stringify(remote.reagentResult)),
+      local:JSON.parse(JSON.stringify(local))});
+  }
+  if(!candidates.length)throw Error('No se encontró evidencia original compatible de un consumo adicional.');
+  const first=candidates[0];
+  if(candidates.some(c=>!samePlanningTechnicalValue(c.result,first.result)))
+    throw Error('Hay consumos históricos contradictorios. Se requiere revisión individual.');
+  return candidates.sort((a,b)=>String(a.sourceAt).localeCompare(String(b.sourceAt)))[0];
+}
+function validateReagentRecoveryCurrent(proposal,remote,catalogs){
+  const local=proposal.local;
+  if(!recoveryCoreMatches(local,remote))throw Error('La identidad, el inicio o las muestras cambiaron desde la revisión.');
+  const repairId=`RECUPERACION-REACTIVOS-${local.id}-${proposal.sourceOperationId}`;
+  const already=remote.reagentRecovery?.id===repairId;
+  if(already){
+    if(remote.status!=='REALIZADO'||remote.actualFinishedAt!==local.actualFinishedAt||
+      !samePlanningTechnicalValue(remote.reagentResult,proposal.result))throw Error('La conciliación previa contiene datos diferentes.');
+    return {already:true,repairId};
+  }
+  if(remote.status!=='EN PROCESO'||remote.completionCommittedAt||remote.actualFinishedAt)
+    throw Error('El estado del servidor cambió. No se reemplazó otro cierre.');
+  if(!samePlanningTechnicalValue(remote.reagentResult,proposal.expectedRemoteResult))
+    throw Error('El registro técnico del servidor cambió desde la revisión.');
+  if(catalogs.length!==proposal.catalogIds.length)throw Error('No se pudieron verificar todas las fichas del lote.');
+  for(const extra of proposal.extra){
+    let found=0;
+    for(const c of catalogs){
+      const matches=(c.reagentConfig||[]).filter(x=>recoveryReagentKey(x)===recoveryReagentKey(extra));
+      if(matches.length>1)throw Error('El lote está duplicado en una ficha de catálogo.');
+      for(const r of matches){
+        found++;
+        if(r.stockQuantity!==extra.stockBefore&&r.stockQuantity!==extra.stockRemaining)
+          throw Error(`El saldo actual de ${extra.name} es ${r.stockQuantity}; se esperaba ${extra.stockBefore} o ${extra.stockRemaining}.`);
+        if(r.stockAdjustedAt&&Date.parse(r.stockAdjustedAt)>Date.parse(proposal.sourceAt))
+          throw Error(`El lote ${extra.name} tiene un ajuste posterior al consumo. No se reemplazó ese ajuste.`);
+      }
+    }
+    if(!found)throw Error('El reactivo recuperado ya no existe en las fichas verificadas.');
+  }
+  return {already:false,repairId};
+}
+function buildReagentRecoveryWrite(proposal,remote,catalogs,by,stamp){
+  const checked=validateReagentRecoveryCurrent(proposal,remote,catalogs);
+  if(checked.already)return {already:true,repairId:checked.repairId};
+  const result=JSON.parse(JSON.stringify(proposal.result));
+  result.inventorySignature=JSON.stringify(result.items);
+  const repair={id:checked.repairId,at:stamp,by,sourceOperationId:proposal.sourceOperationId,sourceAt:proposal.sourceAt,
+    previousRemoteReagentResult:JSON.parse(JSON.stringify(remote.reagentResult)),
+    previousLocalReagentResult:JSON.parse(JSON.stringify(proposal.local.reagentResult)),
+    restoredItems:JSON.parse(JSON.stringify(proposal.extra)),catalogIds:proposal.catalogIds,
+    reason:'Recuperación de consumo original retenido en Outbox; cierre horario original conservado'};
+  const planning={...remote,reagentResult:result,status:'REALIZADO',actualFinishedAt:proposal.local.actualFinishedAt,
+    completionCommittedAt:proposal.local.completionCommittedAt,completionCommittedBy:proposal.local.completionCommittedBy,
+    completionOperationId:proposal.local.completionOperationId||`FINAL-${remote.id}`,
+    reagentRecovery:repair,updatedAt:stamp,_cloudUpdatedAt:stamp};
+  const catalogWrites=catalogs.map(c=>({...c,reagentConfig:(c.reagentConfig||[]).map(r=>{
+    const x=proposal.extra.find(e=>recoveryReagentKey(e)===recoveryReagentKey(r));
+    return x?{...r,stockQuantity:x.stockRemaining,inventoryStatus:x.stockRemaining>0?'ACTIVO':'AGOTADO',
+      stockReconciledAt:stamp,stockReconciliationId:checked.repairId}:r;
+  }),updatedAt:stamp,_cloudUpdatedAt:stamp}));
+  const finalId=`AUTO-FINAL-${String(remote.id).replace(/[^a-zA-Z0-9_-]/g,'_')}`;
+  const techId=`AUTO-TECNICA-FINAL-${String(remote.id).replace(/[^a-zA-Z0-9_-]/g,'_')}`;
+  const common={planId:remote.id,analystId:remote.analystId,analystName:remote.analystName,authorType:'SISTEMA',
+    createdAt:stamp,threadStatus:'OPEN',readBy:[],priority:'INFO',actionRequired:'CONOCIMIENTO',
+    autoGenerated:true,recipientRole:'JEFE',createdByRole:'JEFE',createdByName:by,recoveryId:checked.repairId};
+  const lifecycle={...common,id:finalId,authorName:'Alerta de actividad',notificationType:'ACTIVIDAD',lifecycleStage:'FINALIZACION',
+    closureEvidence:activityClosureEvidence(planning),
+    text:`✅ FINALIZACIÓN RECUPERADA · ${remote.catalogName} · ${remote.analystName} · cierre original ${formatActualStamp(planning.actualFinishedAt)} · ${remote.actualSamples} muestra(s). Conciliación verificada por ${by}.`};
+  const technical={...common,id:techId,authorName:'Alerta técnica',notificationType:'TECNICA',technicalKind:'CIERRE_TECNICO',
+    technicalStage:'FINAL',technicalPayload:{reagents:result.items},
+    text:`🧪 CONSUMO RECUPERADO · ${proposal.extra.map(x=>`${x.name} · lote ${x.lot}: ${x.stockBefore} − ${x.used} = ${x.stockRemaining} ${x.unit}`).join(' | ')}. Se conserva el resto del registro técnico. Referencia ${proposal.sourceOperationId}.`};
+  const auditRecord={id:checked.repairId,createdAt:stamp,user:by,action:'CONCILIAR_CONSUMO_Y_CIERRE',module:'MI JORNADA',
+    recordId:remote.id,detail:repair.reason,evidence:repair};
+  return {already:false,repairId:checked.repairId,planning,catalogWrites,lifecycle,technical,auditRecord};
+}
+function recoveryOperationCanArchive(op,proposal,remote){
+  const p=op.payload;
+  if(op.entity!=='planning'||op.recordId!==remote.id||op.type==='DELETE'||!recoveryCoreMatches(p,remote)||
+    !['CONFLICTO_LOCAL','ERROR','PENDIENTE'].includes(op.status)||
+    !Number.isFinite(Date.parse(op.createdAt))||Date.parse(op.createdAt)>Date.parse(proposal.local.actualFinishedAt)||
+    !Array.isArray(p.reagentResult?.items)||!p.reagentResult.items.length)return false;
+  if(p.actualFinishedAt&&p.actualFinishedAt!==remote.actualFinishedAt)return false;
+  const desired=new Map((remote.reagentResult?.items||[]).map(x=>[recoveryReagentKey(x),x]));
+  return (p.reagentResult.items||[]).every(x=>{
+    const target=desired.get(recoveryReagentKey(x));
+    if(!target)return false;
+    if(samePlanningTechnicalValue(x,target))return true;
+    return proposal.extra.some(e=>recoveryReagentKey(e)===recoveryReagentKey(x))&&x.notUsed===true&&x.usedInActivity===false&&
+      x.used===0&&x.stockBefore===target.stockRemaining&&x.stockRemaining===target.stockRemaining;
+  });
+}
+const chiefReagentRecoveryBusy=new Set();
+async function chiefRecoverReagentsAndClosure(planId){
+  if(currentSessionUser?.role!=='JEFE')return alert('Esta conciliación requiere la cuenta del JEFE en la computadora de María Elena.');
+  if(chiefReagentRecoveryBusy.has(planId))return;
+  chiefReagentRecoveryBusy.add(planId);
+  try{
+    if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)throw Error('Conéctese a Firebase con la cuenta del JEFE.');
+    if(firebaseBridge.busy)throw Error('Espere a que termine la sincronización en curso y vuelva a revisar.');
+    const sdk=firebaseBridge.mods,ref=sdk.doc(firebaseBridge.db,'planning',planId);
+    const local=await getOne('planning',planId),snapshot=await sdk.getDocFromServer(ref);
+    if(!snapshot.exists())throw Error('La actividad no existe en Firebase.');
+    const remote=snapshot.data(),outbox=await getAll('outbox'),catalogs=await getAll('catalog');
+    if(remote.reagentRecovery?.id&&remote.status==='REALIZADO'){
+      await put('planning',remote);confirmedCloudClosureIds.add(planId);await renderMyDay();
+      return alert(`La conciliación ya está confirmada en Firebase. Cierre original ${formatActualStamp(remote.actualFinishedAt)}. No se descontó inventario otra vez.`);
+    }
+    const proposal=buildReagentRecoveryProposal(local,remote,outbox,catalogs);
+    const by=currentSessionUser.name||currentSessionUser.email||'JEFE',stamp=nowISO();
+    const refs=proposal.catalogIds.map(id=>sdk.doc(firebaseBridge.db,'catalog',id));
+    const catalogSnaps=await Promise.all(refs.map(r=>sdk.getDocFromServer(r)));
+    if(catalogSnaps.some(s=>!s.exists()))throw Error('Una ficha de catálogo ya no existe en Firebase.');
+    const currentCatalogs=catalogSnaps.map((s,i)=>({...s.data(),id:proposal.catalogIds[i]}));
+    const preview=buildReagentRecoveryWrite(proposal,remote,currentCatalogs,by,stamp);
+    const lines=proposal.extra.map(x=>`${x.name} · lote ${x.lot}\nConsumo original: ${x.used} ${x.unit}\nSaldo: ${x.stockBefore} → ${x.stockRemaining}`);
+    if(!confirm(`CONCILIACIÓN DEL JEFE\n${local.analystName} · ${local.date}\n${local.catalogName}\n\n${lines.join('\n\n')}\n\nMuestras: ${remote.actualSamples}\nCierre original: ${formatActualStamp(local.actualFinishedAt)}\nFuente: ${proposal.sourceOperationId}\nSe revisan ${currentCatalogs.length} fichas del mismo lote. Si el saldo ya es el final, no se descuenta otra vez.\n\n¿Confirmar la recuperación de este consumo original y el cierre?`))return;
+    const auditRef=sdk.doc(firebaseBridge.db,'audit',preview.repairId);
+    const finalRef=sdk.doc(firebaseBridge.db,'planComments',preview.lifecycle.id);
+    const techRef=sdk.doc(firebaseBridge.db,'planComments',preview.technical.id);
+    let committed;
+    await sdk.runTransaction(firebaseBridge.db,async tx=>{
+      // Todas las lecturas preceden a cualquier escritura; Firestore revalida el lote completo.
+      const planSnap=await tx.get(ref);if(!planSnap.exists())throw Error('La actividad ya no existe.');
+      const serverCatalogs=[];
+      for(let i=0;i<refs.length;i++){const s=await tx.get(refs[i]);if(!s.exists())throw Error('Una ficha del lote ya no existe.');serverCatalogs.push({...s.data(),id:proposal.catalogIds[i]});}
+      const auditSnap=await tx.get(auditRef),finalSnap=await tx.get(finalRef),techSnap=await tx.get(techRef);
+      const write=buildReagentRecoveryWrite(proposal,planSnap.data(),serverCatalogs,by,stamp);
+      if(write.already){if(!auditSnap.exists())throw Error('Falta la evidencia de la conciliación anterior.');committed=planSnap.data();return;}
+      if(auditSnap.exists())throw Error('Ya existe una conciliación que requiere revisión.');
+      if(finalSnap.exists()||techSnap.exists())throw Error('Ya existen avisos de cierre. Revise su evidencia antes de reemplazar datos.');
+      tx.set(ref,write.planning);
+      write.catalogWrites.forEach((c,i)=>tx.set(refs[i],c));
+      tx.set(auditRef,write.auditRecord);tx.set(finalRef,write.lifecycle);tx.set(techRef,write.technical);
+      committed=write.planning;
+    });
+    const verified=await sdk.getDocFromServer(ref);
+    if(!verified.exists()||verified.data().reagentRecovery?.id!==preview.repairId)throw Error('La respuesta no confirma todavía la conciliación; no repita consumos.');
+    committed=verified.data();await put('planning',committed);confirmedCloudClosureIds.add(planId);
+    for(let i=0;i<refs.length;i++){const s=await sdk.getDocFromServer(refs[i]);if(s.exists())await put('catalog',{...s.data(),id:proposal.catalogIds[i]});}
+    for(const r of [finalRef,techRef]){const s=await sdk.getDocFromServer(r);if(s.exists())await put('planComments',s.data());}
+    let archived=0;
+    for(const op of await getAll('outbox')){
+      if(!recoveryOperationCanArchive(op,proposal,committed))continue;
+      op.status='ARCHIVADO_CONCILIACION_JEFE';op.archivedAt=nowISO();op.archiveRecoveryId=preview.repairId;
+      op.archiveReason='Versión conservada y sustituida por conciliación JEFE confirmada; no se elimina el payload original';
+      if(await saveOutboxAttempt(op))archived++;
+    }
+    reagentMasterProfiles=[];await renderMyDay();await refreshSyncUI();await refreshNotificationBadge();
+    alert(`CONCILIACIÓN CONFIRMADA\nCierre: ${formatActualStamp(committed.actualFinishedAt)}\n${proposal.extra.map(x=>`${x.name}: ${x.used} utilizados; saldo ${x.stockRemaining}`).join('\n')}\nAvisos de cierre y consumo confirmados.\n${archived} revisiones locales archivadas con su evidencia. Los demás conflictos se conservan.`);
+  }catch(err){alert('Conciliación pendiente: '+String(err.message||err)+' No vuelva a registrar el consumo.');}
+  finally{chiefReagentRecoveryBusy.delete(planId)}
+}
 async function retryLocalActivityClosure(planId){
   const p=await getOne('planning',planId);
   if(!p||p.status!=='REALIZADO'||!p.completionCommittedAt||!assertOwnPlan(p))return toast('Cierre local no disponible para este usuario');
@@ -3511,6 +3700,9 @@ async function renderMyDay(){
     const ss=steps.filter(x=>x.catalogId===p.catalogId).sort((a,b)=>a.order-b.order);
     const comments=allComments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
     const localClosurePending=closureNeedsCloudConfirmation(p,myDayOutbox);
+    const hasHeldConsumption=localClosurePending&&myDayOutbox.some(op=>op.entity==='planning'&&op.recordId===p.id&&
+      op.status==='CONFLICTO_LOCAL'&&(op.payload?.reagentResult?.items||[]).some(x=>x.usedInActivity===true&&Number(x.used)>0&&
+        !(p.reagentResult?.items||[]).some(y=>recoveryReagentKey(x)===recoveryReagentKey(y)&&samePlanningTechnicalValue(x,y))));
     const joeClosureConflict=p.status!=='REALIZADO'&&(joeClosureMap.has(p.id)||!!p.actualFinishedAt);    const st=timeToMinutes(p.startTime),en=timeToMinutes(p.endTime);
     const isNow=p.id===active?.id,isNext=!isNow&&p.id===next?.id;
     const late=today&&p.status==='PROGRAMADO'&&nowMin>st&&!isNow;
@@ -3550,6 +3742,7 @@ async function renderMyDay(){
         ${ss.length?`<details class="myday-breakdown compact-breakdown" data-ui-key="breakdown-${p.id}"><summary>Ver desglose · ${ss.length} subactividades</summary><div>${ss.map(x=>`<span>• ${escapeHtml(x.name)} · ${minutesText(x.minutes)}</span>`).join('')}</div></details>`:''}
         ${requiresActualSamples(p.section)?`<div class="operational-samples-panel"><div><b>📋 Registro de muestras</b><small>${p.actualSamples!==null&&p.actualSamples!==undefined?`${p.actualSamples} muestras · ${Object.keys(p.sampleParameterCounts||{}).length} parámetros registrados`:'Pendiente: registre las muestras por parámetro'}</small></div><button type="button" class="btn secondary compact" data-operational-samples="${p.id}">${p.status==='REALIZADO'?'Ver muestras':'Registrar muestras'}</button></div>`:''}
         ${technicalRequirementMenuHtml(p,_req)}
+        ${hasHeldConsumption?`<div style="padding:12px;border:1px solid #b98320;border-radius:10px;background:#fff8e8"><b>Consumo original retenido en conflictos</b><p>Existe un registro anterior de consumo que difiere de la copia local actual. Requiere revisión del JEFE antes de recuperar el cierre.</p>${currentSessionUser?.role==='JEFE'?`<button type="button" class="btn primary" data-chief-recover-reagents="${escapeHtml(p.id)}">Revisar consumo original y conciliar cierre · JEFE</button>`:'<small>Ingrese con la cuenta del JEFE en esta misma computadora y navegador.</small>'}</div>`:''}
         <div class="myday-actions-row">${action}</div>${actual}
         <details class="comment-thread compact-comments" data-ui-key="comments-${p.id}" ${comments.length?'open':''}>
           <summary>💬 Comentarios / novedades (${comments.length})</summary>
@@ -3562,6 +3755,7 @@ async function renderMyDay(){
     </article>`;
   }).join('');
   $('#myDayCards').querySelectorAll('[data-retry-closure]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await retryLocalActivityClosure(b.dataset.retryClosure)}finally{b.disabled=false}});
+  $('#myDayCards').querySelectorAll('[data-chief-recover-reagents]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await chiefRecoverReagentsAndClosure(b.dataset.chiefRecoverReagents)}finally{b.disabled=false}});
   // Reutiliza la transacción protegida existente: exige confirmación, motivo
   // documentado, coincidencia updatedAt y ACK del servidor. No toca inventario.
   $('#myDayCards').querySelectorAll('[data-joe-reconcile]').forEach(b=>b.addEventListener('click',async()=>{

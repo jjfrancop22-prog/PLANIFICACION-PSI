@@ -1,0 +1,27 @@
+{
+  "passed": 20,
+  "archivable": 2,
+  "sourceOperationId": "OUT-ORIGINAL",
+  "tests": [
+    "El botón JEFE aparece con la condición y el HTML reales de Mi Jornada",
+    "El analista ve la instrucción de revisión y no recibe el botón administrativo",
+    "Se conservan las cinco muestras y los tres parámetros",
+    "Se conserva el cierre original de las 16:10",
+    "Se restaura la evidencia original TNT874 99 − 4 = 95",
+    "Las tres fichas del lote comparten el saldo 95",
+    "La fecha del consumo original se conserva para no convertirlo en un consumo nuevo",
+    "La repetición de la misma conciliación no aplica otro descuento",
+    "Un saldo que ya es 95 permanece en 95",
+    "Un saldo actual diferente bloquea la conciliación completa",
+    "Un ajuste de inventario posterior queda protegido",
+    "Cambios en muestras o parámetros bloquean el cierre",
+    "No se reemplaza un consumo ya confirmado que tenga otra cantidad",
+    "Solo las revisiones compatibles de esta actividad pueden archivarse",
+    "La transacción confirma consumo y cierre con evidencia",
+    "Auditoría y dos avisos se confirman dentro de la misma transacción",
+    "Repetir el botón después de confirmar no vuelve a escribir inventario",
+    "Las revisiones archivadas conservan su payload original y referencia de conciliación",
+    "La recuperación de inventario solo se ejecuta con la cuenta JEFE",
+    "Un cambio de saldo entre revisión y confirmación aborta todas las escrituras"
+  ]
+}
