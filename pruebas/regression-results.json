@@ -1,5 +1,5 @@
 {
-  "passed": 21,
+  "passed": 23,
   "tests": [
     "COUNT: guardar y finalizar conserva 99 - 4 = 95",
     "COUNT: reintento no escribe inventario ni cambia evidencia",
@@ -19,6 +19,8 @@
     "Recuperación confirma cierre pendiente cuando las evidencias coinciden",
     "Completar actividad conserva el objeto de consumo confirmado",
     "Conciliación no archiva diferencias en muestras por parámetro",
+    "Cierre local legado se identifica aunque el conflicto no conserve payload REALIZADO",
+    "Cierre observado como REALIZADO en Firebase deja de mostrarse pendiente",
     "Primer guardado toma el saldo disponible y aplica un solo movimiento local",
     "Formulario de cierre pasa el consumo confirmado a la finalización",
     "Doble clic en confirmar procesa un solo cierre"

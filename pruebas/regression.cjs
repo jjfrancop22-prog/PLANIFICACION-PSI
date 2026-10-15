@@ -9,12 +9,12 @@ function extract(name){
  const end=first.endsWith('}')?lineEnd:source.indexOf('\n}',lineEnd)+2;
  const code=source.slice(start,end);new Function(code);return code;
 }
-const names=['queue','saveOutboxAttempt','sameCloudFunctionalPayload','sameReagentConsumptionInput','commitReagentConsumption','completeActivityRecord','samePlanningTechnicalValue','planningOperationCoveredByCloud','verifyActivityCloudClosure','retryLocalActivityClosure','flushOutbox','ensureConfirmedClosureAlerts','submitFinishActivity','submitFinishActivityOnce'];
+const names=['queue','saveOutboxAttempt','sameCloudFunctionalPayload','sameReagentConsumptionInput','commitReagentConsumption','completeActivityRecord','samePlanningTechnicalValue','planningOperationCoveredByCloud','verifyActivityCloudClosure','retryLocalActivityClosure','flushOutbox','ensureConfirmedClosureAlerts','closureNeedsCloudConfirmation','submitFinishActivity','submitFinishActivityOnce'];
 const context=vm.createContext({console,structuredClone,Date,Math,JSON,Set,Map,Promise,Error,Number,String,Object,Array,setTimeout,clearTimeout,navigator:{onLine:true},indexedDB:memory});
 const page={addScriptTag:async({content})=>vm.runInContext(content,context),evaluate:async fn=>vm.runInContext('('+fn.toString()+')()',context)};
 (async()=>{
  await page.addScriptTag({content:`
- var db,currentSessionUser={role:'ANALISTA',analystId:'A',name:'Analista'},firebaseBridge={ready:true,authUser:{},configured:true,mods:{},db:{},busy:false},PAGE_SESSION_ID='TEST';
+ var db,currentSessionUser={role:'ANALISTA',analystId:'A',name:'Analista'},firebaseBridge={ready:true,authUser:{},configured:true,mods:{},db:{},busy:false},PAGE_SESSION_ID='TEST',confirmedCloudClosureIds=new Set();
  var FIREBASE_SYNC_STORES=['planning','planComments','catalog'];
  var inventoryWrites=0,propagations=0,alerts=[],renders=0,cloud={},outboxRetryNotBefore=0,redundantConflictLastCheck=0;
  var serial=0;function uid(prefix){return prefix+'-'+(++serial)}function nowISO(){return new Date().toISOString()}
@@ -85,6 +85,9 @@ const page={addScriptTag:async({content})=>vm.runInContext(content,context),eval
   check(inventoryWrites===writesBefore&&JSON.stringify(replay.reagentResult)===saved,'Completar actividad conserva el objeto de consumo confirmado');
   const dif={...structuredClone(closed),sampleParameterCounts:{DQO:6}};
   check(!planningOperationCoveredByCloud(dif,closed),'Conciliación no archiva diferencias en muestras por parámetro');
+  check(closureNeedsCloudConfirmation(closed,[]),'Cierre local legado se identifica aunque el conflicto no conserve payload REALIZADO');
+  confirmedCloudClosureIds.add(closed.id);
+  check(!closureNeedsCloudConfirmation(closed,[]),'Cierre observado como REALIZADO en Firebase deja de mostrarse pendiente');
   const fresh={id:'NEW',analystId:'A',status:'EN PROCESO'};await put('catalog',{id:'CAT',reagentConfig:[{name:'Reactivo',lot:'L',stockQuantity:99}]});
   const first={completed:true,items:[{...item,stockBefore:264,stockRemaining:260}]};
   const countBefore=inventoryWrites;await commitReagentConsumption(fresh,first);

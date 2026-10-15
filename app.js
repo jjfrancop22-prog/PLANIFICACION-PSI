@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.46';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.47';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -176,6 +176,16 @@ const firebaseBridge={
   configured:false,ready:false,busy:false,db:null,mods:null,unsubs:[],lastError:null,lastSyncAt:null,
   app:null,auth:null,authMods:null,authReady:false,authUser:null,authUnsub:null,flushTimer:null,flushRequested:false
 }
+// Cierres que esta sesión observó directamente en Firebase. Permite distinguir
+// un REALIZADO únicamente local de un cierre confirmado, incluso en conflictos
+// antiguos cuyo payload no conservó la palabra REALIZADO.
+const confirmedCloudClosureIds=new Set();
+function closureNeedsCloudConfirmation(plan,outbox=[]){
+  if(!plan||(plan.status!=='REALIZADO'&&!plan.completionCommittedAt))return false;
+  const outstanding=outbox.some(x=>x.entity==='planning'&&x.recordId===plan.id&&
+    ['PENDIENTE','ERROR','CONFLICTO_LOCAL'].includes(x.status));
+  return outstanding||!confirmedCloudClosureIds.has(plan.id);
+}
 
 function monthStartISO(dateStr=dateToday()){
   const d=new Date(`${dateStr}T12:00:00`);
@@ -191,6 +201,7 @@ function setSyncState(state,detail=''){
   if(dot)dot.className=`sync-dot ${state.toLowerCase()}`;
   if(label)label.textContent=state;
   if(desc)desc.textContent=detail||'';
+  const side=$('#sidebarSyncPill');if(side)side.textContent=`● ${state}`;
   // 10.7: no lanzar refresh asíncrono desde aquí. Ese patrón podía terminar
   // después de la confirmación real y dejar visualmente "SINCRONIZANDO".
 }
@@ -316,6 +327,7 @@ function setSyncStateVisualOnly(state,detail=''){
   if(dot)dot.className=`sync-dot ${state.toLowerCase()}`;
   if(label)label.textContent=state;
   if(desc)desc.textContent=detail||'';
+  const side=$('#sidebarSyncPill');if(side)side.textContent=`● ${state}`;
 }
 async function initFirebaseBridge(){
   firebaseBridge.configured=firebaseConfigValid();
@@ -918,6 +930,10 @@ function shouldAcceptCloud(local,remote){
 async function applyCloudRecord(storeName,id,data){
   if(!FIREBASE_SYNC_STORES.includes(storeName))return;
   const clean={...data,id:data.id||id};delete clean._cloudUpdatedAt;delete clean._erpEntity;
+  if(storeName==='planning'){
+    if(clean.status==='REALIZADO'&&clean.completionCommittedAt)confirmedCloudClosureIds.add(clean.id);
+    else confirmedCloudClosureIds.delete(clean.id);
+  }
   // Si este equipo ya eliminó una planificación, una lectura atrasada de Firestore
   // no puede resucitarla mientras se confirma el DELETE remoto.
   if(storeName==='planning' && await isPlanningDeleted(clean.id)){
@@ -3076,6 +3092,7 @@ async function retryLocalActivityClosure(planId){
     }
     const result=await verifyActivityCloudClosure(planId);
     if(!result.ok)throw Error(result.reason);
+    confirmedCloudClosureIds.add(planId);
     await ensureConfirmedClosureAlerts(result.remote);
     redundantConflictLastCheck=0;await reconcileRedundantPlanningConflicts();
     await renderMyDay();await refreshSyncUI();
@@ -3409,7 +3426,7 @@ async function renderMyDay(){
   }
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
   await renderMyDayControlCharts(date,analystId);
-  const pendingClosures=new Set((await getAll('outbox')).filter(x=>x.entity==='planning'&&x.payload?.status==='REALIZADO'&&['PENDIENTE','ERROR','CONFLICTO_LOCAL'].includes(x.status)).map(x=>x.recordId));
+  const myDayOutbox=await getAll('outbox');
   const plans=(await visiblePlanningRows()).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
   $('#myDayEmpty').classList.toggle('hidden',plans.length>0);
   const a=(await getAll('analysts')).find(x=>x.id===analystId);
@@ -3493,7 +3510,7 @@ async function renderMyDay(){
     const _req={curve:planRequiresCalibration(p)||!!(_catReq?.calibrationConfig?.enabled&&_catReq.calibrationConfig?.points?.length),reagents:planHasReagents(p)||!!_catReq?.reagentConfig?.length};
     const ss=steps.filter(x=>x.catalogId===p.catalogId).sort((a,b)=>a.order-b.order);
     const comments=allComments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
-    const localClosurePending=p.status==='REALIZADO'&&pendingClosures.has(p.id);
+    const localClosurePending=closureNeedsCloudConfirmation(p,myDayOutbox);
     const joeClosureConflict=p.status!=='REALIZADO'&&(joeClosureMap.has(p.id)||!!p.actualFinishedAt);    const st=timeToMinutes(p.startTime),en=timeToMinutes(p.endTime);
     const isNow=p.id===active?.id,isNext=!isNow&&p.id===next?.id;
     const late=today&&p.status==='PROGRAMADO'&&nowMin>st&&!isNow;
