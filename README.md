@@ -1,10 +1,7 @@
-# ERP Planificación V28.21.30 — PRUEBA
+# ERP Planificación V28.21.31 — prueba de ahorro de lecturas
 
-Base: V28.21.29. Se conserva el cierre multi-PC.
+Esta versión conserva las 17 entradas del ZIP original. Cambios limitados a las verificaciones de conflictos redundantes: no consultar Firestore cuando la pestaña está oculta; durante inactividad con pestaña visible, comprobar cada 15 min; con actividad, cada 90 s. Se conserva la escucha en tiempo real de las ocho colecciones y la sincronización de cierres y reactivos.
 
-- Cada 15 s se actualiza el indicador; si existen conflictos, la verificación exclusiva de Firestore se limita a una vez cada 90 s y a cuatro documentos por ciclo.
-- Solo se archiva una operación conflictiva si Firebase confirma REALIZADO, existe metadato de cierre y todos los campos sustantivos de la operación coinciden.
-- El payload original y el error quedan preservados en outbox como evidencia.
-- No modifica planning de Firebase, inventario ni consumos. Las diferencias permanecen CONFLICTO.
+**Limitación:** esta optimización no garantiza una reducción significativa de las 6.700 lecturas, que podrían proceder de los snapshots iniciales o de otros clientes. No ha sido validada contra Firebase de producción.
 
-**Prueba requerida:** instalar en el equipo de Joe sin limpiar datos locales; esperar dos minutos; verificar si el indicador se estabiliza. Si sigue CONFLICTO, exportar evidencia y revisar las diferencias reales. No se ha probado contra Firebase de producción.
+Prueba: comparar lecturas de Firebase en ventanas equivalentes antes/después, con igual número de sesiones, y verificar cierres con dos equipos. No borrar IndexedDB ni restablecer la base.

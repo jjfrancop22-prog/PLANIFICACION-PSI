@@ -194,7 +194,12 @@ const REDUNDANT_CONFLICT_CHECK_MS=90000;
 async function reconcileRedundantPlanningConflicts(){
   if(redundantConflictCheckBusy||firebaseBridge.busy||!firebaseBridge.ready||
      !firebaseBridge.authUser||!navigator.onLine||smartSyncSleeping||quotaPauseRemaining()>0)return 0;
-  if(Date.now()-redundantConflictLastCheck<REDUNDANT_CONFLICT_CHECK_MS)return 0;
+  // Evitar lecturas de verificación durante la madrugada con la pestaña oculta.
+  // Los conflictos permanecen protegidos y se revisan al volver a la pestaña.
+  if(document.hidden)return 0;
+  const interval=Date.now()-smartSyncLastInteraction>SMART_SYNC_IDLE_MS
+    ? 15*60*1000 : REDUNDANT_CONFLICT_CHECK_MS;
+  if(Date.now()-redundantConflictLastCheck<interval)return 0;
   const conflicts=(await getAll('outbox')).filter(x=>x.status==='CONFLICTO_LOCAL'&&x.entity==='planning'&&x.type!=='DELETE');
   if(!conflicts.length)return 0;
   const sdk=firebaseBridge.mods;
@@ -5902,6 +5907,8 @@ setInterval(async()=>{
 // el estado real de Outbox con el indicador. Corrige estados visuales obsoletos.
 setInterval(()=>{
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy){
+    // El estado visual no necesita repintarse cada 15 s en pestañas ocultas.
+    if(document.hidden)return;
     reconcileRedundantPlanningConflicts()
       .then(()=>refreshSyncUI())
       .catch(e=>console.warn('Watchdog de sincronización',e));

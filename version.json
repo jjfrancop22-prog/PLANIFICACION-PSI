@@ -1,21 +1,20 @@
 {
-  "version": "1.0.5.6.33.25.10.24.0",
-  "build": "V1.0.5.6.33.25.10.24.0-WESTGARD-RECALC-DEDUP-UI-VERSION-UNIFICADA",
-  "name": "WESTGARD-RECALC-DEDUP-UI-VERSION-UNIFICADA",
-  "notes": "Unificación integral de versión y caché sobre 10.23.0. Conserva Westgard recalculado, deduplicación y edición estable; invalida cachés anteriores y evita recursos mezclados entre PCs.",
+  "version": "1.0.5.6.33.25.10.28.21.31",
+  "build": "V28.21.31",
+  "name": "AHORRO-LECTURAS-CONFLICTOS-PRUEBA",
+  "notes": "Reduce verificaciones de conflictos en segundo plano sin desactivar los listeners de tiempo real. Requiere prueba multi-PC.",
   "features": [
-    "Motor Westgard recalculado de 10.23.0",
-    "Deduplicación histórica de cartas",
-    "Edición estable con trazabilidad",
-    "Versión única en index/app/service worker/metadatos",
-    "Service worker con caché nuevo y actualización sin caché HTTP",
-    "Recursos app.js/styles.css con cache-busting 10.24.0"
+    "Planificador multi-PC sin planningLocks",
+    "Máximo diario de 8 h o dailyHours",
+    "Bloqueo de cruces y duplicados",
+    "Validación Firestore antes y después del commit",
+    "Edición universal de Cartas de Control y Westgard conservados"
   ],
-  "date": "2026-09-30",
+  "date": "2026-10-01",
   "changes": [
-    "Se elimina mezcla 10.19.1/10.20.0/10.21.0/10.23.0",
-    "index.html muestra 10.24.0",
-    "service-worker.js invalida cachés erp-planificacion anteriores",
-    "version.json y VERSION.json quedan sincronizados"
+    "No consulta conflictos redundantes cuando la pestaña está oculta",
+    "Con sesión inactiva, reduce verificaciones de conflictos a cada 15 minutos",
+    "Con sesión activa, conserva verificación cada 90 segundos",
+    "Conserva listeners, cierre multi-PC y protecciones de inventario"
   ]
 }
