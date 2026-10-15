@@ -1,8 +1,8 @@
 {
-  "version": "1.0.5.6.33.25.10.28.21.43",
-  "build": "V28.21.43",
-  "name": "HISTORIAL-CONSUMOS-REACTIVOS",
-  "notes": "Historial de consumos confirmados por lote y visualización del saldo más reciente, sin cambiar el flujo de bajas.",
+  "version": "1.0.5.6.33.25.10.28.21.44",
+  "build": "V28.21.44",
+  "name": "CONCILIACION-CIERRE-PROTEGIDO",
+  "notes": "Los cierres históricos divergentes pasan a revisión del JEFE sin reintentos automáticos; no se alteran cierres ni inventario.",
   "features": [
     "Planificador multi-PC sin planningLocks",
     "Máximo diario de 8 h o dailyHours",

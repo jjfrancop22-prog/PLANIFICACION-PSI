@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.43';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.44';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -687,6 +687,7 @@ async function flushOutbox(showToast=true){
             // Transacción en servidor para comparar el estado actual y el timestamp.
             const {runTransaction}=firebaseBridge.mods;
             let remoteWinner=null;
+            let historicalCloseConflict=false;
             await runTransaction(firebaseBridge.db,async tx=>{
               const currentSnap=await tx.get(ref);
               const current=currentSnap.exists()?currentSnap.data():null;
@@ -705,7 +706,9 @@ async function flushOutbox(showToast=true){
                 const closeSnap=await tx.get(closeRef);
                 const ev=closeSnap.exists()?closeSnap.data():null;
                 if(ev?.planId===id && ev?.lifecycleStage==='FINALIZACION'){
-                  throw new Error('CIERRE_HISTORICO_PROTEGIDO: hay evento de finalización confirmado; no se sobrescribe la planificación abierta. Requiere conciliación por JEFE.');
+                  // No lanzar un error reintentable: es una divergencia persistente.
+                  // Mantener la evidencia en Firebase y pasar a revisión del JEFE.
+                  historicalCloseConflict=true;remoteWinner=current;return;
                 }
               }
               // INTEGRIDAD 28.21.12: impedir que una copia parcial sustituya
@@ -784,7 +787,9 @@ async function flushOutbox(showToast=true){
               // No informar SINCRONIZADO cuando el cambio no se aplicó.
               item.status='CONFLICTO_LOCAL';
               item.syncedAt=null;
-              item.lastError='Conflicto: Firebase conserva otra revisión o datos técnicos. No se sobrescribió.';
+              item.lastError=historicalCloseConflict
+                ? 'CIERRE_HISTORICO_PROTEGIDO: existe cierre confirmado, pero la planificación remota sigue abierta. Requiere conciliación por JEFE; no se reintentará automáticamente ni se modificará inventario.'
+                : 'Conflicto: Firebase conserva otra revisión o datos técnicos. No se sobrescribió.';
               item.blockedAt=nowISO();
               await put('outbox',item);
               continue;
