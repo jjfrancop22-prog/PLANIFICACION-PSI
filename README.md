@@ -1,6 +1,5 @@
-ERP Planificación V28.21.28
+V28.21.29 — PRUEBA DE CIERRE MULTI-PC
 
-Archivos esenciales para publicación. Suba el contenido del ZIP manteniendo las rutas.
-Actualización: versión visible en pantalla; cuando exista una versión nueva se mostrará botón Actualizar.
-La actualización requiere confirmación y no se fuerza mientras el usuario trabaja.
-No elimina IndexedDB ni modifica Firebase o inventario.
+Se ajustó el cierre legítimo cuando Firebase tiene una revisión técnica más reciente y se difirió la alerta de finalización hasta el ACK de Firestore. No se borran conflictos, no se fuerzan cierres contradictorios ni se repite el consumo de inventario.
+
+Probar en dos equipos y verificar estado REALIZADO en Firebase antes de publicar en producción. Conservar respaldo V28.21.28.

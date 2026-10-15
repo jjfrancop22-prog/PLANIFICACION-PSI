@@ -592,6 +592,9 @@ async function flushOutbox(showToast=true){
               const closed=current?.status==='REALIZADO'||!!current?.completionCommittedAt;
               const incomingClosed=payload.status==='REALIZADO'||!!payload.completionCommittedAt;
               const remoteNewer=current && String(current.updatedAt||'')>String(payload.updatedAt||'');
+              // 28.21.29: el cierre legítimo puede llegar después de una sincronización
+              // técnica más reciente. La fecha por sí sola no invalida el cierre.
+              // Si el servidor ya está cerrado, una copia abierta jamás lo reabre.
               // V28.21.6: antes de subir una revisión ABIERTA, comprobar el evento
               // determinístico de cierre de esta misma actividad. No permite que
               // una copia antigua vuelva a escribir EN PROCESO tras una finalización.
@@ -624,13 +627,28 @@ async function flushOutbox(showToast=true){
                 if(!hasValue(next))return true;
                 // Resultados confirmados son inmutables en sincronización general.
                 // Una corrección legítima requiere una ruta explícita auditada.
-                if((key==='reagentResult'||key==='calibrationResult'||key==='sampleResult'||key==='operationalSamplesResult') && old?.completed===true && !sameValue(old,next))return true;
+                if((key==='reagentResult'||key==='calibrationResult'||key==='sampleResult'||key==='operationalSamplesResult') && old?.completed===true){
+                  const stripSyncMeta=v=>{
+                    if(Array.isArray(v))return v.map(stripSyncMeta);
+                    if(v&&typeof v==='object')return Object.fromEntries(Object.entries(v)
+                      .filter(([k])=>!['capturedAt','inventoryCommittedAt','inventorySignature','catalogExpandedAt'].includes(k))
+                      .map(([k,val])=>[k,stripSyncMeta(val)]));
+                    return v;
+                  };
+                  if(!sameValue(stripSyncMeta(old),stripSyncMeta(next)))return true;
+                }
                 // Las muestras registradas tampoco pueden alterarse silenciosamente
                 // después de finalizar una actividad.
                 if(key==='actualSamples' && closed && !sameValue(old,next))return true;
                 return false;
               });
-              if((closed&&!incomingClosed)||remoteNewer||technicalConflict){remoteWinner=current;return;}
+              // Solo se admite el cierre sobre una revisión más reciente si
+              // NO existen diferencias técnicas protegidas. Nunca forzar un cierre
+              // sobre un registro ya cerrado con otra operación de finalización.
+              const competingClosure=closed&&incomingClosed&&!!current?.completionOperationId&&
+                current.completionOperationId!==payload.completionOperationId;
+              const staleNonClosure=remoteNewer&&!incomingClosed;
+              if((closed&&!incomingClosed)||staleNonClosure||technicalConflict||competingClosure){remoteWinner=current;return;}
               tx.set(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
             });
             if(remoteWinner){
@@ -655,6 +673,17 @@ async function flushOutbox(showToast=true){
         item.lastError=null;
         item.attempts=Number(item.attempts||0)+1;
         await put('outbox',item);
+        // La notificación de FINALIZACIÓN solo se emite después del commit
+        // confirmado de planning. Identificador determinístico = sin duplicados.
+        if(item.entity==='planning' && payload.status==='REALIZADO' && payload.completionCommittedAt){
+          try{
+            await createActivityLifecycleAlert(payload,'FINALIZACION');
+            if(payload.calibrationResult?.completed||payload.reagentResult?.completed)
+              await createTechnicalAlert(payload,'CIERRE_TECNICO',{stage:'FINAL'});
+          }catch(notificationError){
+            console.warn('Cierre confirmado; aviso pendiente:',notificationError);
+          }
+        }
         sent++;
       }catch(err){
         // 10.12: si Firestore agotó cuota, NO hacer la lectura de verificación ni
@@ -2819,7 +2848,13 @@ async function verifyActivityCloudClosure(planId, timeoutMs=18000){
         if(!remote||remote.status!=='REALIZADO'||!remote.completionCommittedAt)return {ok:false,reason:'Firebase no confirma la finalización.'};
         const local=await getOne('planning',planId);
         const technical=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult'];
-        const differences=technical.filter(k=>local?.[k]!=null&&!sameCloudFunctionalPayload({[k]:local[k]},{[k]:remote[k]}));
+        const differences=technical.filter(k=>{
+          if(local?.[k]==null)return false;
+          if(k==='reagentResult')return !sameCloudFunctionalPayload(
+            {items:local[k]?.items,completed:local[k]?.completed},
+            {items:remote[k]?.items,completed:remote[k]?.completed});
+          return !sameCloudFunctionalPayload({[k]:local[k]},{[k]:remote[k]});
+        });
         if(differences.length)return {ok:false,reason:'Diferencia técnica con Firebase: '+differences.join(', ')};
         return {ok:true,remote};
       }catch(err){return {ok:false,reason:'No se pudo leer el servidor: '+String(err?.message||err)}}
@@ -2850,10 +2885,8 @@ async function completeActivityRecord(p,actualSamples=null,finalComment='',calib
   }
   const sampleDetail=p.actualSamples!==null&&p.actualSamples!==undefined?` · ${p.actualSamples} muestras analizadas`:'';const curveDetail=p.calibrationResult?.completed?` · curva ${p.calibrationResult.points.length} puntos × ${Number(p.calibrationResult.replicates||p.calibrationConfig?.replicates||3)} · R² ${p.calibrationResult.regression?.r2?.toFixed(6)??'—'}`:'';const reagentDetail=p.reagentResult?.completed?` · ${p.reagentResult.items.length} consumo(s) de reactivos registrados`:'';
   await audit('FINALIZAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} finalizó ${p.catalogName} a las ${formatActualStamp(p.actualFinishedAt)}${sampleDetail}${curveDetail}${reagentDetail}`);
-  // Avisos organizados: el cierre de actividad queda separado de los datos técnicos.
-  await createActivityLifecycleAlert(p,'FINALIZACION');
-  // Solo al CONFIRMAR FINALIZACIÓN: nunca en “guardar sin finalizar”. Agrupa curva/estándares y reactivos en un único aviso técnico.
-  if(p.calibrationResult?.completed||p.reagentResult?.completed)await createTechnicalAlert(p,'CIERRE_TECNICO',{stage:'FINAL'});
+  // 28.21.29: NO crear evidencia histórica de cierre antes del ACK del servidor.
+  // El procesador de cola publica los avisos únicamente tras confirmar Firestore.
   toast(`Actividad guardada localmente${sampleDetail} · comprobando Firebase…`);
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();await renderManagementDashboard();
   releaseActivityCompletion(p.id);
