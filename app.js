@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.44';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.45';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -776,9 +776,15 @@ async function flushOutbox(showToast=true){
               tx.set(ref,finalPayload,{merge:true});
             });
             if(remoteWinner){
-              // Evitar el falso ACK: reconciliar el documento remoto sin volver a encolar.
+              // V28.21.45: NO reemplazar un cierre local pendiente por una copia
+              // abierta de Firebase. La evidencia del analista permanece intacta
+              // hasta conciliación, sin volver a aplicar inventario.
               const canonical={...remoteWinner,id};delete canonical._cloudUpdatedAt;delete canonical._erpEntity;
-              await put('planning',canonical);
+              const existingLocal=await getOne('planning',id);
+              const localClosurePending=!!existingLocal &&
+                (existingLocal.status==='REALIZADO'||!!existingLocal.completionCommittedAt) &&
+                !(remoteWinner.status==='REALIZADO'||!!remoteWinner.completionCommittedAt);
+              if(!localClosurePending)await put('planning',canonical);
               // Si la operación ya está reflejada en Firebase, no es conflicto.
               if(planningOperationCoveredByCloud(payload,remoteWinner)){
                 item.status='SINCRONIZADO';item.syncedAt=nowISO();item.lastError=null;
@@ -788,8 +794,8 @@ async function flushOutbox(showToast=true){
               item.status='CONFLICTO_LOCAL';
               item.syncedAt=null;
               item.lastError=historicalCloseConflict
-                ? 'CIERRE_HISTORICO_PROTEGIDO: existe cierre confirmado, pero la planificación remota sigue abierta. Requiere conciliación por JEFE; no se reintentará automáticamente ni se modificará inventario.'
-                : 'Conflicto: Firebase conserva otra revisión o datos técnicos. No se sobrescribió.';
+                ? 'CIERRE_HISTORICO_PROTEGIDO: existe evento de finalización pero la planificación remota sigue abierta. Revisión JEFE obligatoria; inventario intacto.'
+                : (localClosurePending ? 'CIERRE_LOCAL_PROTEGIDO: Firebase conserva una revisión diferente. El cierre local NO se ha borrado; revisar evidencia técnica antes de conciliar. Inventario intacto.' : 'Conflicto: Firebase conserva otra revisión o datos técnicos. No se sobrescribió.');
               item.blockedAt=nowISO();
               await put('outbox',item);
               continue;

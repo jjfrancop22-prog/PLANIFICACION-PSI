@@ -11,3 +11,5 @@ V28.21.34: apertura de actividades mediante transacción Firestore confirmada an
 V28.21.35: catálogo por peso con formulario de envases equivalente a la ficha: lote individual, tara, peso bruto, cálculo neto y volumen líquido según densidad. No probado contra Firebase en vivo.
 
 V28.21.42: panel de errores locales visible, sin depender de tooltip; sin eliminación automática de conflictos ni modificaciones a consumos.
+
+V28.21.45: corrige desfase de versiones HTML/PWA/JS y evita que una revisión remota abierta borre un cierre local pendiente en caso de conflicto. Los conflictos técnicos permanecen para conciliación manual; no hay escrituras adicionales de inventario.
