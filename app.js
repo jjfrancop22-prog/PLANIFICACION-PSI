@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.45';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.46';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -34,33 +34,42 @@ function del(name,key){return new Promise((resolve,reject)=>{const r=store(name,
 function clearStore(name){return new Promise((resolve,reject)=>{const r=store(name,'readwrite').clear();r.onsuccess=()=>resolve();r.onerror=()=>reject(r.error)})}
 async function actor(){return currentSessionUser?.name||(await getOne('config','defaultUser'))?.value||'USUARIO LOCAL'}
 async function audit(action,module,recordId,detail){await put('audit',{id:uid('AUD'),createdAt:nowISO(),action,module,recordId,detail,user:await actor()})}
-async function queue(type,entity,payload){
-  const recordId=payload?.id||null;
-  // 6.33.24.2: una misma carta/registro mantiene UN solo cambio abierto en Outbox.
-  // Editar varias veces antes de que Firestore confirme ya no genera PENDIENTE 1, 2, 3...
-  // ni deja revisiones antiguas capaces de pisar la última edición.
-  if(recordId && type!=='DELETE'){
-    const open=(await getAll('outbox')).filter(x=>
-      x.entity===entity && x.recordId===recordId &&
-      (x.status==='PENDIENTE'||x.status==='ERROR') && x.type!=='DELETE'
-    ).sort((a,b)=>String(a.createdAt||'').localeCompare(String(b.createdAt||'')));
-    if(open.length){
-      const keep=open[0];
-      keep.type=open.some(x=>x.type==='CREATE')?'CREATE':type;
-      keep.payload=payload;keep.status='PENDIENTE';keep.attempts=0;keep.lastError=null;
-      keep.updatedAt=nowISO();keep.sessionId=PAGE_SESSION_ID;
-      await put('outbox',keep);
-      for(const stale of open.slice(1)){stale.status='SUPERSEDIDO';stale.lastError=null;stale.syncedAt=nowISO();await put('outbox',stale)}
-      firebaseBridge.flushRequested=true;await refreshSyncUI();scheduleOutboxFlush(80);return;
-    }
-  }
-  await put('outbox',{
-    id:uid('OUT'),createdAt:nowISO(),type,entity,payload,recordId,sessionId:PAGE_SESSION_ID,
-    status:'PENDIENTE',attempts:0,lastError:null
+// V28.21.46: la cola se modifica en una transacción local; cada revisión tiene identidad propia.
+async function queue(type,entity,payload,{retryConflict=false}={}){
+  const recordId=payload?.id||null,stamp=nowISO();
+  const frozen=JSON.parse(JSON.stringify(payload));
+  await new Promise((resolve,reject)=>{
+    const tx=db.transaction('outbox','readwrite'),os=tx.objectStore('outbox');
+    tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+    const request=os.getAll();
+    request.onsuccess=()=>{
+      const open=recordId&&type!=='DELETE'?request.result.filter(x=>x.entity===entity&&x.recordId===recordId&&
+        ['PENDIENTE','ERROR'].includes(x.status)&&x.type!=='DELETE').sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt))):[];
+      if(!open.length&&!retryConflict&&type!=='DELETE'&&request.result.some(x=>x.entity===entity&&x.recordId===recordId&&
+        x.status==='CONFLICTO_LOCAL'&&x.type!=='DELETE'&&sameCloudFunctionalPayload(x.payload,frozen)&&sameCloudFunctionalPayload(frozen,x.payload)))return;
+      const keep=open[0]||{id:uid('OUT'),createdAt:stamp,recordId,entity};
+      Object.assign(keep,{type:open.some(x=>x.type==='CREATE')?'CREATE':type,payload:frozen,
+        revision:uid('REV'),updatedAt:stamp,sessionId:PAGE_SESSION_ID,status:'PENDIENTE',attempts:0,lastError:null});
+      os.put(keep);
+      for(const stale of open.slice(1))os.put({...stale,status:'SUPERSEDIDO',syncedAt:stamp});
+    };
   });
-  firebaseBridge.flushRequested=true;
-  await refreshSyncUI();
-  scheduleOutboxFlush(80);
+  firebaseBridge.flushRequested=true;await refreshSyncUI();scheduleOutboxFlush(80);
+}
+// Una respuesta tardía solo puede confirmar la revisión que realmente envió.
+function saveOutboxAttempt(item){
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction('outbox','readwrite'),os=tx.objectStore('outbox');let saved=false;
+    tx.oncomplete=()=>resolve(saved);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+    const request=os.get(item.id);
+    request.onsuccess=()=>{
+      const fresh=request.result;
+      if(!fresh)return;
+      const same=fresh.revision||item.revision?fresh.revision===item.revision:
+        JSON.stringify(fresh.payload)===JSON.stringify(item.payload)&&fresh.updatedAt===item.updatedAt;
+      if(same){os.put(item);saved=true;}
+    };
+  });
 }
 // 10.12 · Protección de cuota: no martillar Firestore cuando responde RESOURCE_EXHAUSTED.
 let firebaseQuotaPauseUntil=0;
@@ -190,8 +199,9 @@ function setSyncState(state,detail=''){
 // en Firebase. No repite movimientos ni modifica inventario.
 function planningOperationCoveredByCloud(payload,remote){
   if(!payload||!remote||planStage(remote.status)<planStage(payload.status))return false;
+  if(payload.status==='REALIZADO'&&(!remote.completionCommittedAt||payload.actualFinishedAt!==remote.actualFinishedAt))return false;
   if(['id','date','analystId'].some(k=>payload[k]!==undefined && JSON.stringify(payload[k])!==JSON.stringify(remote[k])))return false;
-  const keys=['actualSamples','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
+  const keys=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
   const normalize=v=>{
     if(Array.isArray(v))return v.map(normalize);
     if(v&&typeof v==='object')return Object.fromEntries(Object.entries(v)
@@ -640,7 +650,9 @@ async function flushOutbox(showToast=true){
       .filter(x=>x.status==='PENDIENTE'||x.status==='ERROR')
       .sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
 
-    for(const item of items){
+    for(const queued of items){
+      const item=await getOne('outbox',queued.id);
+      if(!item||!['PENDIENTE','ERROR'].includes(item.status))continue;
       try{
         // Joe / analistas: los catálogos son de solo lectura según firestore.rules.
         // Conservar la operación para auditoría, sin reintentar escrituras prohibidas.
@@ -648,13 +660,13 @@ async function flushOutbox(showToast=true){
           item.status='BLOQUEADO_PERMISOS';
           item.lastError='Escritura administrativa retenida: solo JEFE puede modificar '+item.entity;
           item.blockedAt=item.blockedAt||nowISO();
-          await put('outbox',item);
+          await saveOutboxAttempt(item);
           continue;
         }
         if(!FIREBASE_SYNC_STORES.includes(item.entity)){
           item.status='OMITIDO';
           item.lastError=`Entidad no sincronizable: ${item.entity}`;
-          await put('outbox',item);
+          await saveOutboxAttempt(item);
           continue;
         }
 
@@ -717,7 +729,7 @@ async function flushOutbox(showToast=true){
               // INTEGRIDAD 28.21.13: bloquear cambios silenciosos en evidencia
               // técnica confirmada, aun cuando ambas versiones digan REALIZADO.
               // No repara documentos históricos ni vuelve a descontar inventario.
-              const technicalKeys=['actualSamples','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
+              const technicalKeys=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
               const hasValue=v=>v!==null&&v!==undefined&&v!=='';
               const stableValue=v=>{
                 if(Array.isArray(v))return v.map(stableValue);
@@ -752,7 +764,7 @@ async function flushOutbox(showToast=true){
                 }
                 // Las muestras registradas tampoco pueden alterarse silenciosamente
                 // después de finalizar una actividad.
-                if(key==='actualSamples' && closed && !sameValue(old,next))return true;
+                if((key==='actualSamples'||key==='sampleParameterCounts') && (closed||incomingClosed) && !sameValue(old,next))return true;
                 return false;
               });
               // Solo se admite el cierre sobre una revisión más reciente si
@@ -766,17 +778,17 @@ async function flushOutbox(showToast=true){
               const backwards=current && planStage(payload.status)<planStage(current.status) && planStage(payload.status)>=0;
               // V28.21.34: ninguna copia PROGRAMADO puede revertir una apertura confirmada.
               const staleProgrammedAfterStart=!!current?.actualStartedAt && current.status==='EN PROCESO' && payload.status==='PROGRAMADO';
-              if((closed&&!incomingClosed)||backwards||staleNonClosure||staleProgrammedAfterStart||technicalConflict||competingClosure){remoteWinner=current;return;}
+              if((current?.status==='CANCELADO'&&incomingClosed)||(closed&&!incomingClosed)||backwards||staleNonClosure||staleProgrammedAfterStart||technicalConflict||competingClosure){remoteWinner=current;return;}
               // Una transición a REALIZADO conserva los campos más recientes
               // de Firebase que no pertenecen al cierre, evitando reversiones
               // de muestras, inicio y metadatos al sincronizar varias PC.
               const finalPayload=(current && incomingProgress)
-                ? {...current,...payload,actualStartedAt:payload.actualStartedAt||current.actualStartedAt,_cloudUpdatedAt:cloudStamp}
+                ? {...current,...payload,actualStartedAt:current.actualStartedAt||payload.actualStartedAt,_cloudUpdatedAt:cloudStamp}
                 : {...payload,_cloudUpdatedAt:cloudStamp};
               tx.set(ref,finalPayload,{merge:true});
             });
             if(remoteWinner){
-              // V28.21.45: NO reemplazar un cierre local pendiente por una copia
+              // V28.21.46: NO reemplazar un cierre local pendiente por una copia
               // abierta de Firebase. La evidencia del analista permanece intacta
               // hasta conciliación, sin volver a aplicar inventario.
               const canonical={...remoteWinner,id};delete canonical._cloudUpdatedAt;delete canonical._erpEntity;
@@ -784,11 +796,15 @@ async function flushOutbox(showToast=true){
               const localClosurePending=!!existingLocal &&
                 (existingLocal.status==='REALIZADO'||!!existingLocal.completionCommittedAt) &&
                 !(remoteWinner.status==='REALIZADO'||!!remoteWinner.completionCommittedAt);
-              if(!localClosurePending)await put('planning',canonical);
+              const newerPending=(await getAll('outbox')).some(x=>x.entity==='planning'&&x.recordId===id&&
+                ['PENDIENTE','ERROR'].includes(x.status)&&(x.id!==item.id||x.revision!==item.revision));
+              if(!localClosurePending&&!newerPending)await put('planning',canonical);
               // Si la operación ya está reflejada en Firebase, no es conflicto.
               if(planningOperationCoveredByCloud(payload,remoteWinner)){
+                if(payload.status==='REALIZADO'&&remoteWinner.completionCommittedAt)await ensureConfirmedClosureAlerts(remoteWinner);
                 item.status='SINCRONIZADO';item.syncedAt=nowISO();item.lastError=null;
-                await put('outbox',item);continue;
+                await saveOutboxAttempt(item);
+                continue;
               }
               // No informar SINCRONIZADO cuando el cambio no se aplicó.
               item.status='CONFLICTO_LOCAL';
@@ -797,7 +813,7 @@ async function flushOutbox(showToast=true){
                 ? 'CIERRE_HISTORICO_PROTEGIDO: existe evento de finalización pero la planificación remota sigue abierta. Revisión JEFE obligatoria; inventario intacto.'
                 : (localClosurePending ? 'CIERRE_LOCAL_PROTEGIDO: Firebase conserva una revisión diferente. El cierre local NO se ha borrado; revisar evidencia técnica antes de conciliar. Inventario intacto.' : 'Conflicto: Firebase conserva otra revisión o datos técnicos. No se sobrescribió.');
               item.blockedAt=nowISO();
-              await put('outbox',item);
+              await saveOutboxAttempt(item);
               continue;
             }
           }else{
@@ -805,22 +821,17 @@ async function flushOutbox(showToast=true){
           }
         }
 
+        // La notificación de FINALIZACIÓN solo se emite después del commit
+        // confirmado de planning. Identificador determinístico = sin duplicados.
+        // Guardar los avisos en cola antes del ACK local permite recuperarlos tras una interrupción.
+        if(item.entity==='planning' && payload.status==='REALIZADO' && payload.completionCommittedAt){
+          await ensureConfirmedClosureAlerts(payload);
+        }
         item.status='SINCRONIZADO';
         item.syncedAt=nowISO();
         item.lastError=null;
         item.attempts=Number(item.attempts||0)+1;
-        await put('outbox',item);
-        // La notificación de FINALIZACIÓN solo se emite después del commit
-        // confirmado de planning. Identificador determinístico = sin duplicados.
-        if(item.entity==='planning' && payload.status==='REALIZADO' && payload.completionCommittedAt){
-          try{
-            await createActivityLifecycleAlert(payload,'FINALIZACION');
-            if(payload.calibrationResult?.completed||payload.reagentResult?.completed)
-              await createTechnicalAlert(payload,'CIERRE_TECNICO',{stage:'FINAL'});
-          }catch(notificationError){
-            console.warn('Cierre confirmado; aviso pendiente:',notificationError);
-          }
-        }
+        await saveOutboxAttempt(item);
         sent++;
       }catch(err){
         // 10.12: si Firestore agotó cuota, NO hacer la lectura de verificación ni
@@ -828,7 +839,7 @@ async function flushOutbox(showToast=true){
         if(isFirebaseQuotaError(err)){
           item.attempts=Number(item.attempts||0)+1;
           item.status='ERROR';item.lastError='Firebase quota/resource-exhausted · reintento automático diferido';
-          await put('outbox',item);failed++;registerFirebaseQuotaError(err);break;
+          await saveOutboxAttempt(item);failed++;registerFirebaseQuotaError(err);break;
         }
         // Algunos Chrome/PWA pueden perder la respuesta de confirmación aunque
         // Firestore sí haya aplicado la escritura. Antes de pintar ERROR, leer
@@ -838,7 +849,7 @@ async function flushOutbox(showToast=true){
           const payload=cloudPayloadFor(item.entity,item.payload||{});
           const id=payload.id||item.recordId||item.id;
           const ref=doc(firebaseBridge.db,cloudCollectionFor(item.entity),id);
-          const check=await getDoc(ref);
+          const check=await firebaseBridge.mods.getDocFromServer(ref);
           if(item.type==='DELETE'){
             confirmedDespiteClientError=!check.exists();
           }else if(check.exists()){
@@ -850,16 +861,17 @@ async function flushOutbox(showToast=true){
         }
         item.attempts=Number(item.attempts||0)+1;
         if(confirmedDespiteClientError){
+          if(item.entity==='planning'&&item.payload?.status==='REALIZADO')await ensureConfirmedClosureAlerts(item.payload);
           item.status='SINCRONIZADO';
           item.syncedAt=nowISO();
           item.lastError=null;
-          await put('outbox',item);
+          await saveOutboxAttempt(item);
           sent++;
           console.info('Outbox confirmado por lectura cloud tras error transitorio',item.entity,item.recordId||item.payload?.id);
         }else{
           item.status='ERROR';
           item.lastError=String(err?.message||err);
-          await put('outbox',item);
+          await saveOutboxAttempt(item);
           failed++;
           // No abortar el lote completo: continuar con otros registros.
           console.error('Outbox item falló',item.entity,item.recordId||item.payload?.id,err);
@@ -931,8 +943,9 @@ async function applyCloudRecord(storeName,id,data){
       for(const item of openItems){
         const payload=cloudPayloadFor(storeName,item.payload||{});
         if(same(payload,clean)){
+          if(storeName==='planning'&&clean.status==='REALIZADO'&&clean.completionCommittedAt)await ensureConfirmedClosureAlerts(clean);
           item.status='SINCRONIZADO';item.syncedAt=nowISO();item.lastError=null;
-          item.attempts=Number(item.attempts||0);await put('outbox',item);acknowledged=true;
+          item.attempts=Number(item.attempts||0);acknowledged=(await saveOutboxAttempt(item))||acknowledged;
         }
       }
       const stillOpen=(await getAll('outbox')).some(x=>x.entity===storeName&&x.recordId===clean.id&&(x.status==='PENDIENTE'||x.status==='ERROR')&&x.type!=='DELETE');
@@ -2642,30 +2655,40 @@ function collectReagentResult(p,requireComplete=true){
   return {ok:true,complete,result:{items,completed:complete,capturedAt:nowISO()}};
 }
 
+// Compara entradas del analista. Los saldos de COUNT son derivados del inventario,
+// y no deben recalcularse al volver a abrir/finalizar un consumo ya guardado.
+function sameReagentConsumptionInput(a,b){
+  const strip=v=>Array.isArray(v)?v.map(strip):v&&typeof v==='object'?
+    Object.fromEntries(Object.entries(v).filter(([k])=>!['initialSource','initialWeightCorrected'].includes(k)).map(([k,val])=>[k,strip(val)])):v;
+  const normalize=result=>(result?.items||[]).map(item=>{
+    const copy=strip(JSON.parse(JSON.stringify(item)));
+    if(copy.mode==='COUNT'){delete copy.stockBefore;delete copy.stockRemaining;}
+    return copy;
+  });
+  return !!a?.completed&&!!b?.completed&&sameCloudFunctionalPayload({items:normalize(a)},{items:normalize(b)});
+}
 // Los consumos confirmados son independientes del cierre horario de la actividad.
 async function commitReagentConsumption(p,result){
   if(!result?.completed)return {ok:false,text:'Complete o desmarque los consumos antes de guardarlos.'};
   const previous=p.reagentResult;
-  const oldSignature=previous?.inventorySignature;
-  const signature=JSON.stringify(result.items||[]);
-  if(oldSignature===signature&&previous?.inventoryCommittedAt){
-    p.reagentResult={...result,inventoryCommittedAt:previous.inventoryCommittedAt,inventorySignature:signature};
+  if(previous?.inventoryCommittedAt&&sameReagentConsumptionInput(previous,result)){
+    p.reagentResult=previous;
     return {ok:true,unchanged:true};
   }
+  if(previous?.inventoryCommittedAt)return {ok:false,text:'El consumo ya fue registrado y ahora contiene valores diferentes. Requiere conciliación del JEFE; no se modificó el inventario.'};
   // Una corrección requiere reconciliar el saldo previo, no volver a descontar
   // el consumo íntegro. Los valores finales son absolutos por envase.
   const catalogs=await getAll('catalog');
   for(const item of (result.items||[]).filter(x=>x.usedInActivity!==false&&!x.notUsed)){
     const live=catalogs.flatMap(c=>c.reagentConfig||[]).find(r=>normalizeIdentityText(r.name||'')===normalizeIdentityText(item.name||'')&&normalizeIdentityText(r.lot||'')===normalizeIdentityText(item.lot||''));
     if(!live)continue;
-    const old=(previous?.items||[]).find(x=>x.reagentId===item.reagentId);
     if(item.mode==='COUNT'){
-      const baseline=Number(live.stockQuantity||0)+Number(old?.used||0);
+      const baseline=Number(live.stockQuantity||0);
       if(Number(item.used)>baseline)return {ok:false,text:`Stock insuficiente de ${item.name}. Disponible: ${baseline}.`};
       item.stockBefore=baseline;item.stockRemaining=Math.max(0,baseline-Number(item.used||0));
     }
   }
-  p.reagentResult={...result,inventoryCommittedAt:nowISO(),inventorySignature:signature};
+  p.reagentResult={...result,inventoryCommittedAt:nowISO(),inventorySignature:JSON.stringify(result.items||[])};
   p.updatedAt=nowISO();
   await put('planning',p);await queue('UPDATE','planning',p);
   await applyConfirmedReagentInventoryToCatalog(p);
@@ -3013,21 +3036,15 @@ async function verifyActivityCloudClosure(planId, timeoutMs=18000){
     return {ok:false,reason:'Sin conexión confirmada con Firebase. Cierre local pendiente.'};
   while(Date.now()-started<timeoutMs){
     const ops=(await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===planId&&['PENDIENTE','ERROR','CONFLICTO_LOCAL'].includes(x.status));
-    if(ops.some(x=>x.status==='CONFLICTO_LOCAL'))return {ok:false,reason:'Conflicto entre computadoras: requiere revisión del JEFE.'};
-    if(!ops.length){
+    if(!ops.some(x=>['PENDIENTE','ERROR'].includes(x.status))){
       try{
         const snap=await sdk.getDocFromServer(sdk.doc(firebaseBridge.db,cloudCollectionFor('planning'),planId));
         const remote=snap.exists()?snap.data():null;
         if(!remote||remote.status!=='REALIZADO'||!remote.completionCommittedAt)return {ok:false,reason:'Firebase no confirma la finalización.'};
         const local=await getOne('planning',planId);
-        const technical=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult'];
-        const differences=technical.filter(k=>{
-          if(local?.[k]==null)return false;
-          if(k==='reagentResult')return !sameCloudFunctionalPayload(
-            {items:local[k]?.items,completed:local[k]?.completed},
-            {items:remote[k]?.items,completed:remote[k]?.completed});
-          return !sameCloudFunctionalPayload({[k]:local[k]},{[k]:remote[k]});
-        });
+        const technical=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
+        const differences=technical.filter(k=>!samePlanningTechnicalValue(local?.[k]??null,remote[k]??null));
+        if(local?.actualFinishedAt!==remote.actualFinishedAt)differences.push('actualFinishedAt');
         if(differences.length)return {ok:false,reason:'Diferencia técnica con Firebase: '+differences.join(', ')};
         return {ok:true,remote};
       }catch(err){return {ok:false,reason:'No se pudo leer el servidor: '+String(err?.message||err)}}
@@ -3035,6 +3052,51 @@ async function verifyActivityCloudClosure(planId, timeoutMs=18000){
     await new Promise(resolve=>setTimeout(resolve,700));
   }
   return {ok:false,reason:'La confirmación sigue pendiente. No vuelva a finalizar; revise sincronización.'};
+}
+async function retryLocalActivityClosure(planId){
+  const p=await getOne('planning',planId);
+  if(!p||p.status!=='REALIZADO'||!p.completionCommittedAt||!assertOwnPlan(p))return toast('Cierre local no disponible para este usuario');
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)return toast('Conéctese a Firebase antes de confirmar');
+  const sdk=firebaseBridge.mods;
+  try{
+    const snap=await sdk.getDocFromServer(sdk.doc(firebaseBridge.db,cloudCollectionFor('planning'),planId));
+    const remote=snap.exists()?snap.data():null;
+    if(!remote||remote.status==='CANCELADO'||remote.id!==p.id||remote.date!==p.date||remote.analystId!==p.analystId)
+      throw Error('La identidad, fecha o estado de la actividad difiere en Firebase.');
+    const keys=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
+    const different=keys.filter(k=>!samePlanningTechnicalValue(p[k]??null,remote[k]??null));
+    if(different.length)throw Error('Diferencia técnica en: '+different.join(', ')+'. Conserve ambos registros para revisión del JEFE.');
+    if(remote.status!=='REALIZADO'){
+      if(remote.status!=='EN PROCESO'||remote.actualStartedAt!==p.actualStartedAt)throw Error('El inicio de la actividad no coincide en Firebase.');
+      // Solo los campos de cierre proceden de la copia local; todo lo demás del servidor.
+      const closure={...remote,status:'REALIZADO',actualFinishedAt:p.actualFinishedAt,
+        completionCommittedAt:p.completionCommittedAt,completionCommittedBy:p.completionCommittedBy,
+        completionOperationId:p.completionOperationId,updatedAt:nowISO()};
+      await queue('UPDATE','planning',closure,{retryConflict:true});await flushOutbox(false);
+    }
+    const result=await verifyActivityCloudClosure(planId);
+    if(!result.ok)throw Error(result.reason);
+    await ensureConfirmedClosureAlerts(result.remote);
+    redundantConflictLastCheck=0;await reconcileRedundantPlanningConflicts();
+    await renderMyDay();await refreshSyncUI();
+    alert('Cierre confirmado en Firebase. Avisos de cierre puestos en cola. No se repitió el consumo.');
+  }catch(err){alert('Cierre pendiente: '+String(err.message||err)+' No se modificó el inventario.');}
+}
+function samePlanningTechnicalValue(a,b){
+  const normalize=v=>Array.isArray(v)?v.map(normalize):v&&typeof v==='object'?
+    Object.fromEntries(Object.entries(v).filter(([k])=>!['capturedAt','inventoryCommittedAt','inventorySignature','catalogExpandedAt'].includes(k))
+      .sort(([a],[b])=>a.localeCompare(b)).map(([k,val])=>[k,normalize(val)])):v;
+  return JSON.stringify(normalize(a))===JSON.stringify(normalize(b));
+}
+async function ensureConfirmedClosureAlerts(payload){
+  const records=[await createActivityLifecycleAlert(payload,'FINALIZACION')];
+  if(payload.calibrationResult?.completed||payload.reagentResult?.completed)
+    records.push(await createTechnicalAlert(payload,'CIERRE_TECNICO',{stage:'FINAL'}));
+  // Si hubo interrupción entre guardar el aviso y ponerlo en cola, recuperarlo.
+  for(const rec of records.filter(Boolean)){
+    const ops=(await getAll('outbox')).filter(x=>x.entity==='planComments'&&x.recordId===rec.id);
+    if(!ops.some(x=>['PENDIENTE','ERROR','SINCRONIZADO'].includes(x.status)))await queue('CREATE','planComments',rec);
+  }
 }
 async function showActivityCloudClosureResult(p){
   const result=await verifyActivityCloudClosure(p.id);
@@ -3065,7 +3127,16 @@ async function completeActivityRecord(p,actualSamples=null,finalComment='',calib
   releaseActivityCompletion(p.id);
   await showActivityCloudClosureResult(p);
 }
+const technicalSubmissionLocks=new Set();
 async function submitFinishActivity(e){
+  e.preventDefault();
+  const id=$('#finishActivityPlanId').value;
+  if(technicalSubmissionLocks.has(id))return toast('El registro ya se está guardando');
+  technicalSubmissionLocks.add(id);
+  try{return await submitFinishActivityOnce(e)}
+  finally{technicalSubmissionLocks.delete(id)}
+}
+async function submitFinishActivityOnce(e){
   e.preventDefault();
   let p=await getOne('planning',$('#finishActivityPlanId').value);if(!p)return;
   p=await hydratePlanTechnicalRequirements(p);
@@ -3125,7 +3196,7 @@ async function submitFinishActivity(e){
   if(!claim.ok){toast(claim.reason);return;}
   const submitBtn=$('#finishSubmitBtn');if(submitBtn)submitBtn.disabled=true;
   technicalSnapshot='';$('#finishActivityDialog').close();
-  try{await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment,calibrationResult,reagentResult);}
+  try{await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment,calibrationResult,reagentResult===undefined?undefined:p.reagentResult);}
   catch(err){releaseActivityCompletion(p.id);throw err;}
   finally{if(submitBtn)submitBtn.disabled=false;}
 }
@@ -3338,6 +3409,7 @@ async function renderMyDay(){
   }
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
   await renderMyDayControlCharts(date,analystId);
+  const pendingClosures=new Set((await getAll('outbox')).filter(x=>x.entity==='planning'&&x.payload?.status==='REALIZADO'&&['PENDIENTE','ERROR','CONFLICTO_LOCAL'].includes(x.status)).map(x=>x.recordId));
   const plans=(await visiblePlanningRows()).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
   $('#myDayEmpty').classList.toggle('hidden',plans.length>0);
   const a=(await getAll('analysts')).find(x=>x.id===analystId);
@@ -3421,6 +3493,7 @@ async function renderMyDay(){
     const _req={curve:planRequiresCalibration(p)||!!(_catReq?.calibrationConfig?.enabled&&_catReq.calibrationConfig?.points?.length),reagents:planHasReagents(p)||!!_catReq?.reagentConfig?.length};
     const ss=steps.filter(x=>x.catalogId===p.catalogId).sort((a,b)=>a.order-b.order);
     const comments=allComments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
+    const localClosurePending=p.status==='REALIZADO'&&pendingClosures.has(p.id);
     const joeClosureConflict=p.status!=='REALIZADO'&&(joeClosureMap.has(p.id)||!!p.actualFinishedAt);    const st=timeToMinutes(p.startTime),en=timeToMinutes(p.endTime);
     const isNow=p.id===active?.id,isNext=!isNow&&p.id===next?.id;
     const late=today&&p.status==='PROGRAMADO'&&nowMin>st&&!isNow;
@@ -3433,7 +3506,7 @@ async function renderMyDay(){
       ?(futureDay?`${flex}<button class="btn secondary myday-action future-locked" disabled>🗓 Disponible el ${formatShortDate(p.date)}</button>`:`${flex}<button class="btn primary myday-action" data-start-activity="${p.id}">▶ Iniciar actividad</button>`)
       :p.status==='EN PROCESO'
         ?joeClosureConflict?(currentSessionUser?.role==='JEFE'?`<button type="button" class="btn secondary myday-action" data-joe-reconcile="${escapeHtml(p.id)}">🔎 Verificar y conciliar cierre en Firebase (JEFE)</button>`:`<button class="btn secondary myday-action" disabled title="Existe evidencia de finalización; requiere conciliación por JEFE">⚠ Cierre pendiente de conciliación</button>`):`<button class="btn primary myday-action" data-finish-activity="${p.id}">✓ Finalizar actividad</button>`
-        :`<span class="done-pill">✓ Finalizada${p.actualFinishedAt?` · ${formatActualStamp(p.actualFinishedAt)}`:''}</span>`;
+        :localClosurePending?`<span class="done-pill" style="background:#fff1d6;color:#754800">⚠ Cierre local · pendiente Firebase</span><button class="btn secondary" data-retry-closure="${p.id}">Reintentar confirmación (sin consumo)</button>`:`<span class="done-pill">✓ Finalizada${p.actualFinishedAt?` · ${formatActualStamp(p.actualFinishedAt)}`:''}</span>`;
     let actual='';
     if(p.actualStartedAt){
       const realMins=p.actualFinishedAt?realWorkMinutesBetween(p.actualStartedAt,p.actualFinishedAt):0;
@@ -3451,7 +3524,7 @@ async function renderMyDay(){
             <div class="myday-title">${escapeHtml(p.catalogName)}</div>
             <div class="myday-meta">${escapeHtml(sectionMeta(p.section).label)} · ${minutesText(p.durationMinutes)}${p.samples?` · ${p.samples} muestras planificadas`:''}${p.actualSamples!==null&&p.actualSamples!==undefined?` · ${p.actualSamples} muestras analizadas`:''}</div>
           </div>
-          <span class="status-pill status-${p.status.replaceAll(' ','-')}">${p.status}</span>
+          <span class="status-pill status-${p.status.replaceAll(' ','-')}">${localClosurePending?'CIERRE LOCAL PENDIENTE':p.status}</span>
         </div>
         
         ${joeClosureConflict?`<div style="padding:10px;margin:8px 0;border:1px solid #e6b450;border-radius:8px;background:#fff8e8;color:#633d00"><b>⚠ Cierre histórico detectado · estado actual ${escapeHtml(p.status)}</b><br><small>No vuelva a finalizar: requiere verificación de la planificación en Firebase.</small></div>`:''}
@@ -3471,6 +3544,7 @@ async function renderMyDay(){
       </div>
     </article>`;
   }).join('');
+  $('#myDayCards').querySelectorAll('[data-retry-closure]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await retryLocalActivityClosure(b.dataset.retryClosure)}finally{b.disabled=false}});
   // Reutiliza la transacción protegida existente: exige confirmación, motivo
   // documentado, coincidencia updatedAt y ACK del servidor. No toca inventario.
   $('#myDayCards').querySelectorAll('[data-joe-reconcile]').forEach(b=>b.addEventListener('click',async()=>{

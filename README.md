@@ -1,15 +1,37 @@
-# ERP Planificación V28.21.31 — prueba de ahorro de lecturas
+# ERP Planificación V28.21.46 — cierre y confirmación
 
-Esta versión conserva las 17 entradas del ZIP original. Cambios limitados a las verificaciones de conflictos redundantes: no consultar Firestore cuando la pestaña está oculta; durante inactividad con pestaña visible, comprobar cada 15 min; con actividad, cada 90 s. Se conserva la escucha en tiempo real de las ocho colecciones y la sincronización de cierres y reactivos.
+## Corrección
 
-**Limitación:** esta optimización no garantiza una reducción significativa de las 6.700 lecturas, que podrían proceder de los snapshots iniciales o de otros clientes. No ha sido validada contra Firebase de producción.
+La versión 45 podía guardar los consumos y, al finalizar, sustituir el resultado con marca de inventario por los valores del formulario. Esto podía reprocesar el consumo y producir diferencias con los resultados que ya estaban en Firebase. La nueva versión conserva el resultado guardado y no vuelve a descontarlo al cerrar. También evita que una respuesta atrasada de sincronización confirme una revisión posterior aún no enviada.
 
-Prueba: comparar lecturas de Firebase en ventanas equivalentes antes/después, con igual número de sesiones, y verificar cierres con dos equipos. No borrar IndexedDB ni restablecer la base.
+- Guardar y cerrar conserva el mismo consumo, los saldos y las marcas originales.
+- El doble clic en confirmar procesa una sola solicitud.
+- Una operación idéntica a un conflicto protegido no crea otra operación pendiente automáticamente.
+- Los avisos determinísticos se ponen en cola después de la confirmación del cierre en Firebase, antes del reconocimiento local del envío. Una respuesta equivalente del servidor también permite recuperarlos.
+- Mi Jornada distingue «Cierre local pendiente» y ofrece «Reintentar confirmación (sin consumo)».
+- El reintento consulta el servidor, compara identidad, muestras, parámetros, reactivos y curvas. Solo solicita el cierre si los datos técnicos coinciden. No ejecuta movimientos de inventario.
 
-V28.21.34: apertura de actividades mediante transacción Firestore confirmada antes de notificar; bloqueo de regresión PROGRAMADO. Prueba controlada, no verificada contra Firebase de producción.
+## Aplicación y caso de María Elena
 
-V28.21.35: catálogo por peso con formulario de envases equivalente a la ficha: lote individual, tara, peso bruto, cálculo neto y volumen líquido según densidad. No probado contra Firebase en vivo.
+1. Conservar un respaldo exportado de cada navegador antes de actualizar. Mantener los datos locales y los conflictos; no borrar IndexedDB ni restablecer el navegador.
+2. Publicar el contenido completo del ZIP en el mismo sitio del ERP, manteniendo la dirección habitual. No se necesita cambiar la configuración ni las reglas de Firebase para este cambio.
+3. Actualizar la aplicación y comprobar V28.21.46 en ambas computadoras.
+4. En la misma computadora, navegador y dirección donde María Elena cerró a las 16:10, abrir Mi Jornada y usar «Reintentar confirmación (sin consumo)» si figura pendiente.
+5. Si coincide la evidencia, se confirma el cierre y se ponen los avisos en cola para el JEFE. Si informa «Diferencia técnica», conservar ambos registros: este paquete no fuerza ni corrige los saldos históricos de manera automática. La revisión de los conflictos permite exportar su evidencia.
+6. Verificar en la computadora del JEFE que la actividad deja de aparecer EN PROCESO y aparece el aviso de cierre.
 
-V28.21.42: panel de errores locales visible, sin depender de tooltip; sin eliminación automática de conflictos ni modificaciones a consumos.
+Los 43 conflictos actuales son registros locales que este ZIP no puede inspeccionar por sí solo. La conciliación existente únicamente archiva los que estén reflejados en Firebase; las diferencias reales se conservan. No se ha accedido ni modificado su Firebase de producción.
 
-V28.21.45: corrige desfase de versiones HTML/PWA/JS y evita que una revisión remota abierta borre un cierre local pendiente en caso de conflicto. Los conflictos técnicos permanecen para conciliación manual; no hay escrituras adicionales de inventario.
+## Validación local
+
+21 comprobaciones de regresión aprobadas con Node.js, un adaptador de transacciones locales en memoria y un servidor Firestore simulado. Incluyen saldo 99 − 4 = 95, pesos, doble clic, respuestas tardías, cierre y avisos, rechazo de diferencias técnicas y recuperación sin inventario. Comprobación sintáctica de JavaScript y uniformidad de versión. Estas pruebas no sustituyen la comprobación real con dos computadoras; no se ejecutaron en un navegador ni contra Firebase de producción.
+
+Desde la carpeta descomprimida:
+
+```bash
+node --check app.js
+node pruebas/regression.cjs
+python3 -m http.server 8080
+```
+
+La prueba de regresión usa datos en memoria y no conecta a Firebase. Para abrir el ERP local, visitar http://localhost:8080; la aplicación real utiliza su configuración habitual.

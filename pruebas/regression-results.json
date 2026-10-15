@@ -1,0 +1,26 @@
+{
+  "passed": 21,
+  "tests": [
+    "COUNT: guardar y finalizar conserva 99 - 4 = 95",
+    "COUNT: reintento no escribe inventario ni cambia evidencia",
+    "Cambio real de consumo queda bloqueado para conciliación",
+    "WEIGHT: cerrar conserva pesos registrados al cambiar la fuente del formulario",
+    "Respuesta tardía no confirma una revisión nueva",
+    "Cierre más reciente permanece en cola después del ACK antiguo",
+    "Escrituras simultáneas de cola mantienen una sola revisión abierta",
+    "Transacción confirma cierre sobre evidencia técnica idéntica sin repetir consumo",
+    "Cierre confirmado genera avisos determinísticos de cierre y datos técnicos",
+    "Aviso de cierre llega al servidor simulado",
+    "Una copia antigua abierta no reabre el cierre",
+    "Consumos diferentes entre equipos no se sobrescriben ni se cierran",
+    "Un mismo conflicto repetido conserva evidencia sin aumentar la cola",
+    "Todos los envíos y reintentos de cierres guardados dejan intacto el inventario",
+    "Recuperación de cierre existente informa campos diferentes y no escribe",
+    "Recuperación confirma cierre pendiente cuando las evidencias coinciden",
+    "Completar actividad conserva el objeto de consumo confirmado",
+    "Conciliación no archiva diferencias en muestras por parámetro",
+    "Primer guardado toma el saldo disponible y aplica un solo movimiento local",
+    "Formulario de cierre pasa el consumo confirmado a la finalización",
+    "Doble clic en confirmar procesa un solo cierre"
+  ]
+}
