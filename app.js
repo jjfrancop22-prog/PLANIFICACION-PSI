@@ -185,6 +185,67 @@ function setSyncState(state,detail=''){
   // 10.7: no lanzar refresh asíncrono desde aquí. Ese patrón podía terminar
   // después de la confirmación real y dejar visualmente "SINCRONIZANDO".
 }
+// V28.21.30 · Resolver únicamente conflictos locales redundantes, con lectura
+// EXCLUSIVA del servidor. No toca planning remoto ni inventario; conserva la
+// operación íntegra como evidencia. Una diferencia técnica bloquea el archivo.
+let redundantConflictCheckBusy=false;
+let redundantConflictLastCheck=0;
+const REDUNDANT_CONFLICT_CHECK_MS=90000;
+async function reconcileRedundantPlanningConflicts(){
+  if(redundantConflictCheckBusy||firebaseBridge.busy||!firebaseBridge.ready||
+     !firebaseBridge.authUser||!navigator.onLine||smartSyncSleeping||quotaPauseRemaining()>0)return 0;
+  if(Date.now()-redundantConflictLastCheck<REDUNDANT_CONFLICT_CHECK_MS)return 0;
+  const conflicts=(await getAll('outbox')).filter(x=>x.status==='CONFLICTO_LOCAL'&&x.entity==='planning'&&x.type!=='DELETE');
+  if(!conflicts.length)return 0;
+  const sdk=firebaseBridge.mods;
+  if(typeof sdk?.getDocFromServer!=='function')return 0;
+  redundantConflictCheckBusy=true;redundantConflictLastCheck=Date.now();
+  let resolved=0;
+  const ignored=new Set(['status','updatedAt','_cloudUpdatedAt','_erpEntity','syncedAt','createdAt',
+    'actualFinishedAt','completionCommittedAt','completionCommittedBy','completionOperationId',
+    'completionClaim','completionClaimedAt','chiefClosure','lastSyncedAt','lastModifiedBy','lastUpdatedBy']);
+  const norm=v=>{
+    if(Array.isArray(v))return v.map(norm);
+    if(v&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().map(k=>[k,norm(v[k])]));
+    return v===undefined?null:v;
+  };
+  const equal=(a,b)=>JSON.stringify(norm(a))===JSON.stringify(norm(b));
+  try{
+    const grouped=new Map();
+    for(const op of conflicts){
+      const id=op.recordId||op.payload?.id;
+      if(!id)continue;
+      if(!grouped.has(id))grouped.set(id,[]);
+      grouped.get(id).push(op);
+    }
+    // Máximo cuatro documentos por ciclo para no aumentar lecturas Firestore.
+    for(const [id,ops] of [...grouped].slice(0,4)){
+      try{
+        const snap=await sdk.getDocFromServer(sdk.doc(firebaseBridge.db,cloudCollectionFor('planning'),id));
+        if(!snap.exists())continue;
+        const remote=snap.data()||{};
+        if(remote.status!=='REALIZADO'||!remote.completionCommittedAt)continue;
+        for(const op of ops){
+          const payload=cloudPayloadFor('planning',op.payload||{});
+          if(['id','date','analystId'].some(k=>payload[k]!==undefined&&!equal(payload[k],remote[k])))continue;
+          const different=Object.keys(payload).filter(k=>!ignored.has(k)&&payload[k]!==undefined&&!equal(payload[k],remote[k]));
+          if(different.length)continue;
+          // Releer la operación local antes de archivarla: nunca cambiar otra revisión.
+          const fresh=await getOne('outbox',op.id);
+          if(!fresh||fresh.status!=='CONFLICTO_LOCAL'||!equal(fresh.payload,op.payload))continue;
+          fresh.status='ARCHIVADO_CONFIRMADO_FIREBASE';
+          fresh.archivedAt=nowISO();
+          fresh.archiveReason='Revisión local redundante; Firebase REALIZADO y campos sustantivos idénticos';
+          fresh.archiveServerCompletionAt=remote.completionCommittedAt;
+          // Se conservan payload, lastError y blockedAt para trazabilidad.
+          await put('outbox',fresh);resolved++;
+        }
+      }catch(err){console.warn('Verificación de conflicto pendiente sin cambios',id,err)}
+    }
+    if(resolved){firebaseBridge.lastSyncAt=nowISO();console.info('Conflictos redundantes archivados tras confirmar Firebase:',resolved)}
+    return resolved;
+  }finally{redundantConflictCheckBusy=false;}
+}
 async function refreshSyncUI(){
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy)await reconcileConfirmedChartOutbox();
   const all=await getAll('outbox');
@@ -5841,7 +5902,9 @@ setInterval(async()=>{
 // el estado real de Outbox con el indicador. Corrige estados visuales obsoletos.
 setInterval(()=>{
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy){
-    refreshSyncUI().catch(e=>console.warn('Watchdog de sincronización',e));
+    reconcileRedundantPlanningConflicts()
+      .then(()=>refreshSyncUI())
+      .catch(e=>console.warn('Watchdog de sincronización',e));
   }
 },15000);
 window.addEventListener('offline',()=>setSyncState('LOCAL','Sin conexión · cambios protegidos localmente'));
