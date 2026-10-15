@@ -19,6 +19,7 @@
       <button class="nav-item" data-view="seguimiento-diario">◉ <span>Seguimiento Diario</span></button>
       <button class="nav-item" data-view="gestion">▤ <span>Dashboard Gestión</span></button>
       <button class="nav-item" data-view="cartas-control">📈 <span>Cartas de Control</span></button>
+      <button class="nav-item" data-view="reactivos-maestro">⚗ <span>Reactivos y Materiales</span></button>
       <button class="nav-item" data-view="catalogo">▦ <span>Catálogo Maestro</span></button>
       <button class="nav-item" data-view="analistas">♙ <span>Analistas</span></button>
       <button class="nav-item" data-view="inteligencia">✦ <span>Control inteligente</span></button>
@@ -79,6 +80,18 @@
         </div>
       </div>
     </section>
+
+    <section id="view-reactivos-maestro" class="view">
+<div class="card" style="padding:22px"><div class="section-head"><div><h2>Catálogo de Reactivos y Materiales</h2><p>Alta de productos, lotes y asignación por checklist. Las fichas existentes alimentan el registro del analista.</p></div><button id="master32New" class="btn primary">+ Nuevo producto / lote</button></div>
+<div class="inline-alert info">Esta pantalla administra las configuraciones existentes de los parámetros. El stock es auxiliar e independiente del ERP de inventario real. No edite simultáneamente el mismo producto desde varias computadoras.</div>
+<input type="search" id="master32Search" placeholder="Buscar producto o lote…" style="width:100%;margin:12px 0"><small id="master32Total"></small>
+<div style="overflow:auto"><table><thead><tr><th>Producto</th><th>Lote</th><th>Disponible</th><th>Parámetros</th><th>Acción</th></tr></thead><tbody id="master32Body"></tbody></table></div></div>
+</section>
+<dialog id="master32Dialog" style="width:min(900px,96vw);max-height:90vh"><form id="master32Form"><h2>Producto / lote · asignación inteligente</h2><p>Seleccione las técnicas y parámetros en los que el analista debe registrar el consumo.</p>
+<div class="form-grid"><label>Producto<input id="master32Name" required></label><label>Tipo<select id="master32Type"><option>REACTIVO</option><option>MATERIAL</option><option>PATRON</option><option>ESTANDAR</option><option>OTRO</option></select></label><label>Lote<input id="master32Lot" required></label><label>Marca<input id="master32Brand"></label><label>Presentación<input id="master32Presentation"></label><label>Control<select id="master32Mode"><option value="COUNT">Contable (unidad / mL / g)</option><option value="WEIGHT">Pesable · sólido o líquido (tara y peso)</option></select></label><label id="master32UnitWrap">Unidad<input id="master32Unit" value="unidad"></label><label id="master32StockWrap">Stock inicial real / saldo disponible<input id="master32Stock" type="number" min="0" step="any"></label></div>
+<div id="master32Weight" class="card" style="display:none;padding:14px;margin:12px 0"><h3>Control por peso · mismo criterio de la ficha anterior</h3><div class="form-grid"><label>Estado físico<select id="master32Physical"><option value="SOLID">SÓLIDO</option><option value="LIQUID">LÍQUIDO</option></select></label><label id="master32DensityWrap" style="display:none">Densidad (g/mL)<input id="master32Density" type="number" min="0.000001" step="any" placeholder="Ej. 1.025"></label></div><p class="inventory-container-hint">Mismo criterio de las fichas anteriores: identificación, lote, tipo, tara y peso bruto por envase. Para líquidos, se calcula también el volumen con la densidad.</p><div id="master32Containers"></div><button type="button" class="btn secondary" id="master32AddContainer">+ Agregar frasco / sobre</button></div>
+<p class="inventory-container-hint">Ingrese el saldo físico real (admite 0). Al asignar un reactivo a una actividad, se incorpora automáticamente a su ficha y al registro de consumo del analista. No se recuperan existencias antiguas.</p><h3>☑ Asignar a técnicas y parámetros</h3><div id="master32Assignments" style="max-height:32vh;overflow:auto"></div>
+<div class="dialog-actions"><button type="button" class="btn secondary" id="master32Cancel">Cancelar</button><button type="submit" class="btn primary" id="master32Save">Guardar producto y asignaciones</button></div></form></dialog>
 
     <section id="view-planificador" class="view">
       <div id="executivePlannerSummary" class="executive-summary"></div>
@@ -732,11 +745,11 @@
     <p class="smart-sync-note"><b>Seguridad:</b> por ahora no se cierra automáticamente la sesión a los 30 minutos. Cerrar sesión con datos pendientes o mientras se está trabajando puede interrumpir el flujo. Esta decisión se puede configurar posteriormente con validación de pendientes.</p>
   </div>
 </dialog>
-<script src="app.js?v=6.33.25.10.28.21.31"></script>
+<script src="app.js?v=6.33.25.10.28.21.36"></script>
 
 <script>
 (function(){
-  const CURRENT='1.0.5.6.33.25.10.28.21.31';
+  const CURRENT='1.0.5.6.33.25.10.28.21.40';
   const bar=document.getElementById('pwaUpdateBar');
   const msg=document.getElementById('pwaUpdateText');
   const button=document.getElementById('pwaUpdateBtn');
@@ -756,7 +769,7 @@
   };
   window.addEventListener('load',async()=>{
     try{
-      const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.33.25.10.28.21.31',{scope:'./',updateViaCache:'none'});
+      const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.33.25.10.28.21.36',{scope:'./',updateViaCache:'none'});
       const check=async()=>{
         try{
           const r=await fetch('./version.json?t='+Date.now(),{cache:'no-store'});

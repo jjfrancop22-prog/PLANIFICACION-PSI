@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.27';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.38';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -384,6 +384,12 @@ async function reconcilePlanningAgainstCloud(cloudIds){
   }
   return removed;
 }
+// V28.21.40 · Estados progresivos para todos los analistas.
+const PLAN_STAGE={PROGRAMADO:0,'EN PROCESO':1,REALIZADO:2};
+function planStage(v){return PLAN_STAGE[String(v||'').toUpperCase()]??-1}
+function isProgressivePlanUpdate(remote,incoming){
+  return !!remote && planStage(incoming?.status)>planStage(remote?.status) && planStage(remote?.status)>=0;
+}
 async function reconcilePreviousSessionPlanningOutbox(cloudDocs){
   // 10.11 · Al abrir una PC, Firestore manda. Una Outbox heredada de una sesión
   // anterior no puede resucitar una planificación borrada/modificada en otra PC.
@@ -404,8 +410,22 @@ async function reconcilePreviousSessionPlanningOutbox(cloudDocs){
     if(cloud && sameCloudFunctionalPayload(payload,cloud)){
       item.status='SINCRONIZADO';item.syncedAt=nowISO();item.lastError=null;await put('outbox',item);acknowledged++;continue;
     }
-    // Si la nube ya no tiene el registro, o contiene otra revisión, se conserva
-    // la nube como estado canónico y se impide que el caché antiguo la sobrescriba.
+    // Una operación de apertura/cierre legítima, aún pendiente tras recargar,
+    // puede progresar desde la revisión del servidor sin cuarentena automática.
+    // No se permite retroceder ni resucitar actividades ausentes.
+    if(cloud && isProgressivePlanUpdate(cloud,payload)){
+      item.payload={...cloud,...payload,id,actualStartedAt:payload.actualStartedAt||cloud.actualStartedAt};
+      item.status='PENDIENTE';item.sessionId=PAGE_SESSION_ID;
+      item.lastError=null;await put('outbox',item);continue;
+    }
+    // Una revisión antigua con el MISMO estado no debe bloquear la jornada.
+    // La nube manda y la revisión local queda neutralizada (no reenviada).
+    if(cloud && planStage(cloud.status)>=planStage(payload.status) && planStage(payload.status)>=0){
+      item.status='SUPERSEDIDO';item.syncedAt=nowISO();
+      item.lastError='Revisión local sustituida por estado confirmado en Firebase';
+      await put('outbox',item);acknowledged++;continue;
+    }
+    // Ausencias y divergencias reales siguen protegidas.
     item.status='CONFLICTO_LOCAL';item.syncedAt=nowISO();
     item.lastError=cloud?'Revisión local antigua; Firestore conserva una revisión diferente':'Planificación local antigua ausente en Firestore';
     await put('outbox',item);quarantined++;
@@ -687,6 +707,15 @@ async function flushOutbox(showToast=true){
                 return v;
               };
               const sameValue=(a,b)=>JSON.stringify(stableValue(a))===JSON.stringify(stableValue(b));
+              // V28.21.39: al cerrar, conservar evidencia técnica confirmada
+              // en servidor si la copia local aún no la contiene. Nunca borrar
+              // resultados al enviar una transición de estado.
+              if(current && incomingClosed && !closed){
+                for(const key of technicalKeys){
+                  if((payload[key]===undefined||payload[key]===null) && current[key]!==undefined)
+                    payload[key]=current[key];
+                }
+              }
               const technicalConflict=!!current && technicalKeys.some(key=>{
                 const old=current[key],next=payload[key];
                 if(!hasValue(old))return false;
@@ -713,9 +742,20 @@ async function flushOutbox(showToast=true){
               // sobre un registro ya cerrado con otra operación de finalización.
               const competingClosure=closed&&incomingClosed&&!!current?.completionOperationId&&
                 current.completionOperationId!==payload.completionOperationId;
-              const staleNonClosure=remoteNewer&&!incomingClosed;
-              if((closed&&!incomingClosed)||staleNonClosure||technicalConflict||competingClosure){remoteWinner=current;return;}
-              tx.set(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
+              const incomingProgress=isProgressivePlanUpdate(current,payload);
+              const staleNonClosure=remoteNewer&&!incomingClosed&&!incomingProgress;
+              // Nunca aceptar un retroceso PROGRAMADO <- EN PROCESO.
+              const backwards=current && planStage(payload.status)<planStage(current.status) && planStage(payload.status)>=0;
+              // V28.21.34: ninguna copia PROGRAMADO puede revertir una apertura confirmada.
+              const staleProgrammedAfterStart=!!current?.actualStartedAt && current.status==='EN PROCESO' && payload.status==='PROGRAMADO';
+              if((closed&&!incomingClosed)||backwards||staleNonClosure||staleProgrammedAfterStart||technicalConflict||competingClosure){remoteWinner=current;return;}
+              // Una transición a REALIZADO conserva los campos más recientes
+              // de Firebase que no pertenecen al cierre, evitando reversiones
+              // de muestras, inicio y metadatos al sincronizar varias PC.
+              const finalPayload=(current && incomingProgress)
+                ? {...current,...payload,actualStartedAt:payload.actualStartedAt||current.actualStartedAt,_cloudUpdatedAt:cloudStamp}
+                : {...payload,_cloudUpdatedAt:cloudStamp};
+              tx.set(ref,finalPayload,{merge:true});
             });
             if(remoteWinner){
               // Evitar el falso ACK: reconciliar el documento remoto sin volver a encolar.
@@ -869,6 +909,7 @@ async function applyCloudRecord(storeName,id,data){
       if(acknowledged){firebaseBridge.lastError=null;firebaseBridge.lastSyncAt=nowISO();}
     }
   }
+  if(storeName==='planning' && local && planStage(local.status)>planStage(clean.status) && planStage(clean.status)>=0)return;
   // Nunca reabrir un cierre confirmado localmente por un snapshot antiguo.
   // El servidor queda protegido por transacciones y reglas de Firestore.
   if(storeName==='planning' && local && (local.status==='REALIZADO'||local.completionCommittedAt) && !(clean.status==='REALIZADO'||clean.completionCommittedAt))return;
@@ -1056,6 +1097,7 @@ function remoteChangeRelevantToView(view,reason){
     // la vista conserva selección/gráficas y se actualiza por selector, mes o botón Actualizar.
     'cartas-control':new Set([]),
     'catalogo':new Set(['catalog']),
+    'reactivos-maestro':new Set(['catalog']),
     'analistas':new Set(['analysts']),
     'trazabilidad':new Set(['audit']),
     'inicio':new Set(['planning','catalog','analysts','planComments'])
@@ -1082,6 +1124,7 @@ async function reconcileVisibleInterface(reason='REMOTE'){
     else if(active==='gestion')await renderManagementDashboard();
     else if(active==='cartas-control')await renderControlChartsManagement();
     else if(active==='catalogo')await renderCatalog();
+    else if(active==='reactivos-maestro')await renderReagentMaster32();
     else if(active==='analistas')await renderAnalysts();
     else if(active==='trazabilidad')await renderAudit();
     else if(active==='inteligencia')await analyzeData(true);
@@ -2258,18 +2301,47 @@ function formatActualStamp(iso){
 function assertOwnPlan(p){
   return currentSessionUser?.role!=='ANALISTA'||p?.analystId===currentSessionUser?.analystId;
 }
+// V28.21.34: apertura confirmada en Firestore ANTES de anunciarla al JEFE.
+// Una notificación local no constituye prueba de que planning haya cambiado.
+const activityStartInFlight=new Set();
 async function startMyActivity(planId){
-  const _guardPlan=await getOne('planning',planId);if(!_guardPlan||!assertOwnPlan(_guardPlan))return toast('No puede modificar actividades de otro analista');
-  let p=await getOne('planning',planId);if(!p)return;
-  if(p.date>dateToday())return toast(`Actividad programada para ${formatShortDate(p.date)}. Se habilitará el día correspondiente.`);
-  if(p.status==='REALIZADO')return toast('La actividad ya está finalizada');
-  p=await hydratePlanTechnicalRequirements(p);
-  p.status='EN PROCESO';p.actualStartedAt=p.actualStartedAt||nowISO();p.updatedAt=nowISO();
-  await put('planning',p);await queue('UPDATE','planning',p);
-  await audit('INICIAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} inició ${p.catalogName} a las ${formatActualStamp(p.actualStartedAt)}`);
-  await createActivityLifecycleAlert(p,'INGRESO');
-  toast(`Actividad iniciada · ${formatActualStamp(p.actualStartedAt)} · jefe notificado`);
-  await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
+  if(activityStartInFlight.has(planId))return toast('Ya se está confirmando esta apertura');
+  activityStartInFlight.add(planId);
+  try{
+    const local=await getOne('planning',planId);
+    if(!local||!assertOwnPlan(local))return toast('No puede modificar actividades de otro analista');
+    if(local.date>dateToday())return toast(`Actividad programada para ${formatShortDate(local.date)}`);
+    if(local.status==='REALIZADO'||local.status==='CANCELADO')return toast('La actividad ya está cerrada');
+    if(!firebaseBridge.ready||!firebaseBridge.authUser){
+      return toast('No se puede iniciar sin conexión confirmada a Firebase. Reintente al sincronizar.');
+    }
+    const {doc,runTransaction}=firebaseBridge.mods;
+    const ref=doc(firebaseBridge.db,cloudCollectionFor('planning'),planId);
+    let result=null;
+    await runTransaction(firebaseBridge.db,async tx=>{
+      const snap=await tx.get(ref);
+      if(!snap.exists())throw new Error('La actividad no existe en Firebase');
+      const remote=snap.data();
+      if(!assertOwnPlan(remote))throw new Error('La actividad pertenece a otro analista');
+      if(remote.status==='REALIZADO'||remote.status==='CANCELADO')throw new Error('La actividad ya fue cerrada');
+      if(remote.status==='EN PROCESO'&&remote.actualStartedAt){result={...remote,id:planId};return;}
+      if(remote.status!=='PROGRAMADO'&&remote.status!=='EN PROCESO')throw new Error('Estado remoto incompatible');
+      const stamp=remote.actualStartedAt||nowISO();
+      result={...remote,id:planId,status:'EN PROCESO',actualStartedAt:stamp,updatedAt:nowISO()};
+      tx.update(ref,{status:'EN PROCESO',actualStartedAt:stamp,updatedAt:result.updatedAt});
+    });
+    if(!result||result.status!=='EN PROCESO')throw new Error('Firebase no confirmó la apertura');
+    delete result._cloudUpdatedAt;delete result._erpEntity;
+    // Evitar que una operación PROGRAMADO anterior se reproduzca sobre la apertura.
+    for(const op of (await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===planId&&(x.status==='PENDIENTE'||x.status==='ERROR')&&x.payload?.status==='PROGRAMADO')){
+      op.status='CONFLICTO_LOCAL';op.lastError='Revisión programada anterior a apertura confirmada en Firebase';op.blockedAt=nowISO();await put('outbox',op);
+    }
+    await put('planning',result);
+    try{await createActivityLifecycleAlert(result,'INGRESO')}catch(alertErr){console.warn('Apertura confirmada, alerta pendiente',alertErr)}
+    toast(`Apertura CONFIRMADA por Firebase · ${formatActualStamp(result.actualStartedAt)}`);
+    await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
+  }catch(err){console.error('No se confirmó apertura',err);toast(`Apertura no confirmada: ${String(err?.message||err)}`)}
+  finally{activityStartInFlight.delete(planId)}
 }
 
 
@@ -2420,7 +2492,7 @@ function reagentCycleKey(r){
 }
 async function resolvePreviousReagentWeight(plan,reagent){
   const latest=await latestConfirmedReagentRecord(reagent,plan.id);
-  if(latest){const f=Number(latest.item.finalWeight??latest.item.after);if(Number.isFinite(f)){if(reagentIsDepleted(latest.item))return {weight:null,source:'AGOTADO',depleted:true};return {weight:f,source:'HISTORICO',depleted:false}}}
+  if(latest && (!reagent.stockAdjustedAt || latest.stamp>Date.parse(reagent.stockAdjustedAt))){const f=Number(latest.item.finalWeight??latest.item.after);if(Number.isFinite(f)){if(reagentIsDepleted(latest.item))return {weight:null,source:'AGOTADO',depleted:true};return {weight:f,source:'HISTORICO',depleted:false}}}
   const configured=Number(reagent.initialWeight);return Number.isFinite(configured)?{weight:configured,source:'CATALOGO',depleted:false}:null;
 }
 async function renderFinishReagents(p){
@@ -2462,7 +2534,7 @@ async function renderFinishReagents(p){
     }else{
       const latest=await latestConfirmedReagentRecord(r,p.id);
       const hasOwnDraft=old.usedInActivity===true||Number(old.used)>0;
-      const currentStock=Number.isFinite(Number(latest?.item?.stockRemaining))?Number(latest.item.stockRemaining):Number(r.stockQuantity||0);
+      const currentStock=latest && (!r.stockAdjustedAt || latest.stamp>Date.parse(r.stockAdjustedAt)) && Number.isFinite(Number(latest?.item?.stockRemaining))?Number(latest.item.stockRemaining):Number(r.stockQuantity||0);
       const stock=hasOwnDraft&&Number.isFinite(Number(old.stockBefore))?Number(old.stockBefore):currentStock;
       if(stock<=0&&!hasOwnDraft)continue;
       const checked=old.usedInActivity===true||Number(old.used)>0;
@@ -2844,6 +2916,7 @@ async function reconcileInventoryFromConfirmedHistory(){
     for(const r of c.reagentConfig){
       if(r.mode==='COUNT'){
         const latest=await latestConfirmedReagentRecord(r);
+        if(r.stockAdjustedAt && (!latest || Date.parse(latest.plan?.reagentResult?.inventoryCommittedAt||0)<=Date.parse(r.stockAdjustedAt)))continue;
         const sr=Number(latest?.item?.stockRemaining);
         if(Number.isFinite(sr)&&Number(r.stockQuantity)!==Math.max(0,sr)){
           r.stockQuantity=Math.max(0,sr);r.inventoryStatus=r.stockQuantity<=0?'AGOTADO':'ACTIVO';changed=true;
@@ -2897,7 +2970,7 @@ async function claimActivityCompletion(plan){
 }
 function releaseActivityCompletion(planId){if(planId)activityCompletionLocks.delete(planId)}
 
-// V28.21.27 · Confirmación por actividad: lectura exclusiva del servidor.
+// V28.21.32 · Confirmación por actividad: lectura exclusiva del servidor.
 // La cola local NO equivale a confirmación; no inventar ACK por conectividad.
 async function verifyActivityCloudClosure(planId, timeoutMs=18000){
   const started=Date.now();
@@ -3959,6 +4032,7 @@ async function buildReagentMasterProfiles(){
   for(const [key,hit] of latestUse){
     const base=byIdentity.get(key);if(!base)continue;
     const r=base.profile,item=hit.item;
+    if(r.stockAdjustedAt && hit.stamp<=Date.parse(r.stockAdjustedAt))continue;
     if(r.mode==='COUNT'&&Number.isFinite(Number(item.stockRemaining))){r.stockQuantity=Math.max(0,Number(item.stockRemaining));r.inventoryStatus=r.stockQuantity<=0?'AGOTADO':'ACTIVO';}
     if(r.mode==='WEIGHT'){
       if(item.physicalState)r.physicalState=item.physicalState;
@@ -5660,7 +5734,7 @@ async function handleFirebaseAuthState(authUser){
 }
 
 const ROLE_ACCESS={
-  JEFE:['inicio','planificador','mi-jornada','seguimiento-diario','gestion','cartas-control','catalogo','analistas','inteligencia','trazabilidad','configuracion'],
+  JEFE:['inicio','reactivos-maestro','planificador','mi-jornada','seguimiento-diario','gestion','cartas-control','catalogo','analistas','inteligencia','trazabilidad','configuracion'],
   ANALISTA:['inicio','mi-jornada'],
   SIN_ROL:['inicio']
 };
@@ -5720,7 +5794,7 @@ function switchView(view){
   if(!canAccessView(view)){
     toast('Este módulo no está habilitado para su rol');
     view=currentSessionUser?.role==='ANALISTA'?'mi-jornada':'inicio';
-  }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],'seguimiento-diario':['Seguimiento Diario','Vista ejecutiva del trabajo diario por analista'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],'cartas-control':['Cartas de Control','Tendencias, Westgard, cumplimiento e IA para Calidad'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='inteligencia')analyzeData(true);if(view==='planificador'){selfHealPlanningFromServer(false).then(()=>refreshPlanner()).catch(()=>refreshPlanner());}if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='seguimiento-diario')renderDailyMonitor();if(view==='gestion')renderManagementDashboard();if(view==='cartas-control')renderControlChartsManagement()}
+  }$$('.view').forEach(x=>x.classList.remove('active'));$(`#view-${view}`).classList.add('active');$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const meta={inicio:['Inicio','Catálogo y planificación trabajando sobre una sola base'],planificador:['Planificador Inteligente','Asignación basada en catálogo, competencias, carga y horario'],'mi-jornada':['Mi Jornada','Vista diaria del analista, instrucciones, desglose y comentarios'],catalogo:['Catálogo Maestro','Secciones independientes, una sola fuente de verdad'], 'reactivos-maestro':['Reactivos y Materiales','Productos, lotes y asignación por checklist'],analistas:['Analistas','Personas, jornada y competencias'],inteligencia:['Control inteligente','Validaciones antes de planificar'],trazabilidad:['Trazabilidad','Historial local de cambios y parametrización'],'seguimiento-diario':['Seguimiento Diario','Vista ejecutiva del trabajo diario por analista'],gestion:['Dashboard Gestión','Actividades realizadas, cumplimiento, Excel y edición controlada'],'cartas-control':['Cartas de Control','Tendencias, Westgard, cumplimiento e IA para Calidad'],configuracion:['Configuración','Parámetros generales del núcleo']}[view];$('#pageTitle').textContent=meta[0];$('#pageSubtitle').textContent=meta[1];const b=$('#btnContextNew');b.classList.toggle('hidden',currentSessionUser?.role!=='JEFE'||!['catalogo','analistas'].includes(view));b.textContent=view==='catalogo'?'+ Nuevo elemento':'+ Nuevo analista';b.onclick=view==='catalogo'?openCatalog:openAnalyst;if(view==='reactivos-maestro')renderReagentMaster32();if(view==='inteligencia')analyzeData(true);if(view==='planificador'){selfHealPlanningFromServer(false).then(()=>refreshPlanner()).catch(()=>refreshPlanner());}if(view==='mi-jornada'){renderMyDayAnalysts().then(()=>{if(currentSessionUser?.role==='ANALISTA'){$('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true}renderMyDay()})}if(view==='seguimiento-diario')renderDailyMonitor();if(view==='gestion')renderManagementDashboard();if(view==='cartas-control')renderControlChartsManagement()}
 async function refreshPlanner(){
   await renderPlanSelectors();
   await renderDailyLoad();
@@ -5729,9 +5803,137 @@ async function refreshPlanner(){
   await renderMandatoryPlanningAlerts();
 }
 
+
+// V28.21.33 · Panel maestro para administrar las fichas EXISTENTES sin tocar cierres históricos.
+// Se utiliza la colección 'catalog' ya autorizada y sincronizada; no se añade una
+// colección ni se ejecuta migración automática de datos de producción.
+let master32EditingKey='';
+let master32Containers=[];
+function master32ToggleMode(){
+  const weighted=$('#master32Mode').value==='WEIGHT', liquid=$('#master32Physical').value==='LIQUID';
+  $('#master32Weight').style.display=weighted?'block':'none';
+  $('#master32StockWrap').style.display=weighted?'none':'';
+  $('#master32UnitWrap').style.display=weighted?'none':'';
+  $('#master32DensityWrap').style.display=weighted&&liquid?'':'none';
+  if(weighted)renderMaster32Containers();
+}
+function renderMaster32Containers(){
+  const root=$('#master32Containers');if(!root)return;
+  const liquid=$('#master32Physical').value==='LIQUID';
+  root.innerHTML=`<div class="reagent-containers-head"><b>Frascos / sobres de este lote</b><small>Los pesos son individuales para cada envase.</small></div>`+master32Containers.map((c,i)=>`<div class="container-config-row inventory-container-card" style="margin:10px 0;padding:14px;border:1px solid #dae3ed;border-radius:12px">
+  <b>${escapeHtml(c.label||`Frasco ${i+1}`)} · Envase ${i+1} de ${master32Containers.length}</b><div class="form-grid">
+  <label>Identificación<input data-m32-label="${i}" value="${escapeHtml(c.label||'')}" placeholder="Ej. Frasco principal"></label>
+  <label>Lote<input data-m32-lot="${i}" value="${escapeHtml(c.lot||$('#master32Lot').value||'')}" placeholder="Lote del envase"></label>
+  <label>Tipo<select data-m32-type="${i}"><option value="FRASCO" ${c.containerType!=='SOBRE'?'selected':''}>FRASCO</option><option value="SOBRE" ${c.containerType==='SOBRE'?'selected':''}>SOBRE</option></select></label>
+  <label>Tara del envase (g)<input data-m32-tare="${i}" type="number" min="0" step="any" value="${escapeHtml(String(c.tareWeight??''))}" placeholder="Ej. 490.4"></label>
+  <label>Peso del envase + contenido (g)<input data-m32-gross="${i}" type="number" min="0" step="any" value="${escapeHtml(String(c.initialWeight??''))}" placeholder="Ej. 990.4"></label></div>
+  <div class="inventory-net" data-m32-net="${i}">Contenido neto: —</div><button type="button" class="btn secondary mini-btn inventory-remove" data-m32-remove="${i}" ${master32Containers.length===1?'disabled title="Debe existir al menos un envase"':''}>Quitar envase</button></div>`).join('');
+  const refreshNet=i=>{
+    const c=master32Containers[i],tare=Number(c.tareWeight),gross=Number(c.initialWeight),density=Number($('#master32Density').value);
+    const valid=c.tareWeight!==''&&c.initialWeight!==''&&Number.isFinite(tare)&&Number.isFinite(gross)&&gross>=tare;
+    const mass=valid?gross-tare:null;
+    const volume=liquid&&mass!==null&&Number.isFinite(density)&&density>0?` · ${(mass/density).toFixed(2)} mL (densidad ${density} g/mL)`:'';
+    const node=$(`[data-m32-net="${i}"]`);if(node)node.textContent='Contenido neto: '+(mass!==null?mass.toFixed(2)+' g'+volume:'—');
+  };
+  $$('[data-m32-label]').forEach(e=>e.oninput=()=>master32Containers[Number(e.dataset.m32Label)].label=e.value);
+  $$('[data-m32-lot]').forEach(e=>e.oninput=()=>master32Containers[Number(e.dataset.m32Lot)].lot=e.value);
+  $$('[data-m32-type]').forEach(e=>e.onchange=()=>master32Containers[Number(e.dataset.m32Type)].containerType=e.value);
+  $$('[data-m32-tare]').forEach(e=>e.oninput=()=>{const i=Number(e.dataset.m32Tare);master32Containers[i].tareWeight=e.value;refreshNet(i)});
+  $$('[data-m32-gross]').forEach(e=>e.oninput=()=>{const i=Number(e.dataset.m32Gross);master32Containers[i].initialWeight=e.value;refreshNet(i)});
+  $$('[data-m32-remove]').forEach(e=>e.onclick=()=>{if(master32Containers.length>1&&confirm('¿Quitar este envase de la configuración? No afecta consumos históricos.')){master32Containers.splice(Number(e.dataset.m32Remove),1);renderMaster32Containers()}});
+  master32Containers.forEach((_,i)=>refreshNet(i));
+}
+
+function master32Key(r){return normalizeIdentityText(r.name||'')+'|'+normalizeIdentityText(r.lot||'')}
+async function master32Rows(){
+  const catalogs=await getAll('catalog'), products=new Map();
+  for(const c of catalogs)for(const r of c.reagentConfig||[]){
+    const key=master32Key(r);if(!normalizeIdentityText(r.name))continue;
+    if(!products.has(key))products.set(key,{key,profile:JSON.parse(JSON.stringify(r)),assignments:new Set()});
+    products.get(key).assignments.add(c.id);
+    const existing=products.get(key).profile;
+    if(String(r.stockAdjustedAt||'')>String(existing.stockAdjustedAt||''))products.get(key).profile=JSON.parse(JSON.stringify(r));
+  }
+  return {catalogs,products:[...products.values()].sort((a,b)=>a.profile.name.localeCompare(b.profile.name,'es'))};
+}
+async function renderReagentMaster32(){
+  const root=$('#master32Body');if(!root)return;
+  const {products}=await master32Rows();
+  const q=normalizeIdentityText($('#master32Search')?.value||'');
+  const visible=products.filter(x=>!q||normalizeIdentityText(x.profile.name+' '+x.profile.lot).includes(q));
+  root.innerHTML=visible.length?visible.map(x=>{const r=x.profile;return `<tr><td><b>${escapeHtml(r.name)}</b><br><small>${escapeHtml(r.mode==='WEIGHT'?'Por peso':'Contable')}</small></td><td>${escapeHtml(r.lot||'—')}</td><td>${r.mode==='COUNT'?`${Number(r.stockQuantity||0)} ${escapeHtml(r.unit||'unidad')}`:'Control por envase'}</td><td>${x.assignments.size}</td><td><button class="btn secondary compact" data-master32-edit="${escapeHtml(x.key)}">Editar / asignar</button></td></tr>`}).join(''):'<tr><td colspan="5">Sin productos. Puede registrar uno nuevo o asignar productos existentes.</td></tr>';
+  $$('[data-master32-edit]').forEach(b=>b.onclick=()=>openMaster32(b.dataset.master32Edit));
+  $('#master32Total').textContent=`${products.length} productos/lotes registrados en las fichas`;
+}
+async function openMaster32(key=''){
+  if(currentSessionUser?.role!=='JEFE')return toast('Solo el JEFE puede editar el catálogo');
+  const {catalogs,products}=await master32Rows(),found=products.find(x=>x.key===key);
+  master32EditingKey=key;
+  const r=found?.profile||{};
+  $('#master32Name').value=r.name||'';
+  $('#master32Lot').value=r.lot||'';
+  $('#master32Mode').value=r.mode||'COUNT';
+  $('#master32Unit').value=r.unit||'unidad';
+  $('#master32Stock').value=r.mode==='WEIGHT'?'':(r.stockQuantity??0);
+  $('#master32Physical').value=r.physicalState||'SOLID';$('#master32Density').value=r.density??'';
+  master32Containers=(r.mode==='WEIGHT'&&Array.isArray(r.containers)&&r.containers.length?JSON.parse(JSON.stringify(r.containers)):[{id:uid('ENV'),label:'Frasco principal',lot:r.lot||'',containerType:'FRASCO',tareWeight:'',initialWeight:'',status:'ACTIVO'}]);
+  master32ToggleMode();
+  $('#master32Type').value=r.productType||'REACTIVO';
+  $('#master32Brand').value=r.brand||'';
+  $('#master32Presentation').value=r.presentation||'';
+  $('#master32Assignments').innerHTML=SECTIONS.filter(x=>sectionAllowsReagents(x.id)).map(section=>{
+    const list=catalogs.filter(c=>c.section===section.id && c.status!=='INACTIVO');
+    return list.length?`<div class="card" style="padding:12px;margin:10px 0"><b>${escapeHtml(section.label)}</b><div class="check-grid" style="margin-top:10px">${list.map(c=>`<label><input type="checkbox" data-master32-cat="${escapeHtml(c.id)}" ${found?.assignments.has(c.id)?'checked':''}> ${escapeHtml(c.family?c.family+' · ':'')}${escapeHtml(c.name)}</label>`).join('')}</div></div>`:'';
+  }).join('');
+  $('#master32Dialog').showModal();
+}
+async function saveMaster32(ev){
+  ev.preventDefault();
+  if(currentSessionUser?.role!=='JEFE')return toast('Operación exclusiva del JEFE');
+  const name=$('#master32Name').value.trim(),lot=$('#master32Lot').value.trim(),mode=$('#master32Mode').value;
+  const stock=Number($('#master32Stock').value),unit=$('#master32Unit').value.trim()||'unidad';
+  if(!name||!lot)return toast('Ingrese nombre y lote');
+  if(mode==='COUNT'&&($('#master32Stock').value===''||!Number.isFinite(stock)||stock<0))return toast('Ingrese un stock válido');
+  const physicalState=$('#master32Physical').value,density=$('#master32Density').value;
+  if(mode==='WEIGHT'){
+    if(physicalState==='LIQUID'&&(!density||!Number.isFinite(Number(density))||Number(density)<=0))return toast('Ingrese densidad válida (g/mL) para el líquido');
+    if(master32Containers.some(c=>c.lot&&normalizeIdentityText(c.lot)!==normalizeIdentityText(lot)))return toast('Todos los envases de esta ficha deben pertenecer al lote indicado');
+    if(!master32Containers.length||master32Containers.some(c=>c.tareWeight===''||c.initialWeight===''||!Number.isFinite(Number(c.tareWeight))||!Number.isFinite(Number(c.initialWeight))||Number(c.tareWeight)<0||Number(c.initialWeight)<=Number(c.tareWeight)))return toast('Cada envase requiere tara y peso bruto válidos (peso bruto mayor que tara)');
+  }
+  const {catalogs,products}=await master32Rows(),newKey=normalizeIdentityText(name)+'|'+normalizeIdentityText(lot);
+  if(master32EditingKey!==newKey&&products.some(x=>x.key===newKey))return toast('Ya existe este producto y lote. Edítelo en lugar de duplicarlo.');
+  const chosen=new Set($$('[data-master32-cat]:checked').map(e=>e.dataset.master32Cat));
+  if(!chosen.size)return toast('Seleccione al menos un parámetro o actividad');
+  const prev=products.find(x=>x.key===master32EditingKey),base=prev?.profile||{};
+  const changedStock=!prev||(mode==='COUNT'&&Number(base.stockQuantity)!==stock);
+  const changedIdentity=master32EditingKey&&master32EditingKey!==newKey;
+  const now=nowISO();
+  const profile={...base,id:base.id||uid('REA'),name,lot,mode,unit:mode==='WEIGHT'?'g':unit,stockQuantity:mode==='WEIGHT'?null:stock,physicalState:mode==='WEIGHT'?physicalState:null,density:mode==='WEIGHT'&&physicalState==='LIQUID'?Number(density):null,containers:mode==='WEIGHT'?master32Containers.map(c=>({...c,lot:c.lot||lot})):[],productType:$('#master32Type').value,brand:$('#master32Brand').value.trim(),presentation:$('#master32Presentation').value.trim(),inventoryStatus:mode==='WEIGHT'?'ACTIVO':stock<=0?'AGOTADO':'ACTIVO',...(changedStock?{stockAdjustedAt:now}:{})};
+  const impacted=catalogs.filter(c=>chosen.has(c.id)||(c.reagentConfig||[]).some(r=>master32Key(r)===master32EditingKey));
+  const summary=`${impacted.length} ficha(s); ${chosen.size} asignación(es); ${mode==='WEIGHT'?master32Containers.length+' envase(s) · control por peso':`stock ${stock} ${unit}`}.`;
+  if(!confirm(`GUARDAR PRODUCTO Y ASIGNACIONES\n\n${name} · lote ${lot}\n${summary}\n\nLas actividades históricas no se modificarán. ¿Continuar?`))return;
+  // Operación protegida: no tocar planes ni consumos previos; solo las fichas activas.
+  const button=$('#master32Save');button.disabled=true;button.textContent='Guardando…';
+  try{
+    for(const c of impacted){
+      const current=(c.reagentConfig||[]).filter(r=>master32Key(r)!==master32EditingKey && master32Key(r)!==newKey);
+      if(chosen.has(c.id)){const prior=(c.reagentConfig||[]).find(r=>master32Key(r)===master32EditingKey||master32Key(r)===newKey);current.push({...JSON.parse(JSON.stringify(profile)),id:prior?.id||uid('REA'),order:prior?.order||current.length+1});}
+      c.reagentConfig=current;c.updatedAt=nowISO();
+      await put('catalog',c);await queue('UPDATE','catalog',c);
+    }
+    reagentMasterProfiles=[];
+    $('#master32Dialog').close();await renderReagentMaster32();
+    toast('Cambios guardados localmente; consulte el estado de sincronización');
+  }catch(e){console.error(e);toast('Error al guardar: '+e.message)}
+  finally{button.disabled=false;button.textContent='Guardar producto y asignaciones'}
+}
+
 async function init(){db=await openDB();
     await purgeDeletedPlanningLocally();
-  firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>b.dataset.close==='finishActivityDialog'?requestTechnicalDialogClose():document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#reassignPlanForm').addEventListener('submit',saveReassignPlan);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogName').addEventListener('input',()=>{if($('#catalogSection').value==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration($('#catalogName').value)&&!$('#catalogId').value){$('#catalogRequiresCalibration').checked=true;updateCalibrationEditor()}});$('#catalogRequiresCalibration').addEventListener('change',updateCalibrationEditor);$('#calibrationUnit').addEventListener('input',validateCalibrationConfig);$('#calibrationReplicates').addEventListener('input',validateCalibrationConfig);if($('#btnAddCalibrationPoint'))$('#btnAddCalibrationPoint').onclick=addCalibrationPoint;if($('#catalogUsesReagents'))$('#catalogUsesReagents').addEventListener('change',updateReagentEditor);if($('#btnAddReagent'))$('#btnAddReagent').onclick=addReagent;$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
+  firebaseBridge.lastSyncAt=(await getOne('config','lastCloudSyncAt'))?.value||null;if($('#planDate'))$('#planDate').value=dateToday();if($('#myDayDate'))$('#myDayDate').value=dateToday();renderSectionTabs();setCatalogSectionOptions();if($('#master32New'))$('#master32New').onclick=()=>openMaster32();if($('#master32Search'))$('#master32Search').oninput=renderReagentMaster32;if($('#master32Form'))$('#master32Form').onsubmit=saveMaster32;
+  if($('#master32Mode'))$('#master32Mode').onchange=master32ToggleMode;
+  if($('#master32Physical'))$('#master32Physical').onchange=master32ToggleMode;if($('#master32Density'))$('#master32Density').oninput=()=>{master32Containers.forEach((_,i)=>{const el=$(`[data-m32-net=\"${i}\"]`);if(el){const c=master32Containers[i],t=Number(c.tareWeight),g=Number(c.initialWeight),d=Number($('#master32Density').value);el.textContent='Contenido neto: '+(c.tareWeight!==''&&c.initialWeight!==''&&g>=t?(g-t).toFixed(2)+' g'+(d>0?' · '+((g-t)/d).toFixed(2)+' mL':''):'—')}})};
+  if($('#master32AddContainer'))$('#master32AddContainer').onclick=()=>{master32Containers.push({id:uid('ENV'),label:'Frasco '+(master32Containers.length+1),lot:$('#master32Lot').value,containerType:'FRASCO',tareWeight:'',initialWeight:'',status:'ACTIVO'});renderMaster32Containers()};if($('#master32Cancel'))$('#master32Cancel').onclick=()=>$('#master32Dialog').close();renderCompetencyChecks([]);$$('.nav-item').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-close]').forEach(b=>b.onclick=()=>b.dataset.close==='finishActivityDialog'?requestTechnicalDialogClose():document.getElementById(b.dataset.close).close());$('#catalogForm').addEventListener('submit',saveCatalog);$('#reassignPlanForm').addEventListener('submit',saveReassignPlan);$('#analystForm').addEventListener('submit',saveAnalyst);$('#catalogSection').addEventListener('change',updateCatalogForm);$('#catalogTimeMode').addEventListener('change',updateCatalogForm);$('#catalogName').addEventListener('input',()=>{if($('#catalogSection').value==='ACTIVIDADES_LABORATORIO'&&activityLooksLikeCalibration($('#catalogName').value)&&!$('#catalogId').value){$('#catalogRequiresCalibration').checked=true;updateCalibrationEditor()}});$('#catalogRequiresCalibration').addEventListener('change',updateCalibrationEditor);$('#calibrationUnit').addEventListener('input',validateCalibrationConfig);$('#calibrationReplicates').addEventListener('input',validateCalibrationConfig);if($('#btnAddCalibrationPoint'))$('#btnAddCalibrationPoint').onclick=addCalibrationPoint;if($('#catalogUsesReagents'))$('#catalogUsesReagents').addEventListener('change',updateReagentEditor);if($('#btnAddReagent'))$('#btnAddReagent').onclick=addReagent;$('#catalogBaseHours').addEventListener('input',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});$('#catalogBaseMinutePart').addEventListener('change',()=>{if($('#catalogTimeMode').value==='COMPOSITE')validateSteps()});if($('#btnAddRule'))$('#btnAddRule').onclick=addRule;if($('#btnAddStep'))$('#btnAddStep').onclick=addStep;$('#catalogSearch').addEventListener('input',renderCatalog);$('#catalogStatusFilter').addEventListener('change',renderCatalog);$('#analystSearch').addEventListener('input',renderAnalysts);if($('#btnAnalyze'))$('#btnAnalyze').onclick=()=>analyzeData(true);if($('#planSection')){$('#planSection').addEventListener('change',async()=>{if($('#planActivitySearch'))$('#planActivitySearch').value='';await renderAnalystOptions();await renderPlanSelectors();await smartPlannerRecalculate()});$('#planCatalog').addEventListener('change',smartPlannerRecalculate);
 $('#planActivitySearch').addEventListener('input',renderPlanSelectors);
 if($('#btnAddActivityFromPlanner'))$('#btnAddActivityFromPlanner').onclick=openCatalogFromPlanner;$('#planSamples').addEventListener('input',smartPlannerRecalculate);$('#planStart').addEventListener('input',updatePlanPreview);$('#planDate').addEventListener('change',async()=>{await smartPlannerRecalculate();await renderExecutivePlanner();await renderMandatoryPlanningAlerts();if($('#bossAIResults')){$('#bossAIResults').classList.add('hidden');$('#bossAIEmpty').classList.remove('hidden')}});$('#agendaStatus').addEventListener('change',renderAgenda);if($('#btnSuggestAnalyst'))$('#btnSuggestAnalyst').onclick=suggestAnalyst;if($('#btnOptimizeDay'))$('#btnOptimizeDay').onclick=analyzeBossDay;if($('#btnSavePlan'))$('#btnSavePlan').onclick=savePlan;$('#planAnalyst').addEventListener('change',autoScheduleSelectedAnalyst);}if($('#myDayDate')){$('#myDayDate').addEventListener('change',renderMyDay);if($('#btnMyDayToday'))$('#btnMyDayToday').onclick=()=>{$('#myDayDate').value=dateToday();renderMyDay()};$('#myDayAnalyst').addEventListener('change',renderMyDay);if($('#btnRestoreBossPlan'))$('#btnRestoreBossPlan').onclick=()=>restoreBossSchedule($('#myDayDate').value,$('#myDayAnalyst').value);}if($('#dailyMonitorDate')){
   $('#dailyMonitorDate').value=dateToday();

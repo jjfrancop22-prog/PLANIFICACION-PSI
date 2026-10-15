@@ -1,8 +1,8 @@
 {
-  "version": "1.0.5.6.33.25.10.28.21.30",
-  "build": "V28.21.30",
-  "name": "ACK-CONFLICTOS-VERIFICADOS-PRUEBA",
-  "notes": "Corrección del cierre legítimo entre computadoras y avisos posteriores a confirmación Firebase. PRUEBA, no validada en producción.",
+  "version": "1.0.5.6.33.25.10.28.21.40",
+  "build": "V28.21.40",
+  "name": "ESTADOS-PROGRESIVOS-ANALISTAS",
+  "notes": "Protección de transiciones progresivas y conciliación de operaciones de sesiones anteriores para todos los analistas. Requiere prueba multi-PC.",
   "features": [
     "Planificador multi-PC sin planningLocks",
     "Máximo diario de 8 h o dailyHours",
@@ -12,9 +12,9 @@
   ],
   "date": "2026-10-01",
   "changes": [
-    "Elimina transacciones planningLocks que podían fallar por permisos",
-    "Consulta planning por fecha para reducir latencia",
-    "Concurrencia resuelta con prioridad determinística y rollback del candidato perdedor",
-    "Mensajes de error específicos para permisos, red y conflicto"
+    "No consulta conflictos redundantes cuando la pestaña está oculta",
+    "Con sesión inactiva, reduce verificaciones de conflictos a cada 15 minutos",
+    "Con sesión activa, conserva verificación cada 90 segundos",
+    "Conserva listeners, cierre multi-PC y protecciones de inventario"
   ]
 }
