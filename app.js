@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.11';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.27';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -190,7 +190,8 @@ async function refreshSyncUI(){
   const all=await getAll('outbox');
   const pending=all.filter(x=>x.status==='PENDIENTE');
   const errors=all.filter(x=>x.status==='ERROR');
-  const open=pending.length+errors.length;
+  const conflicts=all.filter(x=>x.status==='CONFLICTO_LOCAL');
+  const open=pending.length+errors.length+conflicts.length;
   if($('#syncPendingCount'))$('#syncPendingCount').textContent=String(open);
   if($('#syncLastAt'))$('#syncLastAt').textContent=firebaseBridge.lastSyncAt?fmtDate(firebaseBridge.lastSyncAt):'—';
   if($('#syncLastError'))$('#syncLastError').textContent=firebaseBridge.lastError||errors[0]?.lastError||'—';
@@ -203,17 +204,19 @@ async function refreshSyncUI(){
   // Un permiso faltante de Cartas no debe hacer creer que todo Firebase dejó de funcionar.
   if(firebaseBridge.ready&&firebaseBridge.authUser&&!firebaseBridge.busy&&!smartSyncSleeping){
     const chartOpen=[...pending,...errors].filter(x=>x.entity==='controlChartDefs'||x.entity==='controlChartRecords');
-    const coreOpen=[...pending,...errors].filter(x=>x.entity!=='controlChartDefs'&&x.entity!=='controlChartRecords');
+    const coreOpen=[...pending,...errors,...conflicts].filter(x=>x.entity!=='controlChartDefs'&&x.entity!=='controlChartRecords');
     if(coreOpen.length){
       const coreErrors=coreOpen.filter(x=>x.status==='ERROR');
-      setSyncStateVisualOnly(coreErrors.length?'ERROR':'PENDIENTE',`${coreOpen.length} cambio(s) del ERP sin confirmar`);
+      const coreConflicts=coreOpen.filter(x=>x.status==='CONFLICTO_LOCAL');
+      setSyncStateVisualOnly(coreConflicts.length?'CONFLICTO':coreErrors.length?'ERROR':'PENDIENTE',`${coreOpen.length} cambio(s) del ERP sin confirmar${coreConflicts.length?' · '+coreConflicts.length+' conflicto(s) protegidos':''}`);
     }else if(chartOpen.length){
       const permission=chartOpen.some(x=>/permission|insufficient/i.test(String(x.lastError||'')));
       setSyncStateVisualOnly('PARCIAL',permission?`ERP conectado · Cartas pendientes: ${chartOpen.length} (permisos Firebase)`:`ERP conectado · Cartas pendientes: ${chartOpen.length}`);
     }else{
       // 10.7: estado terminal determinista. Si Firestore está conectado y Outbox=0,
       // la UI jamás puede quedarse pegada en "Confirmando cambios…".
-      setSyncStateVisualOnly('SINCRONIZADO','Sin cambios pendientes');
+      const reconciled=all.filter(x=>x.status==='ARCHIVADO_CONCILIACION_JEFE').length;
+      setSyncStateVisualOnly('SINCRONIZADO',reconciled?`Sin envíos pendientes · ${reconciled} versiones archivadas por JEFE (revisión técnica requerida)`:'Sin cambios pendientes');
     }
   }
 }
@@ -601,14 +604,46 @@ async function flushOutbox(showToast=true){
                   throw new Error('CIERRE_HISTORICO_PROTEGIDO: hay evento de finalización confirmado; no se sobrescribe la planificación abierta. Requiere conciliación por JEFE.');
                 }
               }
-              if((closed&&!incomingClosed)||remoteNewer){remoteWinner=current;return;}
+              // INTEGRIDAD 28.21.12: impedir que una copia parcial sustituya
+              // datos técnicos confirmados en otra computadora. No reconstruir
+              // consumos ni modificar inventario durante la conciliación.
+              // INTEGRIDAD 28.21.13: bloquear cambios silenciosos en evidencia
+              // técnica confirmada, aun cuando ambas versiones digan REALIZADO.
+              // No repara documentos históricos ni vuelve a descontar inventario.
+              const technicalKeys=['actualSamples','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
+              const hasValue=v=>v!==null&&v!==undefined&&v!=='';
+              const stableValue=v=>{
+                if(Array.isArray(v))return v.map(stableValue);
+                if(v&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().map(k=>[k,stableValue(v[k])]));
+                return v;
+              };
+              const sameValue=(a,b)=>JSON.stringify(stableValue(a))===JSON.stringify(stableValue(b));
+              const technicalConflict=!!current && technicalKeys.some(key=>{
+                const old=current[key],next=payload[key];
+                if(!hasValue(old))return false;
+                if(!hasValue(next))return true;
+                // Resultados confirmados son inmutables en sincronización general.
+                // Una corrección legítima requiere una ruta explícita auditada.
+                if((key==='reagentResult'||key==='calibrationResult'||key==='sampleResult'||key==='operationalSamplesResult') && old?.completed===true && !sameValue(old,next))return true;
+                // Las muestras registradas tampoco pueden alterarse silenciosamente
+                // después de finalizar una actividad.
+                if(key==='actualSamples' && closed && !sameValue(old,next))return true;
+                return false;
+              });
+              if((closed&&!incomingClosed)||remoteNewer||technicalConflict){remoteWinner=current;return;}
               tx.set(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
             });
             if(remoteWinner){
               // Evitar el falso ACK: reconciliar el documento remoto sin volver a encolar.
               const canonical={...remoteWinner,id};delete canonical._cloudUpdatedAt;delete canonical._erpEntity;
               await put('planning',canonical);
-              item.lastError='Cambio local obsoleto; se conservó la revisión confirmada en Firebase';
+              // No informar SINCRONIZADO cuando el cambio no se aplicó.
+              item.status='CONFLICTO_LOCAL';
+              item.syncedAt=null;
+              item.lastError='Conflicto: Firebase conserva otra revisión o datos técnicos. No se sobrescribió.';
+              item.blockedAt=nowISO();
+              await put('outbox',item);
+              continue;
             }
           }else{
             await setDoc(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
@@ -2021,7 +2056,8 @@ async function chiefCloseOpenActivity(id){
   const {doc,runTransaction,getDoc}=firebaseBridge.mods;
   const ref=doc(firebaseBridge.db,cloudCollectionFor('planning'),id);
   try{
-    const cloudEvidence=await getDoc(doc(firebaseBridge.db,cloudCollectionFor('planComments'),evidence.id));
+    const serverRead=firebaseBridge.mods.getDocFromServer||getDoc;
+    const cloudEvidence=await serverRead(doc(firebaseBridge.db,cloudCollectionFor('planComments'),evidence.id));
     const ev=cloudEvidence.exists()?cloudEvidence.data():null;
     if(!ev || ev.planId!==id || ev.lifecycleStage!=='FINALIZACION')return alert('El evento de cierre no está confirmado en Firebase. No se modificó nada.');
   }catch(err){return alert('No se pudo validar la evidencia en Firebase: '+String(err?.message||err));}
@@ -2034,16 +2070,31 @@ async function chiefCloseOpenActivity(id){
       if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw new Error('Esta actividad ya fue finalizada en Firebase. Actualice la vista.');
       if(remote.status==='CANCELADO')throw new Error('La actividad está cancelada en Firebase.');
       if(String(remote.analystId||'')!==String(p.analystId||'')||String(remote.date||'')!==String(p.date||''))throw new Error('La identidad o fecha de la actividad cambió; no se permite conciliar.');
-      if(String(remote.updatedAt||'')!==String(p.updatedAt||''))throw new Error('La actividad cambió en otra computadora. Actualice antes de corregir.');
-      const finished=remote.actualFinishedAt||p.actualFinishedAt||null;
-      const candidate={...remote,status:'REALIZADO',updatedAt:operationAt,
+      // Conciliación V28.21.23: una diferencia de updatedAt NO demuestra pérdida
+      // ni cambio técnico. Validar en la transacción los datos reales del servidor.
+      // No copiar jamás muestras/reactivos del caché local hacia Firebase.
+      const filled=v=>v!==undefined&&v!==null&&v!=='';
+      const stable=v=>JSON.stringify(v,(_k,val)=>val&&typeof val==='object'&&!Array.isArray(val)
+        ?Object.fromEntries(Object.entries(val).sort(([a],[b])=>a.localeCompare(b))):val);
+      for(const key of ['actualSamples','sampleResult','samplesResult','reagentResult']){
+        if(filled(p[key])&&!filled(remote[key]))throw new Error(`El servidor no conserva ${key}. No se cerró: requiere revisión de datos técnicos.`);
+        if(filled(p[key])&&filled(remote[key])&&stable(p[key])!==stable(remote[key]))
+          throw new Error(`Diferencia técnica en ${key} entre equipo y Firebase. No se cerró.`);
+      }
+      // Solo esta actividad y solo si ya está EN PROCESO, con cierre histórico
+      // validado en el servidor. Un registro sin resultados técnicos no se regulariza.
+      if(remote.status!=='EN PROCESO')throw new Error('El estado en Firebase ya no es EN PROCESO. No se cerró.');
+      if(!filled(remote.actualSamples)||!filled(remote.reagentResult))
+        throw new Error('Firebase no conserva muestras y reactivos completos; no se permite cerrar únicamente por la apariencia local.');
+      const finished=remote.actualFinishedAt||null;
+      const patch={status:'REALIZADO',updatedAt:operationAt,
         completionCommittedAt:operationAt,
         completionCommittedBy:currentSessionUser?.email||'JEFE',
         completionOperationId:`CHIEF-${id}-${operationAt}`,
-        chiefClosure:{mode:historical?'RECUPERACION_HISTORICA':'CIERRE_ADMINISTRATIVO',reason:reason.trim(),actor:currentSessionUser?.email||'JEFE',recordedAt:operationAt,evidenceId:evidence?.id||null,actualFinishVerified:!!finished}};
-      if(finished)candidate.actualFinishedAt=finished;
-      tx.set(ref,{...candidate,_cloudUpdatedAt:operationAt},{merge:true});
-      committed={...candidate,id};
+        chiefClosure:{mode:'CONCILIACION_HISTORICA_VERIFICADA',reason:reason.trim(),actor:currentSessionUser?.email||'JEFE',recordedAt:operationAt,evidenceId:evidence.id,actualFinishVerified:!!finished},
+        _cloudUpdatedAt:operationAt};
+      tx.update(ref,patch); // Solo metadatos de cierre: no inventario, muestras ni reactivos.
+      committed={...remote,...patch,id};
     });
   }catch(err){
     if(isFirebaseQuotaError(err))registerFirebaseQuotaError(err);
@@ -2751,6 +2802,42 @@ async function claimActivityCompletion(plan){
 }
 function releaseActivityCompletion(planId){if(planId)activityCompletionLocks.delete(planId)}
 
+// V28.21.27 · Confirmación por actividad: lectura exclusiva del servidor.
+// La cola local NO equivale a confirmación; no inventar ACK por conectividad.
+async function verifyActivityCloudClosure(planId, timeoutMs=18000){
+  const started=Date.now();
+  const sdk=firebaseBridge?.mods;
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine||typeof sdk?.getDocFromServer!=='function')
+    return {ok:false,reason:'Sin conexión confirmada con Firebase. Cierre local pendiente.'};
+  while(Date.now()-started<timeoutMs){
+    const ops=(await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===planId&&['PENDIENTE','ERROR','CONFLICTO_LOCAL'].includes(x.status));
+    if(ops.some(x=>x.status==='CONFLICTO_LOCAL'))return {ok:false,reason:'Conflicto entre computadoras: requiere revisión del JEFE.'};
+    if(!ops.length){
+      try{
+        const snap=await sdk.getDocFromServer(sdk.doc(firebaseBridge.db,cloudCollectionFor('planning'),planId));
+        const remote=snap.exists()?snap.data():null;
+        if(!remote||remote.status!=='REALIZADO'||!remote.completionCommittedAt)return {ok:false,reason:'Firebase no confirma la finalización.'};
+        const local=await getOne('planning',planId);
+        const technical=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult'];
+        const differences=technical.filter(k=>local?.[k]!=null&&!sameCloudFunctionalPayload({[k]:local[k]},{[k]:remote[k]}));
+        if(differences.length)return {ok:false,reason:'Diferencia técnica con Firebase: '+differences.join(', ')};
+        return {ok:true,remote};
+      }catch(err){return {ok:false,reason:'No se pudo leer el servidor: '+String(err?.message||err)}}
+    }
+    await new Promise(resolve=>setTimeout(resolve,700));
+  }
+  return {ok:false,reason:'La confirmación sigue pendiente. No vuelva a finalizar; revise sincronización.'};
+}
+async function showActivityCloudClosureResult(p){
+  const result=await verifyActivityCloudClosure(p.id);
+  if(result.ok){
+    alert(`🟢 FINALIZACIÓN CONFIRMADA EN FIREBASE\nActividad: ${p.code||p.id}\nEstado: REALIZADO\nMuestras: ${result.remote.actualSamples??'No aplica'}\nReactivos: ${result.remote.reagentResult?.completed?'Registrados':'No aplica / no completos'}\nSincronización: Confirmada`);
+  }else{
+    alert(`🟠 FINALIZACIÓN LOCAL · CONFIRMACIÓN PENDIENTE\nActividad: ${p.code||p.id}\n${result.reason}\nNo repita el cierre ni borre datos locales.`);
+  }
+  await refreshSyncUI();
+}
+
 async function completeActivityRecord(p,actualSamples=null,finalComment='',calibrationResult=undefined,reagentResult=undefined){
   p.status='REALIZADO';p.actualFinishedAt=nowISO();p.completionCommittedAt=p.actualFinishedAt;p.completionCommittedBy=currentSessionUser?.email||currentSessionUser?.name||'Usuario';p.completionOperationId=p.completionOperationId||`FINAL-${String(p.id||'PLAN').replace(/[^a-zA-Z0-9_-]/g,'_')}`;p.updatedAt=nowISO();
   if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;if(reagentResult!==undefined)p.reagentResult=reagentResult;
@@ -2767,9 +2854,10 @@ async function completeActivityRecord(p,actualSamples=null,finalComment='',calib
   await createActivityLifecycleAlert(p,'FINALIZACION');
   // Solo al CONFIRMAR FINALIZACIÓN: nunca en “guardar sin finalizar”. Agrupa curva/estándares y reactivos en un único aviso técnico.
   if(p.calibrationResult?.completed||p.reagentResult?.completed)await createTechnicalAlert(p,'CIERRE_TECNICO',{stage:'FINAL'});
-  toast(`Actividad finalizada${sampleDetail} · notificaciones organizadas enviadas`);
+  toast(`Actividad guardada localmente${sampleDetail} · comprobando Firebase…`);
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();await renderManagementDashboard();
   releaseActivityCompletion(p.id);
+  await showActivityCloudClosureResult(p);
 }
 async function submitFinishActivity(e){
   e.preventDefault();
@@ -3082,7 +3170,7 @@ async function renderMyDay(){
   const joeDiscrepancies=plans.filter(p=>p.status!=='REALIZADO' && (joeClosureMap.has(p.id)||p.actualFinishedAt));
   // V28.21.3: consulta diagnóstica exclusivamente de lectura sobre los cuatro IDs
   // originales de Joe, para identificar asignación y existencia en Firestore.
-  const joeOriginalIds=['PLAN-1791983455364-0D5RU','PLAN-1791983475472-P4BVA','PLAN-1791984302158-CHYL1','PLAN-1791984327041-5XRAX'];
+  const joeOriginalIds=['PLAN-1791983455364-OD5RU','PLAN-1791983475472-P4BVA','PLAN-1791984302158-CHYL1','PLAN-1791984327041-5XRAX'];
   const joeDeletedIds=await getDeletedPlanningIds();
   if(date==='2026-10-14'&&analystId==='ANA-1788444774891-HQXWD'){
     const checker=document.createElement('div');
@@ -3103,19 +3191,7 @@ async function renderMyDay(){
           const remote=snap.exists()?snap.data():null;
           const inDay=localRows.some(x=>x.id===id&&x.date===date&&x.analystId===analystId&&x.status!=='CANCELADO');
           const pending=(await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===id&&['PENDIENTE','ERROR'].includes(x.status));
-          const reasons=[];
-          if(!remote)reasons.push('NO EXISTE EN FIREBASE');
-          else{
-            if(String(remote.analystId||'')!==analystId)reasons.push('ASIGNADA A OTRO ID DE ANALISTA');
-            if(String(remote.date||'')!==date)reasons.push('FECHA DIFERENTE');
-            if(remote.status==='CANCELADO')reasons.push('CANCELADA');
-            if(remote.status==='REALIZADO')reasons.push('YA FINALIZADA EN SERVIDOR');
-          }
-          if(joeDeletedIds.has(id))reasons.push('MARCA LOCAL DE ELIMINACIÓN');
-          if(remote&&!local)reasons.push('EXISTE EN FIREBASE PERO FALTA EN INDEXEDDB');
-          if(pending.length)reasons.push('OUTBOX PENDIENTE/ERROR');
-          if(remote&&!inDay&&!reasons.length)reasons.push('REVISAR FILTRO DE JORNADA / SINCRONIZACIÓN');
-          lines.push(`${id}\n  LOCAL: ${local?.status||'NO EXISTE'} · analista=${local?.analystId||'—'} · fecha=${local?.date||'—'} · marcado eliminado local=${joeDeletedIds.has(id)?'SI':'NO'} · visible en Mi Jornada=${inDay?'SI':'NO'}\n  FIREBASE: ${remote?.status||'NO EXISTE'} · analista=${remote?.analystId||'—'} · fecha=${remote?.date||'—'} · cierre=${remote?.completionCommittedAt||'—'}\n  OUTBOX planificación pendiente/error=${pending.length} · lectura=${typeof getDocFromServer==='function'?'SERVIDOR':'SDK (puede usar caché)'}\n  DIAGNÓSTICO: ${reasons.join(' / ')||'Sin discrepancia de asignación o fecha'}`);
+          lines.push(`${id}\n  LOCAL: ${local?.status||'NO EXISTE'} · analista=${local?.analystId||'—'} · fecha=${local?.date||'—'} · marcado eliminado local=${joeDeletedIds.has(id)?'SI':'NO'} · visible en Mi Jornada=${inDay?'SI':'NO'}\n  FIREBASE: ${remote?.status||'NO EXISTE'} · analista=${remote?.analystId||'—'} · fecha=${remote?.date||'—'} · cierre=${remote?.completionCommittedAt||'—'}\n  OUTBOX planificación pendiente/error=${pending.length} · lectura=${typeof getDocFromServer==='function'?'SERVIDOR':'SDK (puede usar caché)'}`);
         }catch(err){lines.push(`${id}: lectura no disponible (${String(err?.code||err?.message||err)})`);}
       }
       output.textContent=lines.join('\n\n');
@@ -3129,7 +3205,7 @@ async function renderMyDay(){
     $('#myDaySummary').appendChild(warning);
     warning.querySelector('#joeExportDiagnostic').onclick=async()=>{
       const outbox=(await getAll('outbox')).filter(x=>x.entity==='planning'&&plans.some(p=>p.id===x.recordId));
-      const report={build:APP_VERSION,date,analystId,generatedAt:nowISO(),records:plans.map(p=>({id:p.id,code:p.code,catalogName:p.catalogName,status:p.status,updatedAt:p.updatedAt,actualStartedAt:p.actualStartedAt||null,actualFinishedAt:p.actualFinishedAt||null,completionCommittedAt:p.completionCommittedAt||null,completionOperationId:p.completionOperationId||null,closureEvents:allComments.filter(c=>c.planId===p.id&&c.lifecycleStage==='FINALIZACION').map(c=>({id:c.id,createdAt:c.createdAt,lifecycleStage:c.lifecycleStage})),pendingOutbox:outbox.filter(x=>x.recordId===p.id).map(x=>({id:x.id,status:x.status,type:x.type,lastError:x.lastError||null,payloadStatus:x.payload?.status||null}))}))};
+      const report={build:'V28.21.6',date,analystId,generatedAt:nowISO(),records:plans.map(p=>({id:p.id,code:p.code,catalogName:p.catalogName,status:p.status,updatedAt:p.updatedAt,actualStartedAt:p.actualStartedAt||null,actualFinishedAt:p.actualFinishedAt||null,completionCommittedAt:p.completionCommittedAt||null,completionOperationId:p.completionOperationId||null,closureEvents:allComments.filter(c=>c.planId===p.id&&c.lifecycleStage==='FINALIZACION').map(c=>({id:c.id,createdAt:c.createdAt,lifecycleStage:c.lifecycleStage})),pendingOutbox:outbox.filter(x=>x.recordId===p.id).map(x=>({id:x.id,status:x.status,type:x.type,lastError:x.lastError||null,payloadStatus:x.payload?.status||null}))}))};
       const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
       const a=document.createElement('a');a.href=url;a.download=`diagnostico_jornada_${date}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
     };
@@ -3150,7 +3226,7 @@ async function renderMyDay(){
     const action=p.status==='PROGRAMADO'
       ?(futureDay?`${flex}<button class="btn secondary myday-action future-locked" disabled>🗓 Disponible el ${formatShortDate(p.date)}</button>`:`${flex}<button class="btn primary myday-action" data-start-activity="${p.id}">▶ Iniciar actividad</button>`)
       :p.status==='EN PROCESO'
-        ?joeClosureConflict?`<button class="btn secondary myday-action" disabled title="Existe evidencia de finalización; requiere conciliación por JEFE">⚠ Cierre pendiente de conciliación</button>`:`<button class="btn primary myday-action" data-finish-activity="${p.id}">✓ Finalizar actividad</button>`
+        ?joeClosureConflict?(currentSessionUser?.role==='JEFE'?`<button type="button" class="btn secondary myday-action" data-joe-reconcile="${escapeHtml(p.id)}">🔎 Verificar y conciliar cierre en Firebase (JEFE)</button>`:`<button class="btn secondary myday-action" disabled title="Existe evidencia de finalización; requiere conciliación por JEFE">⚠ Cierre pendiente de conciliación</button>`):`<button class="btn primary myday-action" data-finish-activity="${p.id}">✓ Finalizar actividad</button>`
         :`<span class="done-pill">✓ Finalizada${p.actualFinishedAt?` · ${formatActualStamp(p.actualFinishedAt)}`:''}</span>`;
     let actual='';
     if(p.actualStartedAt){
@@ -3173,7 +3249,6 @@ async function renderMyDay(){
         </div>
         
         ${joeClosureConflict?`<div style="padding:10px;margin:8px 0;border:1px solid #e6b450;border-radius:8px;background:#fff8e8;color:#633d00"><b>⚠ Cierre histórico detectado · estado actual ${escapeHtml(p.status)}</b><br><small>No vuelva a finalizar: requiere verificación de la planificación en Firebase.</small></div>`:''}
-        ${joeClosureConflict&&date==='2026-10-14'&&analystId==='ANA-1788444774891-HQXWD'&&currentSessionUser?.role==='JEFE'?`<button type="button" class="btn secondary compact" data-joe-reconcile="${escapeHtml(p.id)}">Revisar y recuperar cierre en Firebase (JEFE)</button>`:''}
 
         ${p.notes?`<div class="boss-note"><b>⚑ Instrucción del jefe</b><span>${escapeHtml(p.notes)}</span></div>`:''}
         ${ss.length?`<details class="myday-breakdown compact-breakdown" data-ui-key="breakdown-${p.id}"><summary>Ver desglose · ${ss.length} subactividades</summary><div>${ss.map(x=>`<span>• ${escapeHtml(x.name)} · ${minutesText(x.minutes)}</span>`).join('')}</div></details>`:''}
@@ -5746,3 +5821,240 @@ document.getElementById('finishActivityDialog')?.addEventListener('cancel',e=>{
  const mode=document.getElementById('finishTechnicalEditMode')?.value;
  if(mode!=='3'&&technicalSnapshot&&technicalFormSnapshot()!==technicalSnapshot){e.preventDefault();requestTechnicalDialogClose()}
 });
+
+// V28.21.24 · Revisión individual de conflictos: nunca escribir a Firestore.
+// Solo permite archivar una operación obsoleta cuando sus campos sustantivos
+// coinciden con el documento REALIZADO del servidor; conserva evidencia local.
+(function(){
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const ignored=new Set(['status','updatedAt','_cloudUpdatedAt','_erpEntity','syncedAt','createdAt',
+    'actualFinishedAt','completionCommittedAt','completionCommittedBy','completionOperationId',
+    'chiefClosure','lastSyncedAt','lastModifiedBy','lastUpdatedBy']);
+  const norm=v=>{
+    if(Array.isArray(v))return v.map(norm);
+    if(v&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().filter(k=>!k.startsWith('_')).map(k=>[k,norm(v[k])]));
+    return v===undefined?null:v;
+  };
+  const eq=(a,b)=>JSON.stringify(norm(a))===JSON.stringify(norm(b));
+  const saveJSON=(name,obj)=>{
+    const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000);
+  };
+  let checks=new Map();
+  async function check(op){
+    if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)throw Error('Firebase no está disponible y autenticado.');
+    if(typeof firebaseBridge.mods.getDocFromServer!=='function')throw Error('No hay lectura exclusiva del servidor.');
+    if(op.entity!=='planning'||!op.recordId||op.type==='DELETE')return {safe:false,why:'Operación no compatible con archivo seguro.'};
+    const ref=firebaseBridge.mods.doc(firebaseBridge.db,cloudCollectionFor('planning'),op.recordId);
+    const snap=await firebaseBridge.mods.getDocFromServer(ref);
+    if(!snap.exists())return {safe:false,why:'La actividad no existe en Firebase.'};
+    const remote=snap.data(),payload=cloudPayloadFor('planning',op.payload||{});
+    if(remote.status!=='REALIZADO')return {safe:false,why:'Firebase no confirma REALIZADO.',remoteStatus:remote.status};
+    for(const key of ['id','date','analystId']){
+      if(payload[key]!==undefined&&!eq(payload[key],remote[key]))return {safe:false,why:'Identidad diferente: '+key,remoteStatus:remote.status};
+    }
+    const differing=Object.keys(payload).filter(k=>!ignored.has(k)&&payload[k]!==undefined&&!eq(payload[k],remote[k]));
+    if(differing.length)return {safe:false,why:'Datos distintos que deben conservarse: '+differing.join(', '),remoteStatus:remote.status};
+    // Exigir evidencia de cierre confirmada en el propio documento del servidor.
+    if(!remote.completionCommittedAt&&!remote.actualFinishedAt&&!remote.chiefClosure)
+      return {safe:false,why:'No hay metadatos de cierre en el documento del servidor.',remoteStatus:remote.status};
+    return {safe:true,why:'Firebase confirma REALIZADO y todos los campos sustantivos de la operación coinciden.',remoteStatus:remote.status,remoteUpdatedAt:remote.updatedAt||null,remoteCompletionAt:remote.completionCommittedAt||null};
+  }
+  async function show(){
+    if(currentSessionUser?.role!=='JEFE')return;
+    let d=document.getElementById('chiefConflictReviewDialog');
+    if(!d){d=document.createElement('dialog');d.id='chiefConflictReviewDialog';d.style.cssText='width:min(950px,95vw);max-height:90vh;overflow:auto;border:1px solid #b4c7d4;border-radius:16px;padding:22px;background:white;color:#172e42;z-index:99999';document.body.appendChild(d)}
+    checks=new Map();
+    const conflicts=(await getAll('outbox')).filter(x=>x.status==='CONFLICTO_LOCAL');
+    // V28.21.25: nunca ocultar contradicciones técnicas entre operaciones del mismo registro.
+    const byRecord=new Map();
+    for(const op of conflicts){const k=String(op.recordId||'');if(!byRecord.has(k))byRecord.set(k,[]);byRecord.get(k).push(op)}
+    const disputed=new Set();
+    for(const [key,ops] of byRecord){
+      if(ops.length<2)continue;
+      const technical=ops.map(x=>JSON.stringify({status:x.payload?.status,actualSamples:x.payload?.actualSamples,sampleParameterCounts:x.payload?.sampleParameterCounts,reagentResult:x.payload?.reagentResult}));
+      if(new Set(technical).size>1)disputed.add(key);
+    }
+    d.innerHTML=`<h2>🔎 Revisar conflictos protegidos · JEFE</h2><p>La revisión consulta Firebase para cada operación. Solo se puede archivar localmente si el servidor ya tiene el cierre REALIZADO y todos los datos sustantivos de esa operación. No modifica Firebase ni inventario. Los conflictos diferentes permanecerán protegidos.</p><p><b>${conflicts.length} conflicto(s) en este navegador</b></p><button type="button" id="crBackup">Descargar evidencia de los conflictos</button> <button type="button" id="crClose">Cerrar</button><div id="crRows"></div>`;
+    d.querySelector('#crClose').onclick=()=>d.close();
+    d.querySelector('#crBackup').onclick=()=>saveJSON(`CONFLICTOS_PROTEGIDOS_${Date.now()}.json`,{generatedAt:nowISO(),scope:'RESPALDO_LOCAL_NO_EJECUTABLE',conflicts});
+    if(disputed.size){const alert=document.createElement('p');alert.style.cssText='padding:12px;background:#fff0e0;border:2px solid #b85c00;border-radius:10px;color:#5b2b00;font-weight:bold';alert.textContent='ATENCIÓN: '+disputed.size+' actividad(es) tienen versiones locales contradictorias. No se permite archivar automáticamente esos conflictos. Compare consumos y datos técnicos con Firebase y registros de laboratorio antes de resolverlos.';d.querySelector('#crRows').before(alert)}
+    const root=d.querySelector('#crRows');
+    for(const op of conflicts){
+      const row=document.createElement('section');row.style.cssText='padding:12px;margin-top:12px;border:1px solid #ccd8e0;border-radius:10px';
+      const title=document.createElement('div');title.innerHTML=`<b>${esc(op.entity)} · ${esc(op.recordId||op.id)}</b><br><small>${esc(op.lastError||'Sin detalle')} · ${esc(op.createdAt||'')}</small>`;
+      const info=document.createElement('p');info.style.cssText='font-size:13px;white-space:pre-wrap';
+      const r=op.payload?.reagentResult||{};
+      const consumed=(r.items||[]).filter(x=>x.usedInActivity&&Number(x.used||0)>0).map(x=>`${x.name||x.reagentId} [${x.lot||'sin lote'}]: ${Number(x.used).toFixed(3)} ${x.unit||''}`);
+      info.textContent=`Actividad: ${op.payload?.code||'—'} · ${op.payload?.analystName||'—'}\nEstado local: ${op.payload?.status||'—'} · muestras: ${op.payload?.actualSamples??'—'} · reactivos completos: ${r.completed===true?'SÍ':r.completed===false?'NO':'SIN DATO'}\nConsumos declarados: ${consumed.length?consumed.join(' | '):'ninguno'}`;
+      if(disputed.has(String(op.recordId||''))){const warning=document.createElement('b');warning.style.color='#a13b00';warning.textContent=' ⚠ VERSIONES CONTRADICTORIAS: archivo bloqueado';row.append(warning)}
+      row.append(info);
+      const button=document.createElement('button');button.type='button';button.textContent='Verificar en Firebase';button.style.marginTop='8px';
+      const outcome=document.createElement('div');outcome.style.marginTop='8px';
+      row.append(title,button,outcome);root.append(row);
+      button.onclick=async()=>{
+        button.disabled=true;outcome.textContent='Consultando el servidor…';
+        try{
+          const latest=await getOne('outbox',op.id);
+          if(!latest||latest.status!=='CONFLICTO_LOCAL')throw Error('La operación ya cambió; actualice la revisión.');
+          const result=await check(latest);
+          if(disputed.has(String(latest.recordId||''))){result.safe=false;result.why='BLOQUEADO: existen operaciones del mismo registro con estados o consumos diferentes. Verifique los datos técnicos antes de archivar.'}
+          checks.set(op.id,result);
+          outcome.textContent=result.why;
+          if(result.safe){
+            const archive=document.createElement('button');archive.type='button';archive.textContent='Archivar solo este conflicto verificado';archive.style.margin='8px';
+            outcome.append(archive);
+            archive.onclick=async()=>{
+              archive.disabled=true;
+              try{
+                const current=await getOne('outbox',op.id);
+                if(!current||current.status!=='CONFLICTO_LOCAL')throw Error('El conflicto ya cambió.');
+                const again=await check(current); // segunda lectura antes del archivo
+                if(!again.safe)throw Error(again.why);
+                if(!confirm('Se archivará SOLAMENTE esta operación local obsoleta. No se cambiará Firebase ni inventario. ¿Confirma?')){archive.disabled=false;return;}
+                saveJSON(`EVIDENCIA_CONFLICTO_${op.id}.json`,{exportedAt:nowISO(),operation:current,serverCheck:again});
+                current.status='ARCHIVADO_VERIFICADO';current.archivedAt=nowISO();current.archiveReason='Cierre REALIZADO confirmado y contenido sustantivo equivalente';current.archiveCheckedBy=currentSessionUser?.email||'JEFE';current.archiveServerCheck=again;
+                await put('outbox',current);
+                await audit('ARCHIVAR_CONFLICTO_VERIFICADO','SINCRONIZACION',current.recordId,`Outbox ${current.id}; servidor REALIZADO; no se modificó Firebase`);
+                await refreshSyncUI();outcome.textContent='✓ Archivado localmente con evidencia. Firebase e inventario intactos.';
+              }catch(e){archive.disabled=false;outcome.textContent='NO ARCHIVADO: '+String(e.message||e)}
+            };
+          }
+        }catch(e){outcome.textContent='NO VERIFICADO: '+String(e.message||e)}finally{button.disabled=false;}
+      };
+    }
+    // V28.21.26: conciliación supervisada de un GRUPO de revisiones contradictorias.
+    // No intenta reproducir UPDATE ni deducir inventario. Mantiene las operaciones
+    // originales íntegramente en IndexedDB y exige evidencia descargable + confirmación.
+    if(disputed.size){
+      const panel=document.createElement('section');
+      panel.style.cssText='padding:16px;margin-top:18px;border:2px solid #b85c00;border-radius:12px;background:#fff9ef';
+      panel.innerHTML='<h3>Conciliación supervisada JEFE (sin modificar Firebase)</h3><p>Esta opción separa las versiones locales contradictorias del envío automático. <b>No recupera consumos faltantes en Firebase.</b> Antes de conciliar, compare los registros técnicos y confirme que los datos que deban recuperarse están respaldados. Las operaciones originales permanecerán guardadas como evidencia local.</p>';
+      root.append(panel);
+      for(const recordId of disputed){
+        const ops=byRecord.get(recordId)||[];
+        const box=document.createElement('div');box.style.cssText='border-top:1px solid #ddbd89;padding:12px 0';
+        const heading=document.createElement('b');heading.textContent=`${ops[0]?.payload?.code||recordId} · ${ops[0]?.payload?.analystName||''} · ${ops.length} versiones`;box.append(heading);
+        const detail=document.createElement('pre');detail.style.cssText='white-space:pre-wrap;font-size:12px';box.append(detail);
+        const verify=document.createElement('button');verify.textContent='1. Comparar versiones con Firebase';verify.type='button';box.append(verify);
+        const exportBtn=document.createElement('button');exportBtn.textContent='2. Descargar evidencia completa';exportBtn.type='button';exportBtn.disabled=true;exportBtn.style.marginLeft='6px';box.append(exportBtn);
+        const input=document.createElement('input');input.placeholder='Escriba CONCILIAR';input.style.cssText='display:block;margin:10px 0;padding:8px';input.disabled=true;box.append(input);
+        const resolve=document.createElement('button');resolve.textContent='3. Archivar versiones locales bajo responsabilidad JEFE';resolve.type='button';resolve.disabled=true;box.append(resolve);
+        let remote=null,verifiedAt=null,exported=false;
+        verify.onclick=async()=>{
+          verify.disabled=true;exported=false;exportBtn.disabled=true;input.disabled=true;resolve.disabled=true;
+          detail.textContent='Leyendo documento directamente del servidor…';
+          try{
+            if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine||!firebaseBridge.mods.getDocFromServer)throw Error('No hay acceso autenticado a Firebase.');
+            const ref=firebaseBridge.mods.doc(firebaseBridge.db,cloudCollectionFor('planning'),recordId);
+            const snap=await firebaseBridge.mods.getDocFromServer(ref);
+            if(!snap.exists())throw Error('El registro no existe en Firebase.');
+            remote=snap.data();verifiedAt=nowISO();
+            const summary=ops.map(o=>({operation:o.id,status:o.payload?.status,samples:o.payload?.actualSamples,completed:o.payload?.reagentResult?.completed,consumptions:(o.payload?.reagentResult?.items||[]).filter(x=>x.usedInActivity&&Number(x.used)>0).map(x=>({name:x.name,lot:x.lot,used:x.used,unit:x.unit}))}));
+            const serverConsumptions=(remote.reagentResult?.items||[]).filter(x=>x.usedInActivity&&Number(x.used)>0).map(x=>({name:x.name,lot:x.lot,used:x.used,unit:x.unit}));
+            detail.textContent=JSON.stringify({firebase:{status:remote.status,samples:remote.actualSamples,completed:remote.reagentResult?.completed,consumptions:serverConsumptions,updatedAt:remote.updatedAt},local:summary},null,2);
+            exportBtn.disabled=false;
+            if(remote.status!=='REALIZADO')detail.textContent+='\n⚠ Firebase NO confirma REALIZADO. No se permite conciliar este grupo.';
+          }catch(e){remote=null;detail.textContent='NO VERIFICADO: '+String(e.message||e)}finally{verify.disabled=false}
+        };
+        exportBtn.onclick=()=>{
+          if(!remote)return;
+          saveJSON(`CONCILIACION_EVIDENCIA_${recordId}_${Date.now()}.json`,{scope:'EVIDENCIA_ANTES_DE_ARCHIVO',exportedAt:nowISO(),verifiedAt,recordId,serverDocument:remote,conflicts:ops});
+          exported=true;input.disabled=remote.status!=='REALIZADO';resolve.disabled=remote.status!=='REALIZADO';
+        };
+        resolve.onclick=async()=>{
+          if(!remote||!exported||input.value.trim()!=='CONCILIAR')return alert('Primero verifique Firebase, descargue la evidencia y escriba CONCILIAR.');
+          resolve.disabled=true;
+          try{
+            const ref=firebaseBridge.mods.doc(firebaseBridge.db,cloudCollectionFor('planning'),recordId);
+            const fresh=await firebaseBridge.mods.getDocFromServer(ref);
+            if(!fresh.exists()||fresh.data().status!=='REALIZADO')throw Error('Firebase ya no confirma REALIZADO.');
+            if(!eq(fresh.data(),remote))throw Error('Firebase cambió desde la verificación. Vuelva a comparar y descargar evidencia.');
+            const current=[];
+            for(const op of ops){const c=await getOne('outbox',op.id);if(!c||c.status!=='CONFLICTO_LOCAL')throw Error('La cola cambió; reabra esta ventana.');current.push(c)}
+            if(!confirm(`JEFE: archivará ${current.length} versiones locales contradictorias de ${recordId}. No se escribirán datos en Firebase. Si hay consumos faltantes en el servidor, deberán corregirse por separado. ¿Confirma que descargó y conservó la evidencia?`)){resolve.disabled=false;return}
+            const stamp=nowISO();
+            for(const c of current){c.status='ARCHIVADO_CONCILIACION_JEFE';c.archivedAt=stamp;c.archiveReason='Conciliación manual JEFE; discrepancias conservadas para revisión técnica';c.archiveCheckedBy=currentSessionUser?.email||'JEFE';c.archiveServerStatus=fresh.data().status;c.archiveEvidenceRequired=true;await put('outbox',c)}
+            await audit('CONCILIAR_CONFLICTOS_JEFE','SINCRONIZACION',recordId,`${current.length} revisiones locales archivadas, no enviadas a Firebase; discrepancias requieren seguimiento técnico`);
+            await refreshSyncUI();
+            detail.textContent+='\n✓ Versiones locales archivadas con trazabilidad. Firebase e inventario NO se modificaron. Compruebe los consumos en el servidor.';
+            input.disabled=true;exportBtn.disabled=true;
+          }catch(e){detail.textContent+='\nNO CONCILIADO: '+String(e.message||e);resolve.disabled=false}
+        };
+        panel.append(box);
+      }
+    }
+    if(!d.open)d.showModal();
+  }
+  function mount(){
+    let b=document.getElementById('chiefConflictReviewButton');
+    if(currentSessionUser?.role!=='JEFE'){if(b)b.remove();return;}
+    if(b)return;
+    b=document.createElement('button');b.id='chiefConflictReviewButton';b.type='button';b.textContent='⚠ Revisar conflictos';
+    b.style.cssText='position:fixed;bottom:74px;right:18px;z-index:9998;background:#80520d;color:white;border:2px solid white;border-radius:12px;padding:10px 14px;font-weight:bold;cursor:pointer';
+    b.onclick=show;document.body.appendChild(b);
+  }
+  setInterval(mount,2500);if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
+})();
+
+// V28.21.20 - Diagnostico JEFE: SOLO LECTURA, a demanda, sin escrituras ni consumos.
+(function(){
+  const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let lastReport=null;
+  function mount(){
+    let b=document.getElementById('chiefIntegrityDiagnosticButton');
+    if(currentSessionUser?.role!=='JEFE'){if(b)b.remove();return;}
+    if(b)return;
+    b=document.createElement('button');b.id='chiefIntegrityDiagnosticButton';b.type='button';b.textContent='🛡 Diagnóstico JEFE';
+    b.style.cssText='position:fixed;bottom:18px;right:18px;z-index:9998;background:#173f62;color:white;border:2px solid #fff;border-radius:12px;padding:12px 18px;font-weight:bold;box-shadow:0 3px 16px #0004;cursor:pointer';
+    b.addEventListener('click',openDiagnostic);document.body.appendChild(b);
+  }
+  function openDiagnostic(){
+    if(currentSessionUser?.role!=='JEFE')return;
+    let box=document.getElementById('chiefIntegrityDiagnosticDialog');
+    if(!box){box=document.createElement('dialog');box.id='chiefIntegrityDiagnosticDialog';box.style.cssText='width:min(940px,95vw);max-height:90vh;overflow:auto;border:1px solid #b4c7d4;border-radius:16px;padding:22px;color:#172e42;background:white;z-index:9999';document.body.appendChild(box);}
+    box.innerHTML=`<div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><h2>🛡 Diagnóstico de integridad · JEFE</h2><button id="chiefDiagClose" type="button">Cerrar ✕</button></div><p>Solo lectura. Comprueba registros recientes contra Firebase bajo demanda; no repara datos, no modifica inventario ni consume lecturas en segundo plano.</p><label>Fecha a comprobar: <input type="date" id="chiefDiagDate" value="${new Date().toLocaleDateString('en-CA')}"></label> <label>Máximo de actividades: <select id="chiefDiagLimit"><option>10</option><option selected>20</option><option>40</option></select></label> <button id="chiefDiagRun" type="button">Ejecutar diagnóstico ahora</button> <button id="chiefDiagDownload" type="button" disabled>Descargar informe JSON</button><div id="chiefDiagResults" style="margin-top:16px" role="status">Sin comprobaciones realizadas.</div>`;
+    box.querySelector('#chiefDiagClose').onclick=()=>box.close();box.querySelector('#chiefDiagRun').onclick=runDiagnostic;box.querySelector('#chiefDiagDownload').onclick=()=>{if(!lastReport)return;const a=document.createElement('a'),blob=new Blob([JSON.stringify(lastReport,null,2)],{type:'application/json'});a.href=URL.createObjectURL(blob);a.download=`DIAGNOSTICO_JEFE_${lastReport.date}_${Date.now()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500)};
+    if(!box.open)box.showModal();
+  }
+  async function runDiagnostic(){
+    const box=document.getElementById('chiefIntegrityDiagnosticDialog');if(!box||currentSessionUser?.role!=='JEFE')return;
+    const output=box.querySelector('#chiefDiagResults'),run=box.querySelector('#chiefDiagRun'),date=box.querySelector('#chiefDiagDate').value,limit=Number(box.querySelector('#chiefDiagLimit').value);
+    run.disabled=true;output.textContent='Analizando estado local y consultando Firebase…';
+    try{
+      const outbox=await getAll('outbox');const outstanding=outbox.filter(x=>['PENDIENTE','ERROR','CONFLICTO_LOCAL'].includes(x.status));
+      const plans=(await getAll('planning')).filter(p=>p.date===date).sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||''))).slice(0,limit);
+      const report={version:'28.21.20',date,generatedAt:new Date().toISOString(),scope:'SOLO_LECTURA',limit,checked:0,totalLocalForDate:0,outbox:{pending:outstanding.filter(x=>x.status==='PENDIENTE').length,errors:outstanding.filter(x=>x.status==='ERROR').length,conflicts:outstanding.filter(x=>x.status==='CONFLICTO_LOCAL').length},connection:{online:navigator.onLine,firebaseReady:!!firebaseBridge.ready,authenticated:!!firebaseBridge.authUser},rows:[],notes:[]};
+      report.totalLocalForDate=(await getAll('planning')).filter(p=>p.date===date).length;
+      if(!navigator.onLine||!firebaseBridge.ready||!firebaseBridge.authUser)report.notes.push('NO VERIFICADO: Firebase no está disponible/autenticado. Los datos locales no equivalen a confirmación del servidor.');
+      else{
+        const {doc,getDocFromServer}=firebaseBridge.mods;
+        if(typeof getDocFromServer!=='function')throw Error('SDK sin getDocFromServer: no se puede confirmar lectura desde servidor');
+        for(const p of plans){
+          const row={code:p.code||p.id,planId:p.id,analyst:p.analystName,activity:p.catalogName,localStatus:p.status,issues:[],result:'OK'};
+          try{
+            const snap=await getDocFromServer(doc(firebaseBridge.db,cloudCollectionFor('planning'),p.id));
+            if(!snap.exists())row.issues.push('REGISTRO_AUSENTE_EN_FIREBASE');
+            else{
+              const remote=snap.data();row.serverStatus=remote.status;
+              if(p.status==='REALIZADO'&&remote.status!=='REALIZADO')row.issues.push('RETROCESO_ESTADO_SERVIDOR');
+              if(p.completionCommittedAt&&!remote.completionCommittedAt)row.issues.push('CIERRE_NO_CONFIRMADO_EN_SERVIDOR');
+              const populated=v=>v!==null&&v!==undefined&&v!=='';
+              for(const key of ['actualSamples','reagentResult','calibrationResult','sampleParameterCounts','operationalSamplesResult']){
+                if(populated(p[key])&&!populated(remote[key]))row.issues.push(`DATO_LOCAL_AUSENTE_EN_SERVIDOR:${key}`);
+                else if(populated(p[key])&&populated(remote[key])&&JSON.stringify(p[key])!==JSON.stringify(remote[key]))row.issues.push(`DIFERENCIA_LOCAL_SERVIDOR:${key}`);
+              }
+              if(remote.status==='REALIZADO'&&remote.actualSamples==null&&String(remote.section||'').toUpperCase()==='ENSAYOS_ANALITICOS')row.issues.push('MUESTRAS_NO_REGISTRADAS_EN_CIERRE');
+              if(remote.status==='REALIZADO'&&Array.isArray(remote.reagentConfig)&&remote.reagentConfig.length&&!remote.reagentResult?.completed)row.issues.push('RESULTADO_REACTIVOS_INCOMPLETO');
+            }
+          }catch(e){row.issues.push('LECTURA_SERVIDOR_FALLIDA:'+String(e.message||e).slice(0,150));}
+          row.result=row.issues.length?'REVISAR':'OK';report.rows.push(row);report.checked++;
+        }
+      }
+      lastReport=report;box.querySelector('#chiefDiagDownload').disabled=false;
+      const problem=report.rows.filter(x=>x.issues.length).length;
+      output.innerHTML=`<div style="padding:12px;background:${problem||report.outbox.conflicts||report.outbox.errors?'#fff2df':'#e9f6ed'};border-radius:10px"><b>${report.checked} verificadas en servidor · ${problem} con alertas</b><br>Actividades locales de la fecha: ${report.totalLocalForDate} · Pendientes: ${report.outbox.pending} · Errores: ${report.outbox.errors} · Conflictos: ${report.outbox.conflicts}<br>Conexión: ${report.connection.firebaseReady&&report.connection.authenticated?'Firebase autenticado':'Sin verificación Firebase'}${report.notes.map(n=>`<p>${safe(n)}</p>`).join('')}</div><p style="font-size:12px">Este diagnóstico compara el estado actual; no prueba por sí solo que una transacción pasada se guardó correctamente ni garantiza protección de clientes antiguos.</p><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th>Actividad</th><th>Analista</th><th>Local / Servidor</th><th>Diagnóstico</th></tr></thead><tbody>${report.rows.map(r=>`<tr style="border-top:1px solid #ddd"><td>${safe(r.code)}<br><small>${safe(r.activity)}</small></td><td>${safe(r.analyst)}</td><td>${safe(r.localStatus)} / ${safe(r.serverStatus||'—')}</td><td>${r.issues.length?`⚠️ ${r.issues.map(safe).join('; ')}`:'✓ Sin diferencias detectadas'}</td></tr>`).join('')}</tbody></table></div>`;
+    }catch(e){output.textContent='Diagnóstico no completado: '+String(e.message||e)}finally{run.disabled=false;}
+  }
+  setInterval(mount,2000);if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
+})();

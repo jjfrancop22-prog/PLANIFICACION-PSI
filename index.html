@@ -25,7 +25,7 @@
       <button class="nav-item" data-view="trazabilidad">↺ <span>Trazabilidad</span></button>
       <button class="nav-item" data-view="configuracion">⚙ <span>Configuración</span></button>
     </nav>
-    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.28.21.11 · Firebase Auth</small></div>
+    <div class="sidebar-footer"><div class="sync-pill">● LOCAL</div><small>V1.0.5.6.33.25.10.28.21.10 · Firebase Auth</small></div>
   </aside>
 
   <main class="main">
@@ -732,73 +732,69 @@
     <p class="smart-sync-note"><b>Seguridad:</b> por ahora no se cierra automáticamente la sesión a los 30 minutos. Cerrar sesión con datos pendientes o mientras se está trabajando puede interrumpir el flujo. Esta decisión se puede configurar posteriormente con validación de pendientes.</p>
   </div>
 </dialog>
-<script src="app.js?v=6.33.25.10.28.21"></script>
+<script src="app.js?v=6.33.25.10.28.21.28"></script>
 
 <script>
 (function(){
-  if(!('serviceWorker' in navigator)) return;
-
-  let refreshing=false;
-  let waitingWorker=null;
-
-  const bar=()=>document.getElementById('pwaUpdateBar');
-  const text=()=>document.getElementById('pwaUpdateText');
-  const btn=()=>document.getElementById('pwaUpdateBtn');
-
-  async function showUpdate(worker){
-    waitingWorker=worker;
-    let version='nueva versión';
+  const CURRENT='1.0.5.6.33.25.10.28.21.28';
+  const bar=document.getElementById('pwaUpdateBar');
+  const msg=document.getElementById('pwaUpdateText');
+  const button=document.getElementById('pwaUpdateBtn');
+  const badge=document.createElement('span');
+  badge.id='erpCurrentVersion';
+  badge.textContent='Versión '+CURRENT;
+  badge.style.cssText='position:fixed;bottom:8px;left:10px;z-index:30;background:#f0f5fa;color:#526579;border:1px solid #dbe4ed;border-radius:9px;padding:4px 9px;font:11px system-ui,sans-serif;opacity:.86';
+  document.body.appendChild(badge);
+  if(!('serviceWorker' in navigator))return;
+  let waiting=null,refreshing=false,remoteVersion='';
+  const notify=(worker,version)=>{
+    if(!worker || !version || version===CURRENT)return;
+    waiting=worker;remoteVersion=version;
+    if(msg)msg.textContent='Versión '+version+' disponible. Actualice cuando termine de guardar sus cambios.';
+    if(bar)bar.classList.remove('hidden');
+    if(button){button.disabled=false;button.textContent='Actualizar';}
+  };
+  window.addEventListener('load',async()=>{
     try{
-      const r=await fetch('./version.json?t='+Date.now(),{cache:'no-store'});
-      if(r.ok){
-        const v=await r.json();
-        if(v.version)version=v.version;
-      }
-    }catch{}
-    const b=bar();
-    const t=text();
-    if(t)t.textContent=`${version} está lista. Actualice cuando termine lo que está haciendo.`;
-    if(b)b.classList.remove('hidden');
-  }
-
-  window.addEventListener('load', async()=>{
-    try{
-      const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.33.25.10.28.21',{scope:'./',updateViaCache:'none'});
-      if(reg.waiting && navigator.serviceWorker.controller) showUpdate(reg.waiting);
-
+      const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.33.25.10.28.21.28',{scope:'./',updateViaCache:'none'});
+      const check=async()=>{
+        try{
+          const r=await fetch('./version.json?t='+Date.now(),{cache:'no-store'});
+          if(!r.ok)return;
+          const v=await r.json();
+          const latest=String(v.version||'');
+          if(latest && latest!==CURRENT){
+            await reg.update();
+            notify(reg.waiting,latest);
+          }
+        }catch(e){console.warn('Verificación de versión:',e);}
+      };
       reg.addEventListener('updatefound',()=>{
         const worker=reg.installing;
         if(!worker)return;
         worker.addEventListener('statechange',()=>{
           if(worker.state==='installed' && navigator.serviceWorker.controller){
-            showUpdate(worker);
+            check();
           }
         });
       });
-
-      // Consultar al servidor por una versión nueva cada vez que la APP vuelve al frente.
-      const check=()=>reg.update().catch(()=>{});
-      document.addEventListener('visibilitychange',()=>{if(!document.hidden)check()});
+      if(reg.waiting)await check();
+      document.addEventListener('visibilitychange',()=>{if(!document.hidden)check();});
       window.addEventListener('online',check);
       setInterval(check,5*60*1000);
       check();
-    }catch(err){
-      console.warn('Service Worker:',err);
-    }
+    }catch(e){console.warn('Actualizaciones:',e);}
   });
-
-  document.addEventListener('click',e=>{
-    if(e.target && e.target.id==='pwaUpdateBtn'){
-      const b=btn();
-      if(b){b.disabled=true;b.textContent='Actualizando…'}
-      if(waitingWorker)waitingWorker.postMessage({type:'SKIP_WAITING'});
-    }
+  if(button)button.addEventListener('click',()=>{
+    if(!waiting)return;
+    const ok=window.confirm('Se actualizará el ERP y se recargará esta pestaña. Asegúrese de haber guardado y sincronizado sus actividades. ¿Continuar?');
+    if(!ok)return;
+    button.disabled=true;button.textContent='Actualizando…';
+    waiting.postMessage({type:'SKIP_WAITING'});
   });
-
   navigator.serviceWorker.addEventListener('controllerchange',()=>{
     if(refreshing)return;
-    refreshing=true;
-    location.reload();
+    refreshing=true;window.location.reload();
   });
 })();
 </script>
