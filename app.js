@@ -2698,14 +2698,18 @@ async function commitReagentConsumption(p,result){
   try{
     const sdk=firebaseBridge.mods,planRef=sdk.doc(firebaseBridge.db,'planning',p.id);
     // Se obtiene la lista de catálogos desde el servidor, nunca de una caché local.
-    const catalogSnapshot=await sdk.getDocsFromServer(sdk.collection(firebaseBridge.db,'catalog'));
+    let catalogSnapshot;
+    try { catalogSnapshot=await sdk.getDocsFromServer(sdk.collection(firebaseBridge.db,'catalog')); }
+    catch(e) { throw Error('Lectura de catalog rechazada por Firebase ('+(e.code||'sin código')+'): '+(e.message||e)); }
     const catalogDocs=catalogSnapshot.docs.filter(d=>(d.data().reagentConfig||[]).length);
     const used=(result.items||[]).filter(x=>x.usedInActivity!==false&&!x.notUsed);
     const identity=x=>`${normalizeIdentityText(x.name||'')}|${normalizeIdentityText(x.lot||'')}`;
     const usedMap=new Map(used.map(x=>[identity(x),x]));
     let savedPlan=null,savedCatalogs=[];
     await sdk.runTransaction(firebaseBridge.db,async tx=>{
-      const planSnap=await tx.get(planRef);
+      let planSnap;
+      try { planSnap=await tx.get(planRef); }
+      catch(e) { throw Error('Lectura de planning rechazada por Firebase ('+(e.code||'sin código')+'): '+(e.message||e)); }
       if(!planSnap.exists())throw Error('La actividad no existe en Firebase; espere la sincronización de apertura.');
       const remote=planSnap.data();
       if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw Error('Actividad finalizada: consumo bloqueado.');
@@ -2717,7 +2721,11 @@ async function commitReagentConsumption(p,result){
       }
       // Leer todos los documentos afectados antes de realizar la primera escritura.
       const refs=catalogDocs.filter(d=>(d.data().reagentConfig||[]).some(r=>usedMap.has(identity(r)))).map(d=>sdk.doc(firebaseBridge.db,'catalog',d.id));
-      const snaps=[];for(const ref of refs)snaps.push(await tx.get(ref));
+      const snaps=[];
+      for(const ref of refs){
+        try { snaps.push(await tx.get(ref)); }
+        catch(e) { throw Error('Lectura de catálogo '+ref.id+' rechazada ('+(e.code||'sin código')+'): '+(e.message||e)); }
+      }
       const liveByKey=new Map();
       for(const snap of snaps){if(!snap.exists())continue;for(const r of snap.data().reagentConfig||[]){const k=identity(r);if(usedMap.has(k)&&!liveByKey.has(k))liveByKey.set(k,r);}}
       for(const item of used){
@@ -2780,7 +2788,7 @@ async function commitReagentConsumption(p,result){
     return {ok:true,unchanged:savedCatalogs.length===0};
   }catch(err){
     console.error('Consumo Firebase no confirmado',err);
-    return {ok:false,text:'No se guardó el consumo: '+String(err.message||err)};
+    return {ok:false,text:'No se guardó el consumo en Firebase (sin descuento). '+String(err.message||err)+' Si indica permisos, revise las reglas publicadas y el rol ACTIVO.'};
   }finally{reagentCommitLocks.delete(p.id)}
 }
 

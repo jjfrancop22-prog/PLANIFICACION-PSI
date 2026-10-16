@@ -24,9 +24,12 @@ service cloud.firestore {
       let prior = before.get('reagentResult', {});
       let wasZero = prior.get('completed', false) == true
         && prior.get('inventoryReceiptId', '') == ''
-        && prior.get('items', []).size() == 1
-        && prior.get('items', [])[0].get('notUsed', false) == true
-        && prior.get('items', [])[0].get('used', -1) == 0;
+        && prior.get('items', []).size() > 0
+        && prior.get('inventorySignature', '') is string
+        && prior.get('inventorySignature', '').size() > 0;
+      // AVISO: recuperación multimaterial validada en el cliente, NO en las reglas.
+      // No publicar en producción sin modelo de inventario por documento.
+      // Firestore Rules no puede iterar y verificar todos los elementos del arreglo.
       return pid is string && pid.size() > 0 && pid.size() < 150
         && receipt == 'INV-' + pid
         && before.get('completionCommittedAt', null) == null
@@ -35,7 +38,8 @@ service cloud.firestore {
         && after.get('reagentResult', {}).get('completed', false) == true
         && after.get('reagentResult', {}).get('inventoryReceiptId', '') == receipt
         && after.get('reagentResult', {}).get('inventoryCommittedAt', null) is string
-        && request.resource.data.updatedAt == after.updatedAt;
+        && after.get('updatedAt', '') is string
+        && request.resource.data.get('updatedAt', '') is string;
     }
     match /catalog/{id} {
       allow read: if activeUser();

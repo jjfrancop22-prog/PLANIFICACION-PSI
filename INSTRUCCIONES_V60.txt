@@ -1,0 +1,12 @@
+V28.21.60 DIAGNOSTICO DE DESCUENTOS - PRUEBA, NO PRODUCCION
+
+1. Respaldar catalog y planning y las reglas actuales.
+2. Probar exclusivamente en proyecto Firebase aislado.
+3. Publicar firestore.rules en proyecto de pruebas.
+4. Subir archivos a repositorio GitHub de pruebas y desplegar Netlify de pruebas.
+5. Ejecutar consumo ficticio, comprobar saldo y cierre en segunda computadora.
+6. Si aparece error, copiar mensaje completo y documentar ID de planning y catalog.
+
+SEGURIDAD: La regla permite modificar el arreglo reagentConfig sin verificar cada delta.
+No publicar sobre inventario real; el código del cliente no sustituye seguridad del servidor.
+No se han probado transacciones reales.

@@ -1,0 +1,9 @@
+V28.21.59 - PRUEBA NO SEGURA EN PRODUCCION
+
+Cambio: regla de recuperacion de consumo cero deja de exigir exactamente un material; ahora admite listas no vacias con firma anterior. El cliente comprueba todos los items en cero.
+
+RIESGO: las reglas de Firestore NO verifican individualmente cada consumo de reagentConfig ni prueban que una firma previa represente consumo cero. No desplegar sobre inventario real sin validar y redisenar permisos.
+
+Validacion: node --check app.js OK. Prueba regression.cjs FALLA: ReferenceError reagentCommitLocks is not defined (harness de pruebas). No hay prueba de Firebase.
+
+El saldo 290 del lote 4001 NO ha sido modificado. La version NO repara datos ya escritos.
