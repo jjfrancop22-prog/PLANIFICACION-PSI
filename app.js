@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.58';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.59';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -2684,17 +2684,15 @@ function sameReagentConsumptionInput(a,b){
   return !!a?.completed&&!!b?.completed&&sameCloudFunctionalPayload({items:normalize(a)},{items:normalize(b)});
 }
 // Los consumos confirmados son independientes del cierre horario de la actividad.
-// V28.21.58: primer consumo confirmado mediante una sola transacción Firestore.
+// V28.21.59: primer consumo confirmado mediante una sola transacción Firestore.
 // No se autoriza corregir un consumo previamente confirmado desde esta ruta.
 const reagentCommitLocks=new Set();
 async function commitReagentConsumption(p,result){
   if(!result?.completed)return {ok:false,text:'Complete o desmarque los consumos antes de guardarlos.'};
   if(reagentCommitLocks.has(p.id))return {ok:false,text:'Consumo en proceso de confirmación; espere.'};
-  const previous=p.reagentResult;
-  if(previous?.inventoryCommittedAt){
-    if(sameReagentConsumptionInput(previous,result)){p.reagentResult=previous;return {ok:true,unchanged:true};}
-    return {ok:false,text:'Consumo guardado y bloqueado. Para modificarlo, solicite autorización de Calidad. No se descontó inventario.'};
-  }
+  // El estado local no es evidencia suficiente: un intento anterior pudo
+  // dejar una marca en IndexedDB sin que Firebase confirmara el descuento.
+  // La transacción que sigue decide usando exclusivamente planning remoto.
   if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)
     return {ok:false,text:'Sin conexión confirmada a Firebase: no se aplicó el consumo.'};
   reagentCommitLocks.add(p.id);
@@ -2714,7 +2712,7 @@ async function commitReagentConsumption(p,result){
       if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw Error('Actividad finalizada: consumo bloqueado.');
       if(remote.reagentResult?.inventoryCommittedAt){
         if(sameReagentConsumptionInput(remote.reagentResult,result)){savedPlan=remote;savedCatalogs=[];return;}
-        throw Error('Existe un consumo confirmado distinto en Firebase. No se aplicó otro descuento.');
+        throw Error('Consumo confirmado en Firebase y bloqueado. Para modificarlo, solicite autorización de Calidad. No se descontó inventario.');
       }
       // Leer todos los documentos afectados antes de realizar la primera escritura.
       const refs=catalogDocs.filter(d=>(d.data().reagentConfig||[]).some(r=>usedMap.has(identity(r)))).map(d=>sdk.doc(firebaseBridge.db,'catalog',d.id));

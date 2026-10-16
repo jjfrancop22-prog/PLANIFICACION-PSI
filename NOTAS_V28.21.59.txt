@@ -1,0 +1,7 @@
+V28.21.59 — Corrección focalizada de prevalidación local del consumo
+
+CAMBIO: commitReagentConsumption ya no considera la marca local inventoryCommittedAt como confirmación definitiva. Siempre consulta el documento remoto dentro de una transacción antes de permitir o bloquear el primer consumo. Si Firebase ya confirmó el consumo, conserva el bloqueo y no descuenta de nuevo.
+
+SIN CAMBIOS: esquemas, planificación, cálculos, monitor, cierre, y reglas de Firebase respecto de V28.21.58.
+
+ATENCIÓN: firestore.rules incluido es el de V28.21.58 y NO es seguro para producción: permite cambiar reagentConfig sin demostrar que el descuento coincide con el consumo. NO PUBLICAR ESTAS REGLAS EN INVENTARIO REAL. Con reglas anteriores el analista continuará sin permiso de descuento. La solución de producción requiere validación de reglas con el esquema real y pruebas en Firebase Emulator.
