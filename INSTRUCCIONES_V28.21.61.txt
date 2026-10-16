@@ -1,0 +1,12 @@
+V28.21.61 — PRUEBA EN PROYECTO FIREBASE SEPARADO
+
+Se retiró el bloqueo que limitaba a un solo material COUNT por ficha. Admite varios materiales COUNT y WEIGHT.
+
+ADVERTENCIA: firestore.rules NO verifica cada delta del arreglo reagentConfig. NO PUBLICAR EN FIREBASE REAL.
+
+1. Respaldar los datos y conservar la versión estable.
+2. Configurar firebase-config.js con un proyecto Firebase Spark de pruebas.
+3. Crear usuarios, planning y catalog ficticios.
+4. Publicar firestore.rules SOLO en el proyecto de pruebas.
+5. Probar material contable, peso y dos analistas en mismo lote; comprobar duplicaciones y errores.
+6. No usar en inventario real hasta rediseñar movimientos por documento y reglas de validación.

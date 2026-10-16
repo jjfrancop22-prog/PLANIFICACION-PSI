@@ -13,22 +13,22 @@ service cloud.firestore {
       allow read: if signedIn() && (request.auth.uid == userId || isBoss());
       allow create, update, delete: if isBoss();
     }
-    // Inventario: el analista solo puede registrar el primer consumo vinculado
-    // a una actividad y su comprobante. No permite crear/borrar catálogos.
-    function inventoryPlanValid() {
+    // V28.21.61 - SOLO PROYECTO FIREBASE DE PRUEBAS.
+    // Permite varios materiales y modalidades. NO valida cada delta del arreglo
+    // reagentConfig; no utilizar con inventario real.
+    function testInventoryCommit() {
       let pid = request.resource.data.get('inventoryCommitPlanId', '');
       let receipt = request.resource.data.get('inventoryCommitReceiptId', '');
       let before = get(/databases/$(database)/documents/planning/$(pid)).data;
       let after = getAfter(/databases/$(database)/documents/planning/$(pid)).data;
-      return pid is string && pid.size() > 0
+      return pid is string && pid.size() > 0 && pid.size() < 150
         && receipt == 'INV-' + pid
-        && before.status != 'REALIZADO'
         && before.get('completionCommittedAt', null) == null
         && before.get('reagentResult', {}).get('inventoryCommittedAt', null) == null
         && after.get('reagentResult', {}).get('inventoryReceiptId', '') == receipt
-        && after.get('reagentResult', {}).get('inventoryCommittedAt', null) != null
+        && after.get('reagentResult', {}).get('inventoryCommittedAt', null) is string
         && after.get('reagentResult', {}).get('completed', false) == true
-        && after.get('reagentResult', {}) != before.get('reagentResult', {});
+        && request.resource.data.updatedAt == after.updatedAt;
     }
     match /catalog/{id} {
       allow read: if activeUser();
@@ -36,7 +36,7 @@ service cloud.firestore {
       allow update: if isBoss() || (activeUser()
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['reagentConfig', 'updatedAt', 'inventoryCommitPlanId', 'inventoryCommitReceiptId'])
-        && inventoryPlanValid());
+        && testInventoryCommit());
     }
     match /timeRules/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /compositeSteps/{id} { allow read: if activeUser(); allow write: if isBoss(); }

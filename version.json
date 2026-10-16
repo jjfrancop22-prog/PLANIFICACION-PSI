@@ -1,8 +1,8 @@
 {
-  "version": "1.0.5.6.33.25.10.28.21.59",
-  "build": "V28.21.59",
-  "name": "PREVALIDACION-CIERRE-Y-CONSUMO",
+  "version": "1.0.5.6.33.25.10.28.21.62",
+  "build": "V28.21.62",
+  "name": "VALIDACION MULTIMATERIAL - SOLO PRUEBAS",
   "date": "2026-10-15",
   "notes": "Primer consumo directo mediante transacción Firestore; bloqueo de consumos ya confirmados.",
-  "validation": "Pruebas locales; requiere verificación real multiusuario antes de producción."
+  "validation": "NO APTO PARA PRODUCCION: las reglas no comprueban delta por elemento de reagentConfig"
 }

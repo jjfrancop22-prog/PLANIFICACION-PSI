@@ -1,0 +1,10 @@
+VERSIÓN DE PRUEBA, NO PUBLICAR EN EL INVENTARIO REAL.
+
+1. Cree un proyecto Firebase Spark de PRUEBAS separado y configure firebase-config.js para ese proyecto.
+2. Cargue usuarios y actividades ficticias; utilice un catálogo que contenga UN SOLO material CONTABLE (COUNT) y un único lote.
+3. Publique firestore.rules en ese proyecto de PRUEBAS.
+4. Despliegue este ZIP en un sitio de prueba Netlify distinto del ERP real.
+5. Compruebe un consumo inicial (290 - 13 = 277), un segundo Guardar sin nuevo descuento, rechazo de modificación y rechazo de consumo de múltiples materiales.
+6. Las reglas RECHAZAN fichas con varios reactivos, consumos por peso y escenarios generales. No usar en producción.
+7. La contraseña CALIDAD del navegador no constituye autorización segura en Firestore. Las correcciones autorizadas no están implementadas en esta versión.
+8. Antes de una versión de producción se requiere modelo de movimientos por reactivo/lote, migración y pruebas multiusuario.
