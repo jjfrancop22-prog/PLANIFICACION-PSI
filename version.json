@@ -1,8 +1,8 @@
 {
-  "version": "1.0.5.6.33.25.10.28.21.57",
-  "build": "V28.21.57",
+  "version": "1.0.5.6.33.25.10.28.21.58",
+  "build": "V28.21.58",
   "name": "PREVALIDACION-CIERRE-Y-CONSUMO",
   "date": "2026-10-15",
-  "notes": "Prevalidación remota de apertura y cierre, bloqueo de cierres con conflictos y prevención de consumos nuevos sin conexión. Conserva conciliación V48.",
+  "notes": "Primer consumo directo mediante transacción Firestore; bloqueo de consumos ya confirmados.",
   "validation": "Pruebas locales; requiere verificación real multiusuario antes de producción."
 }

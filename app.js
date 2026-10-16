@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.57';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.58';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -2684,36 +2684,105 @@ function sameReagentConsumptionInput(a,b){
   return !!a?.completed&&!!b?.completed&&sameCloudFunctionalPayload({items:normalize(a)},{items:normalize(b)});
 }
 // Los consumos confirmados son independientes del cierre horario de la actividad.
+// V28.21.58: primer consumo confirmado mediante una sola transacción Firestore.
+// No se autoriza corregir un consumo previamente confirmado desde esta ruta.
+const reagentCommitLocks=new Set();
 async function commitReagentConsumption(p,result){
   if(!result?.completed)return {ok:false,text:'Complete o desmarque los consumos antes de guardarlos.'};
+  if(reagentCommitLocks.has(p.id))return {ok:false,text:'Consumo en proceso de confirmación; espere.'};
   const previous=p.reagentResult;
-  if(previous?.inventoryCommittedAt&&sameReagentConsumptionInput(previous,result)){
-    p.reagentResult=previous;
-    return {ok:true,unchanged:true};
+  if(previous?.inventoryCommittedAt){
+    if(sameReagentConsumptionInput(previous,result)){p.reagentResult=previous;return {ok:true,unchanged:true};}
+    return {ok:false,text:'Consumo guardado y bloqueado. Para modificarlo, solicite autorización de Calidad. No se descontó inventario.'};
   }
-  if(previous?.inventoryCommittedAt)return {ok:false,text:'El consumo ya fue registrado y ahora contiene valores diferentes. Requiere conciliación del JEFE; no se modificó el inventario.'};
-  // No registrar nuevos descuentos mientras la conexión no permita verificarlos.
-  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine){
-    return {ok:false,text:'Firebase sin conexión confirmada: no se aplicó el consumo. Reintente cuando sincronice.'};
-  }
-  // Una corrección requiere reconciliar el saldo previo, no volver a descontar
-  // el consumo íntegro. Los valores finales son absolutos por envase.
-  const catalogs=await getAll('catalog');
-  for(const item of (result.items||[]).filter(x=>x.usedInActivity!==false&&!x.notUsed)){
-    const live=catalogs.flatMap(c=>c.reagentConfig||[]).find(r=>normalizeIdentityText(r.name||'')===normalizeIdentityText(item.name||'')&&normalizeIdentityText(r.lot||'')===normalizeIdentityText(item.lot||''));
-    if(!live)continue;
-    if(item.mode==='COUNT'){
-      const baseline=Number(live.stockQuantity||0);
-      if(Number(item.used)>baseline)return {ok:false,text:`Stock insuficiente de ${item.name}. Disponible: ${baseline}.`};
-      item.stockBefore=baseline;item.stockRemaining=Math.max(0,baseline-Number(item.used||0));
-    }
-  }
-  p.reagentResult={...result,inventoryCommittedAt:nowISO(),inventorySignature:JSON.stringify(result.items||[])};
-  p.updatedAt=nowISO();
-  await put('planning',p);await queue('UPDATE','planning',p);
-  await applyConfirmedReagentInventoryToCatalog(p);
-  await propagateLiveInventoryToOpenPlans();
-  return {ok:true};
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)
+    return {ok:false,text:'Sin conexión confirmada a Firebase: no se aplicó el consumo.'};
+  reagentCommitLocks.add(p.id);
+  try{
+    const sdk=firebaseBridge.mods,planRef=sdk.doc(firebaseBridge.db,'planning',p.id);
+    // Se obtiene la lista de catálogos desde el servidor, nunca de una caché local.
+    const catalogSnapshot=await sdk.getDocsFromServer(sdk.collection(firebaseBridge.db,'catalog'));
+    const catalogDocs=catalogSnapshot.docs.filter(d=>(d.data().reagentConfig||[]).length);
+    const used=(result.items||[]).filter(x=>x.usedInActivity!==false&&!x.notUsed);
+    const identity=x=>`${normalizeIdentityText(x.name||'')}|${normalizeIdentityText(x.lot||'')}`;
+    const usedMap=new Map(used.map(x=>[identity(x),x]));
+    let savedPlan=null,savedCatalogs=[];
+    await sdk.runTransaction(firebaseBridge.db,async tx=>{
+      const planSnap=await tx.get(planRef);
+      if(!planSnap.exists())throw Error('La actividad no existe en Firebase; espere la sincronización de apertura.');
+      const remote=planSnap.data();
+      if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw Error('Actividad finalizada: consumo bloqueado.');
+      if(remote.reagentResult?.inventoryCommittedAt){
+        if(sameReagentConsumptionInput(remote.reagentResult,result)){savedPlan=remote;savedCatalogs=[];return;}
+        throw Error('Existe un consumo confirmado distinto en Firebase. No se aplicó otro descuento.');
+      }
+      // Leer todos los documentos afectados antes de realizar la primera escritura.
+      const refs=catalogDocs.filter(d=>(d.data().reagentConfig||[]).some(r=>usedMap.has(identity(r)))).map(d=>sdk.doc(firebaseBridge.db,'catalog',d.id));
+      const snaps=[];for(const ref of refs)snaps.push(await tx.get(ref));
+      const liveByKey=new Map();
+      for(const snap of snaps){if(!snap.exists())continue;for(const r of snap.data().reagentConfig||[]){const k=identity(r);if(usedMap.has(k)&&!liveByKey.has(k))liveByKey.set(k,r);}}
+      for(const item of used){
+        const live=liveByKey.get(identity(item));
+        if(!live)throw Error(`No existe en catálogo el lote ${item.name} (${item.lot||'sin lote'}).`);
+        if(item.mode==='COUNT'){
+          const stock=Number(live.stockQuantity),qty=Number(item.used);
+          if(!Number.isFinite(stock)||!Number.isFinite(qty)||qty<=0||qty>stock)throw Error(`Stock insuficiente de ${item.name}. Disponible: ${stock}.`);
+          item.stockBefore=stock;item.stockRemaining=stock-qty;
+        }
+        if(item.mode==='WEIGHT'){
+          for(const c of item.containers||[]){
+            const env=(live.containers||[]).find(e=>e.id===c.containerId);
+            if(!env)throw Error(`Envase no encontrado para ${item.name}.`);
+            if(Math.abs(Number(env.initialWeight)-Number(c.initialWeight))>0.001)
+              throw Error(`El peso inicial de ${item.name} cambió en otra computadora. Actualice antes de guardar.`);
+          }
+        }
+      }
+      const stamp=nowISO(),receipt=`INV-${p.id}`;
+      const committed={...result,inventoryCommittedAt:stamp,inventorySignature:JSON.stringify(result.items||[]),inventoryReceiptId:receipt};
+      const nextPlan={...remote,reagentResult:committed,updatedAt:stamp};
+      // Vincular la operación del catálogo con la misma actividad en esta transacción.
+      tx.update(planRef,{reagentResult:committed,updatedAt:stamp});
+      const updated=[];
+      for(const snap of snaps){
+        if(!snap.exists())continue;
+        const data=snap.data();let changed=false;
+        const configs=(data.reagentConfig||[]).map(r=>{
+          const item=usedMap.get(identity(r));if(!item)return r;
+          const next={...r};
+          if(next.mode==='COUNT'&&item.mode==='COUNT'){
+            const old=Number(next.stockQuantity||0),qty=Number(item.used||0);
+            if(old<qty)throw Error(`Stock insuficiente de ${item.name} en catálogo ${snap.id}.`);
+            next.stockQuantity=old-qty;next.inventoryStatus=next.stockQuantity<=0?'AGOTADO':'ACTIVO';changed=true;
+          }else if(next.mode==='WEIGHT'&&item.mode==='WEIGHT'){
+            next.containers=(next.containers||[]).map(env=>{
+              const hit=(item.containers||[]).find(x=>x.containerId===env.id);
+              if(!hit)return env;
+              if(Math.abs(Number(env.initialWeight)-Number(hit.initialWeight))>0.001)throw Error(`Peso inicial modificado en ${item.name}.`);
+              changed=true;return {...env,initialWeight:Number(hit.finalWeight),status:hit.depleted?'AGOTADO':'ACTIVO'};
+            });
+            next.inventoryStatus=next.containers.some(e=>e.status!=='AGOTADO')?'ACTIVO':'AGOTADO';
+          }
+          return next;
+        });
+        if(changed){
+          const update={reagentConfig:configs,updatedAt:stamp,inventoryCommitPlanId:p.id,inventoryCommitReceiptId:receipt};
+          tx.update(snap.ref,update);updated.push({id:snap.id,...data,...update});
+        }
+      }
+      savedPlan=nextPlan;savedCatalogs=updated;
+    });
+    // La Promise de runTransaction confirma el commit remoto.
+    p.reagentResult=savedPlan.reagentResult;p.updatedAt=savedPlan.updatedAt;
+    await put('planning',p);
+    for(const c of savedCatalogs)await put('catalog',c);
+    reagentMasterProfiles=[];
+    // No encolar un segundo descuento de catálogo ni repetir la transacción.
+    return {ok:true,unchanged:savedCatalogs.length===0};
+  }catch(err){
+    console.error('Consumo Firebase no confirmado',err);
+    return {ok:false,text:'No se guardó el consumo: '+String(err.message||err)};
+  }finally{reagentCommitLocks.delete(p.id)}
 }
 
 // Protección de salida: no descartar accidentalmente registros técnicos sin guardar.

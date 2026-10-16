@@ -1,0 +1,4 @@
+PRUEBA CONTROLADA: desplegar firestore.rules ANTES del ERP.
+Primer consumo: transacción atómica de planning y catalog; evita descuentos duplicados.
+Correcciones: bloqueadas; la autorización de Calidad existente no se ha conectado a un ajuste transaccional seguro.
+No publicar en producción sin prueba multiusuario con lotes de prueba.
