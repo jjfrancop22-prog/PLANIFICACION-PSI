@@ -1,0 +1,1 @@
+V28.21.52 PRUEBA: Monitor visible junto a campana, indicador independiente de incidencias JEFE, incluye equipos sin contacto. Requiere reglas syncHealth de V28.21.51 y todos los clientes actualizados. No modifica operaciones. No notificaciones push. Los errores no transmitidos no pueden verse desde JEFE.
