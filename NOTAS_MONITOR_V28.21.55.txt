@@ -1,0 +1,1 @@
+V28.21.55: JEFE puede marcar como revisadas VISUALMENTE alertas RETENIDA_PERMISOS propias. No verifica servidor ni elimina, reenvía o altera el outbox. Revisión guardada solo en localStorage de este navegador; el conteo de pendientes reales permanece intacto. No se modifican reglas Firebase ni procesos operativos.\n
