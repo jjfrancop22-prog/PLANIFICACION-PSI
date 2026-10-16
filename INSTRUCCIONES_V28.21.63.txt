@@ -1,0 +1,10 @@
+V28.21.63 — RECUPERACIÓN CONTROLADA DE CONSUMO CERO HISTÓRICO
+
+Caso documentado: PLAN-1792153908017-8WRNY, Lizbeth, lote 4001.
+En Firestore reagentResult estaba confirmado con used=0, notUsed=true y sin inventoryReceiptId.
+
+CAMBIO: si el registro remoto fue confirmado sin recibo y todos sus materiales figuran como no utilizados con cantidad 0, la transacción permite un único registro positivo y descuenta stock desde el catálogo servidor. Una vez asignado inventoryReceiptId, las modificaciones vuelven a bloquearse.
+
+NO APTO PARA PRODUCCIÓN: firestore.rules NO comprueba matemáticamente cada cambio de reagentConfig ni que los items históricos sean realmente cero; una petición manipulada puede alterar inventario. Tampoco se ha probado en Firebase real. El test de regresión existente falla con ReferenceError: reagentCommitLocks is not defined.
+
+Para validar de forma segura use Firebase separado, catálogo y planificación ficticios. No publique estas reglas en el proyecto productivo.

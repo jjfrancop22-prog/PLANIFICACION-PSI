@@ -1,8 +1,8 @@
 {
-  "version": "1.0.5.6.33.25.10.28.21.62",
-  "build": "V28.21.62",
-  "name": "VALIDACION MULTIMATERIAL - SOLO PRUEBAS",
+  "version": "1.0.5.6.33.25.10.28.21.63",
+  "build": "V28.21.63",
+  "name": "RECUPERACION CERO CONSUMO - SOLO PRUEBAS",
   "date": "2026-10-15",
-  "notes": "Primer consumo directo mediante transacción Firestore; bloqueo de consumos ya confirmados.",
-  "validation": "NO APTO PARA PRODUCCION: las reglas no comprueban delta por elemento de reagentConfig"
+  "notes": "Permite una única recuperación de consumo cero histórico sin recibo; exige stock servidor y transacción.",
+  "validation": "NO APTO PARA PRODUCCION: reglas no verifican delta por elemento de reagentConfig ni cero histórico de manera segura"
 }

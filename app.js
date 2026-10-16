@@ -2725,7 +2725,14 @@ async function commitReagentConsumption(p,result){
       if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw Error('Actividad finalizada: consumo bloqueado.');
       if(remote.reagentResult?.inventoryCommittedAt){
         if(sameReagentConsumptionInput(remote.reagentResult,result)){savedPlan=remote;savedCatalogs=[];return;}
-        throw Error('Consumo confirmado en Firebase y bloqueado. Para modificarlo, solicite autorización de Calidad. No se descontó inventario.');
+        // V28.21.63: recuperación ÚNICA de un registro histórico de cero consumo.
+        // No permite modificar consumos positivos ni confirmaciones con recibo.
+        // La transacción descuenta el stock actual del servidor una sola vez.
+        const previous=remote.reagentResult;
+        const zeroOnly=previous.completed===true && Array.isArray(previous.items) && previous.items.length>0
+          && previous.items.every(x=>x.notUsed===true && x.usedInActivity===false && Number(x.used)===0)
+          && !previous.inventoryReceiptId;
+        if(!zeroOnly)throw Error('Consumo confirmado en Firebase y bloqueado. Para modificarlo, solicite autorización de Calidad. No se descontó inventario.');
       }
       // Leer todos los documentos afectados antes de realizar la primera escritura.
       const refs=catalogDocs.filter(d=>(d.data().reagentConfig||[]).some(r=>usedMap.has(identity(r)))).map(d=>sdk.doc(firebaseBridge.db,'catalog',d.id));

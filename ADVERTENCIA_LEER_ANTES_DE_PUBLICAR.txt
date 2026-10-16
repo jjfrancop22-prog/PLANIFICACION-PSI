@@ -1,9 +1,1 @@
-V28.21.62 - SOLO FIREBASE DE PRUEBAS
-
-NO publique firestore.rules en el Firebase real. Las reglas permiten modificar el arreglo reagentConfig y NO verifican cada delta.
-
-Mejoras: validacion de todos los materiales, modo COUNT/WEIGHT, envases repetidos, peso final menor al inicial y no inferior a tara, rechazo si un catalogo afectado no descuenta.
-
-No incluye arquitectura de stock individual seguro. No se ha probado contra Firebase real ni emulador.
-
-Mantenga reglas actuales de produccion.
+V28.21.63: PRUEBA NO SEGURA EN PRODUCCIÓN. La recuperación del consumo cero histórico sin recibo se permite una vez, pero las reglas no verifican los deltas de reagentConfig ni los items históricos. No habilitar a todos los analistas. Mantener respaldo de datos y reglas.

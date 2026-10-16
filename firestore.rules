@@ -13,7 +13,7 @@ service cloud.firestore {
       allow read: if signedIn() && (request.auth.uid == userId || isBoss());
       allow create, update, delete: if isBoss();
     }
-    // V28.21.61 - SOLO PROYECTO FIREBASE DE PRUEBAS.
+    // V28.21.63 - SOLO PROYECTO FIREBASE DE PRUEBAS.
     // Permite varios materiales y modalidades. NO valida cada delta del arreglo
     // reagentConfig; no utilizar con inventario real.
     function testInventoryCommit() {
@@ -24,7 +24,16 @@ service cloud.firestore {
       return pid is string && pid.size() > 0 && pid.size() < 150
         && receipt == 'INV-' + pid
         && before.get('completionCommittedAt', null) == null
-        && before.get('reagentResult', {}).get('inventoryCommittedAt', null) == null
+        && (
+          before.get('reagentResult', {}).get('inventoryCommittedAt', null) == null
+          || (
+            before.get('reagentResult', {}).get('completed', false) == true
+            && before.get('reagentResult', {}).get('inventoryReceiptId', '') == ''
+            && before.get('reagentResult', {}).get('items', []) is list
+            // Caso histórico sin recibo: comprobación del consumo cero
+            // completa en el cliente. ESTO NO ES SEGURIDAD DE PRODUCCIÓN.
+          )
+        )
         && after.get('reagentResult', {}).get('inventoryReceiptId', '') == receipt
         && after.get('reagentResult', {}).get('inventoryCommittedAt', null) is string
         && after.get('reagentResult', {}).get('completed', false) == true
