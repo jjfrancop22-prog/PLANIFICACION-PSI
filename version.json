@@ -1,20 +1,9 @@
 {
-  "version": "1.0.5.6.33.25.10.28.21.45",
-  "build": "V28.21.45",
-  "name": "CIERRE-LOCAL-PROTEGIDO-CACHE-UNIFICADA",
-  "notes": "Conserva el cierre local si Firebase rechaza una revisión, sin duplicar inventario; unifica versiones PWA y JavaScript.",
-  "features": [
-    "Planificador multi-PC sin planningLocks",
-    "Máximo diario de 8 h o dailyHours",
-    "Bloqueo de cruces y duplicados",
-    "Validación Firestore antes y después del commit",
-    "Edición universal de Cartas de Control y Westgard conservados"
-  ],
+  "version": "1.0.5.6.33.25.10.28.21.50",
+  "build": "V28.21.50",
+  "name": "BASE48_FLUJO_ANALISTAS_SPARK",
   "date": "2026-10-15",
-  "changes": [
-    "No consulta conflictos redundantes cuando la pestaña está oculta",
-    "Con sesión inactiva, reduce verificaciones de conflictos a cada 15 minutos",
-    "Con sesión activa, conserva verificación cada 90 segundos",
-    "Conserva listeners, cierre multi-PC y protecciones de inventario"
-  ]
+  "base": "V28.21.48 aportada por el usuario",
+  "notes": "Inicio confirmado; muestras durables; cada analista confirma su consumo mediante transacciones acotadas y constancias por fila, sin sesión JEFE ni Cloud Functions. Cierre y avisos atómicos. Requiere publicar firestore.rules incluido. Conserva conciliación V48 y los conflictos existentes.",
+  "validation": "23 regresión + 24 prevención + 20 recuperación locales; 27 comprobaciones con Firestore Emulator y dos cuentas ANALISTA, incluido el flujo de funciones reales. Sin prueba visual ni ejecución en producción."
 }

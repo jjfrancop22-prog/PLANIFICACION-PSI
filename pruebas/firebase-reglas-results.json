@@ -1,0 +1,33 @@
+{
+  "passed": 27,
+  "environment": "Firestore Emulator; dos usuarios ANALISTA independientes, sin sesión JEFE para consumir; sin producción",
+  "tests": [
+    "Servidor rechaza edición administrativa de catálogo por ANALISTA",
+    "Analista no puede reasignar su actividad a otra persona",
+    "Servidor rechaza cambios de otro analista",
+    "Un cliente anterior no puede inventar una confirmación de inventario",
+    "Servidor acepta solicitudes pendientes del analista asignado",
+    "Analista no puede marcar APPLIED sin constancia atómica",
+    "JEFE tampoco puede confirmar schema 2 sin constancia atómica",
+    "Servidor rechaza cierre con inventario pendiente y sin avisos",
+    "Dos usuarios ANALISTA confirman 4 + 3 sin JEFE y mantienen saldo 92 en tres fichas",
+    "Repetir el mismo movimiento en el emulador no descuenta otra vez",
+    "Incluso con saldo confirmado, cierre sin avisos se rechaza",
+    "Cierre y dos avisos se aceptan juntos con el inventario confirmado",
+    "Una copia abierta antigua no puede reabrir el cierre",
+    "Una versión vieja de catálogo sin revisión no puede sobrescribir el inventario protegido",
+    "Analista no puede sobrescribir un aviso ya confirmado",
+    "Un segundo analista no puede consumir para la actividad del primero",
+    "El permiso de consumo no permite editar nombres ni lotes",
+    "El permiso de consumo no permite aumentar stock ni inventar saldos",
+    "El peso final debe coincidir con la medición solicitada",
+    "Diez reactivos con pesos en dos envases y tres fichas se confirman por ANALISTA dentro del límite de reglas",
+    "La constancia de consumo es inmutable después de confirmar",
+    "Funciones reales de iniciar confirman dos actividades con usuarios y almacenes locales distintos",
+    "Formulario real de muestras persiste total y parámetros de cada analista en Firebase",
+    "El proceso real de consumo confirma ambos analistas sin JEFE y recupera una respuesta perdida sin doble descuento",
+    "El cierre local permanece pendiente hasta la confirmación del servidor",
+    "Funciones reales completan ambos cierres con sus avisos y conservan la hora solicitada",
+    "Repetir finalizar mediante la aplicación no cambia el saldo compartido"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "passed": 24,
+  "environment": "Node.js; IndexedDB serial y Firestore optimista simulados; sin conexión de producción",
+  "tests": [
+    "Dos operaciones concurrentes de 4 y 3 conservan 99 − 4 − 3 = 92 en las tres fichas",
+    "El servidor simulado reintenta una colisión y conserva una constancia por operación",
+    "Dos reintentos del mismo consumo no descuentan ni crean constancias adicionales",
+    "Desmarcar un consumo confirmado queda bloqueado conservando el registro original",
+    "Agregar un reactivo crea solo su movimiento y conserva el consumo anterior",
+    "Una edición de catálogo antigua conserva el saldo compartido y permite cambiar metadatos",
+    "Una respuesta remota incompleta no elimina evidencia positiva local",
+    "Saldo insuficiente aborta todas las escrituras y conserva la solicitud",
+    "Consumo por peso actualiza el envase al peso final registrado",
+    "Un peso inicial modificado por otra operación exige revisión y conserva la medición",
+    "Sin conexión el cierre se guarda pendiente y ninguna computadora lo considera confirmado",
+    "Una cola coalescida publica primero el consumo sin cerrar ni notificar prematuramente",
+    "Sin conexión el consumo se conserva pendiente sin modificar el saldo",
+    "Perder la respuesta tras el commit conserva el movimiento aplicado una sola vez",
+    "El analista recupera una respuesta perdida mediante su constancia sin nuevo descuento",
+    "Tras confirmar inventario el cierre conserva la hora original solicitada",
+    "Cierre y dos avisos quedan confirmados en la misma transacción antes de mostrar REALIZADO",
+    "Reintentar el cierre con respuesta perdida no duplica avisos ni consumo",
+    "Un snapshot de cierre anterior al snapshot de avisos recupera los existentes sin generar nuevas escrituras",
+    "Una copia parcial no puede eliminar un lote que ya tiene movimientos confirmados",
+    "Una cola heredada de otro usuario conserva evidencia sin reintentar escrituras ajenas",
+    "Una interrupción entre filas deja un punto de recuperación y no confirma el consumo completo",
+    "Al reabrir se aplica solo la fila restante: primera 99 − 4 = 95 y segunda 99 − 3 = 96",
+    "Una solicitud de dos filas conserva exactamente dos constancias sin duplicarlas"
+  ]
+}

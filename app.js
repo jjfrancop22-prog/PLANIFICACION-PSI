@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.48';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.50';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -35,11 +35,12 @@ function clearStore(name){return new Promise((resolve,reject)=>{const r=store(na
 async function actor(){return currentSessionUser?.name||(await getOne('config','defaultUser'))?.value||'USUARIO LOCAL'}
 async function audit(action,module,recordId,detail){await put('audit',{id:uid('AUD'),createdAt:nowISO(),action,module,recordId,detail,user:await actor()})}
 // V28.21.46: la cola se modifica en una transacción local; cada revisión tiene identidad propia.
-async function queue(type,entity,payload,{retryConflict=false}={}){
+async function queue(type,entity,payload,{retryConflict=false,localPlanning=null}={}){
   const recordId=payload?.id||null,stamp=nowISO();
   const frozen=JSON.parse(JSON.stringify(payload));
   await new Promise((resolve,reject)=>{
-    const tx=db.transaction('outbox','readwrite'),os=tx.objectStore('outbox');
+    const tx=db.transaction(localPlanning?['outbox','planning']:'outbox','readwrite'),os=tx.objectStore('outbox');
+    if(localPlanning)tx.objectStore('planning').put(JSON.parse(JSON.stringify(localPlanning)));
     tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
     const request=os.getAll();
     request.onsuccess=()=>{
@@ -125,7 +126,7 @@ function cloudReadReference(storeName){
     : base;
 }
 
-function cloudPayloadFor(storeName,payload){return sanitizeCloudObject(payload||{})}
+function cloudPayloadFor(storeName,payload){const copy=sanitizeCloudObject(payload||{});if(storeName==='planning'){delete copy.pendingClosure;delete copy.technicalDraft;}return copy;}
 // 6.33.25.2: ACK funcional para Cartas. Firestore puede devolver una marca temporal
 // distinta aunque el contenido técnico ya esté confirmado. Esas marcas no deben
 // mantener un falso PENDIENTE ni provocar SINCRONIZADO -> PARCIAL sin cambios reales.
@@ -181,6 +182,7 @@ const firebaseBridge={
 // antiguos cuyo payload no conservó la palabra REALIZADO.
 const confirmedCloudClosureIds=new Set();
 function closureNeedsCloudConfirmation(plan,outbox=[]){
+  if(plan?.pendingClosure)return true;
   if(!plan||(plan.status!=='REALIZADO'&&!plan.completionCommittedAt))return false;
   const outstanding=outbox.some(x=>x.entity==='planning'&&x.recordId===plan.id&&
     ['PENDIENTE','ERROR','CONFLICTO_LOCAL'].includes(x.status));
@@ -209,6 +211,7 @@ function setSyncState(state,detail=''){
 // Solo se confirma una operación cuando su evidencia sustantiva está presente
 // en Firebase. No repite movimientos ni modifica inventario.
 function planningOperationCoveredByCloud(payload,remote){
+  if(sameStockRequest(payload?.reagentResult,remote?.reagentResult)&&stockRequestApplied(remote?.reagentResult))payload={...payload,reagentResult:remote.reagentResult};
   if(!payload||!remote||planStage(remote.status)<planStage(payload.status))return false;
   if(payload.status==='REALIZADO'&&(!remote.completionCommittedAt||payload.actualFinishedAt!==remote.actualFinishedAt))return false;
   if(['id','date','analystId'].some(k=>payload[k]!==undefined && JSON.stringify(payload[k])!==JSON.stringify(remote[k])))return false;
@@ -613,6 +616,7 @@ async function initialControlledMigration(){
     await audit('MIGRACION_INICIAL_FIREBASE','SISTEMA','FIREBASE',`${uploaded} registros subidos a Firestore`);
 
     startRealtimeSync();
+    setTimeout(()=>settleSharedStockRequests().catch(console.warn),500);
     await refreshMigrationUI();
     setSyncState('SINCRONIZADO',`${uploaded} registros migrados`);
     toast(`Migración completada · ${uploaded} registros`);
@@ -675,6 +679,10 @@ async function flushOutbox(showToast=true){
           await saveOutboxAttempt(item);
           continue;
         }
+        if(currentSessionUser?.role==='ANALISTA'&&item.entity==='planning'&&item.payload?.analystId!==currentSessionUser.analystId){
+          item.status='BLOQUEADO_PERMISOS';item.lastError='Operación de otro analista retenida; requiere revisión del JEFE.';
+          item.blockedAt=item.blockedAt||nowISO();await saveOutboxAttempt(item);continue;
+        }
         if(!FIREBASE_SYNC_STORES.includes(item.entity)){
           item.status='OMITIDO';
           item.lastError=`Entidad no sincronizable: ${item.entity}`;
@@ -712,9 +720,15 @@ async function flushOutbox(showToast=true){
             const {runTransaction}=firebaseBridge.mods;
             let remoteWinner=null;
             let historicalCloseConflict=false;
+            let atomicEvents=[],confirmedPlanning=null,closureDeferred=false;
             await runTransaction(firebaseBridge.db,async tx=>{
+              remoteWinner=null;historicalCloseConflict=false;atomicEvents=[];confirmedPlanning=null;closureDeferred=false;
               const currentSnap=await tx.get(ref);
               const current=currentSnap.exists()?currentSnap.data():null;
+              if(sameStockRequest(current?.reagentResult,payload.reagentResult)){
+                if(stockRequestApplied(current.reagentResult))payload.reagentResult=current.reagentResult;
+                else if(current.reagentResult.stockRequest.state==='PENDING')payload.reagentResult=current.reagentResult;
+              }
               const closed=current?.status==='REALIZADO'||!!current?.completionCommittedAt;
               const incomingClosed=payload.status==='REALIZADO'||!!payload.completionCommittedAt;
               const remoteNewer=current && String(current.updatedAt||'')>String(payload.updatedAt||'');
@@ -760,6 +774,7 @@ async function flushOutbox(showToast=true){
               }
               const technicalConflict=!!current && technicalKeys.some(key=>{
                 const old=current[key],next=payload[key];
+                if(key==='reagentResult'&&validNewStockRequest(old,next))return false;
                 if(!hasValue(old))return false;
                 if(!hasValue(next))return true;
                 // Resultados confirmados son inmutables en sincronización general.
@@ -783,22 +798,57 @@ async function flushOutbox(showToast=true){
               // NO existen diferencias técnicas protegidas. Nunca forzar un cierre
               // sobre un registro ya cerrado con otra operación de finalización.
               const competingClosure=closed&&incomingClosed&&!!current?.completionOperationId&&
-                current.completionOperationId!==payload.completionOperationId;
+                (current.completionOperationId!==payload.completionOperationId||current.actualFinishedAt!==payload.actualFinishedAt);
               const incomingProgress=isProgressivePlanUpdate(current,payload);
-              const staleNonClosure=remoteNewer&&!incomingClosed&&!incomingProgress;
+              const stockAckAdvance=sameStockRequest(current?.reagentResult,payload.reagentResult)&&((current?.reagentResult?.stockRequest?.appliedRows||[]).length>0);
+              const staleNonClosure=remoteNewer&&!incomingClosed&&!incomingProgress&&!stockAckAdvance;
               // Nunca aceptar un retroceso PROGRAMADO <- EN PROCESO.
               const backwards=current && planStage(payload.status)<planStage(current.status) && planStage(payload.status)>=0;
               // V28.21.34: ninguna copia PROGRAMADO puede revertir una apertura confirmada.
               const staleProgrammedAfterStart=!!current?.actualStartedAt && current.status==='EN PROCESO' && payload.status==='PROGRAMADO';
               if((current?.status==='CANCELADO'&&incomingClosed)||(closed&&!incomingClosed)||backwards||staleNonClosure||staleProgrammedAfterStart||technicalConflict||competingClosure){remoteWinner=current;return;}
+              if(incomingClosed&&stockRequestPending(payload.reagentResult)){
+                if(!current||current.status!=='EN PROCESO')throw Error('La solicitud de cierre requiere una actividad iniciada en servidor.');
+                const phase={...current,...payload,status:'EN PROCESO',updatedAt:cloudStamp,_cloudUpdatedAt:cloudStamp};
+                for(const k of ['actualFinishedAt','completionCommittedAt','completionCommittedBy','completionOperationId','completionClaim','completionClaimedAt'])delete phase[k];
+                // Si el cierre coalesció con el registro técnico, publicar primero
+                // la solicitud de consumo. El cierre durable queda pendiente.
+                if(!sameStockRequest(current.reagentResult,phase.reagentResult))tx.set(ref,phase,{merge:true});
+                confirmedPlanning=phase;closureDeferred=true;return;
+              }
               // Una transición a REALIZADO conserva los campos más recientes
               // de Firebase que no pertenecen al cierre, evitando reversiones
               // de muestras, inicio y metadatos al sincronizar varias PC.
-              const finalPayload=(current && incomingProgress)
+              const finalPayload=(current && (incomingProgress||stockAckAdvance))
                 ? {...current,...payload,actualStartedAt:current.actualStartedAt||payload.actualStartedAt,_cloudUpdatedAt:cloudStamp}
                 : {...payload,_cloudUpdatedAt:cloudStamp};
-              tx.set(ref,finalPayload,{merge:true});
+              if(incomingClosed){
+                finalPayload.completionProtocol=2;
+                if(!payload.actualFinishedAt||!payload.completionCommittedAt)throw Error('El cierre requiere hora original y evidencia completa.');
+                const events=makeAtomicClosureEvents(finalPayload),observed=[];
+                for(const ev of events){const evRef=doc(firebaseBridge.db,'planComments',ev.id),snap=await tx.get(evRef);
+                  if(snap.exists()){
+                    const saved=snap.data();
+                    if(saved.planId!==id||(saved.lifecycleStage==='FINALIZACION'&&saved.closureEvidence?.finishedAt&&saved.closureEvidence.finishedAt!==payload.actualFinishedAt))throw Error('Ya existe otra evidencia de cierre. Revisión del JEFE.');
+                    observed.push({ref:evRef,record:saved,exists:true});
+                  }else observed.push({ref:evRef,record:ev,exists:false});
+                }
+                for(const ev of observed){if(!ev.exists)tx.set(ev.ref,ev.record);}
+                atomicEvents=observed.map(x=>({...x.record,committedWithPlanning:true}));
+              }
+              tx.set(ref,finalPayload,{merge:true});confirmedPlanning=finalPayload;
             });
+            if(closureDeferred){
+              const local=await getOne('planning',id);
+              if(local?.pendingClosure)await put('planning',{...confirmedPlanning,pendingClosure:local.pendingClosure});
+              item.status='PENDIENTE';item.lastError='Consumo registrado; esperando confirmación automática de inventario antes del cierre.';
+              await saveOutboxAttempt(item);outboxRetryNotBefore=Math.max(outboxRetryNotBefore,Date.now()+30000);
+              continue;
+            }
+            for(const ev of atomicEvents)await put('planComments',ev);
+            if(confirmedPlanning?.status==='REALIZADO'){
+              await put('planning',confirmedPlanning);confirmedCloudClosureIds.add(id);
+            }
             if(remoteWinner){
               // V28.21.46: NO reemplazar un cierre local pendiente por una copia
               // abierta de Firebase. La evidencia del analista permanece intacta
@@ -810,7 +860,9 @@ async function flushOutbox(showToast=true){
                 !(remoteWinner.status==='REALIZADO'||!!remoteWinner.completionCommittedAt);
               const newerPending=(await getAll('outbox')).some(x=>x.entity==='planning'&&x.recordId===id&&
                 ['PENDIENTE','ERROR'].includes(x.status)&&(x.id!==item.id||x.revision!==item.revision));
-              if(!localClosurePending&&!newerPending)await put('planning',canonical);
+              const keepTechnical=protectLocalTechnicalEvidence(existingLocal,canonical);
+              if(keepTechnical)await put('config',{key:'remoteEvidence:'+id,value:{at:nowISO(),remote:canonical}});
+              if(!localClosurePending&&!newerPending&&!keepTechnical&&!existingLocal?.pendingClosure)await put('planning',canonical);
               // Si la operación ya está reflejada en Firebase, no es conflicto.
               if(planningOperationCoveredByCloud(payload,remoteWinner)){
                 if(payload.status==='REALIZADO'&&remoteWinner.completionCommittedAt)await ensureConfirmedClosureAlerts(remoteWinner);
@@ -828,6 +880,24 @@ async function flushOutbox(showToast=true){
               await saveOutboxAttempt(item);
               continue;
             }
+          }else if(item.entity==='planComments'&&/^AUTO-(FINAL-|TECNICA-FINAL-)/.test(id)){
+            let confirmed;
+            await firebaseBridge.mods.runTransaction(firebaseBridge.db,async tx=>{
+              const snap=await tx.get(ref);
+              if(snap.exists()){
+                confirmed=snap.data();
+                if(confirmed.planId!==payload.planId)throw Error('El aviso existente corresponde a otra actividad. Revisión del JEFE.');
+              }else{confirmed={...payload,_cloudUpdatedAt:cloudStamp};tx.set(ref,confirmed);}
+            });
+            await put('planComments',confirmed);
+          }else if(item.entity==='catalog'){
+            if(currentSessionUser?.role!=='JEFE')throw Error('El catálogo compartido requiere la cuenta del JEFE.');
+            let confirmed;
+            await firebaseBridge.mods.runTransaction(firebaseBridge.db,async tx=>{
+              const snap=await tx.get(ref);confirmed=mergeCatalogLedgerSafe(snap.exists()?snap.data():null,{...payload,_cloudUpdatedAt:cloudStamp});
+              tx.set(ref,confirmed,{merge:true});
+            });
+            await put('catalog',confirmed);
           }else{
             await setDoc(ref,{...payload,_cloudUpdatedAt:cloudStamp},{merge:true});
           }
@@ -856,7 +926,7 @@ async function flushOutbox(showToast=true){
         // Algunos Chrome/PWA pueden perder la respuesta de confirmación aunque
         // Firestore sí haya aplicado la escritura. Antes de pintar ERROR, leer
         // el documento y comprobar el resultado real para evitar falsos rojos.
-        let confirmedDespiteClientError=false;
+        let confirmedDespiteClientError=false,verifiedCloud=null;
         try{
           const payload=cloudPayloadFor(item.entity,item.payload||{});
           const id=payload.id||item.recordId||item.id;
@@ -866,14 +936,23 @@ async function flushOutbox(showToast=true){
             confirmedDespiteClientError=!check.exists();
           }else if(check.exists()){
             const cloud=check.data()||{};
-            confirmedDespiteClientError=sameCloudFunctionalPayload(payload,cloud);
+            confirmedDespiteClientError=sameCloudFunctionalPayload(payload,cloud)||(item.entity==='planning'&&planningOperationCoveredByCloud(payload,cloud));
+            if(confirmedDespiteClientError)verifiedCloud=cloud;
           }
         }catch(verifyErr){
           console.warn('No se pudo verificar el cambio tras error del cliente',verifyErr);
         }
         item.attempts=Number(item.attempts||0)+1;
         if(confirmedDespiteClientError){
-          if(item.entity==='planning'&&item.payload?.status==='REALIZADO')await ensureConfirmedClosureAlerts(item.payload);
+          if(item.entity==='planning'&&item.payload?.status==='REALIZADO'){
+            for(const ev of makeAtomicClosureEvents(item.payload)){
+              const snap=await firebaseBridge.mods.getDocFromServer(doc(firebaseBridge.db,'planComments',ev.id));
+              if(!snap.exists())throw Error('El cierre está en servidor, pero falta confirmar uno de sus avisos.');
+              await put('planComments',{...snap.data(),committedWithPlanning:true});
+            }
+            await ensureConfirmedClosureAlerts(verifiedCloud||item.payload);
+            if(verifiedCloud){await put('planning',{...verifiedCloud,id:item.recordId||item.payload.id});confirmedCloudClosureIds.add(item.recordId||item.payload.id);}
+          }
           item.status='SINCRONIZADO';
           item.syncedAt=nowISO();
           item.lastError=null;
@@ -914,6 +993,7 @@ async function flushOutbox(showToast=true){
     return true;
   }finally{
     firebaseBridge.busy=false;
+    if(currentSessionUser?.role==='JEFE'||currentSessionUser?.role==='ANALISTA')setTimeout(()=>settleSharedStockRequests().catch(console.warn),100);
     await refreshSyncUI();
     // 10.25: una confirmación de Outbox NO debe desmontar/reconstruir Cartas de Control.
     // Firestore/IndexedDB ya contienen el dato; la vista se actualiza sólo por una
@@ -958,7 +1038,7 @@ async function applyCloudRecord(storeName,id,data){
       let acknowledged=false;
       for(const item of openItems){
         const payload=cloudPayloadFor(storeName,item.payload||{});
-        if(same(payload,clean)){
+        if(same(payload,clean)||(storeName==='planning'&&sameStockRequest(payload.reagentResult,clean.reagentResult)&&stockRequestApplied(clean.reagentResult)&&planningOperationCoveredByCloud(payload,clean))){
           if(storeName==='planning'&&clean.status==='REALIZADO'&&clean.completionCommittedAt)await ensureConfirmedClosureAlerts(clean);
           item.status='SINCRONIZADO';item.syncedAt=nowISO();item.lastError=null;
           item.attempts=Number(item.attempts||0);acknowledged=(await saveOutboxAttempt(item))||acknowledged;
@@ -969,6 +1049,8 @@ async function applyCloudRecord(storeName,id,data){
       if(acknowledged){firebaseBridge.lastError=null;firebaseBridge.lastSyncAt=nowISO();}
     }
   }
+  if(storeName==='planning'&&local&&protectLocalTechnicalEvidence(local,clean)){await put('config',{key:'remoteEvidence:'+clean.id,value:{at:nowISO(),remote:clean}});return;}
+  if(storeName==='planning'&&local?.pendingClosure&&clean.status!=='REALIZADO')clean.pendingClosure=local.pendingClosure;
   if(storeName==='planning' && local && planStage(local.status)>planStage(clean.status) && planStage(clean.status)>=0)return;
   // Nunca reabrir un cierre confirmado localmente por un snapshot antiguo.
   // El servidor queda protegido por transacciones y reglas de Firestore.
@@ -989,6 +1071,7 @@ async function applyCloudRecord(storeName,id,data){
     return;
   }
   if(shouldAcceptCloud(local,clean))await put(storeName,clean);
+  if(storeName==='planning'&&stockRequestPending(clean.reagentResult))setTimeout(()=>settleSharedStockRequests().catch(console.warn),300);
 }
 async function pullFirebaseData(showToast=true){
   if(firebaseBridge.configured&&firebaseBridge.authReady&&!firebaseBridge.authUser){
@@ -2347,7 +2430,8 @@ async function toggleCommunicationClosed(planId){
 }
 
 async function changeAnalystPlanStatus(planId,status){
-  const p=await getOne('planning',planId);if(!p)return;p.status=status;p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p);await audit('ESTADO_ANALISTA','MI JORNADA',p.code,`${p.analystName} → ${status}`);toast(`Estado: ${status}`);await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
+  if(status==='REALIZADO')return finishMyActivity(planId);
+  const p=await getOne('planning',planId);if(!p)return;p.status=status;p.updatedAt=nowISO();await persistPlanningChange(p);await audit('ESTADO_ANALISTA','MI JORNADA',p.code,`${p.analystName} → ${status}`);toast(`Estado: ${status}`);await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();
 }
 async function renderMyDayAnalysts(){if(!$('#myDayAnalyst'))return;const list=(await getAll('analysts')).filter(a=>a.status==='ACTIVO'&&isOperationalAnalyst(a)).sort((a,b)=>a.name.localeCompare(b.name,'es'));const cur=$('#myDayAnalyst').value;$('#myDayAnalyst').innerHTML='<option value="">Seleccione analista...</option>'+list.map(a=>`<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');if(list.some(a=>a.id===cur))$('#myDayAnalyst').value=cur}
 
@@ -2397,7 +2481,9 @@ async function startMyActivity(planId){
     delete result._cloudUpdatedAt;delete result._erpEntity;
     // Evitar que una operación PROGRAMADO anterior se reproduzca sobre la apertura.
     for(const op of (await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===planId&&(x.status==='PENDIENTE'||x.status==='ERROR')&&x.payload?.status==='PROGRAMADO')){
-      op.status='CONFLICTO_LOCAL';op.lastError='Revisión programada anterior a apertura confirmada en Firebase';op.blockedAt=nowISO();await put('outbox',op);
+      if(planningOperationCoveredByCloud(op.payload,result)){op.status='SINCRONIZADO';op.syncedAt=nowISO();op.lastError=null;}
+      else{op.status='CONFLICTO_LOCAL';op.lastError='La revisión programada difiere de la apertura confirmada; se conserva para revisión.';op.blockedAt=nowISO();}
+      await saveOutboxAttempt(op);
     }
     await put('planning',result);
     try{await createActivityLifecycleAlert(result,'INGRESO')}catch(alertErr){console.warn('Apertura confirmada, alerta pendiente',alertErr)}
@@ -2512,7 +2598,7 @@ async function saveCalibrationDraft(){
   const p=await getOne('planning',$('#finishActivityPlanId').value);if(!p||!planRequiresCalibration(p))return;
   const c=collectCalibrationResult(p,false);if(!c.ok)return toast(c.text);
   p.calibrationResult=c.result;p.updatedAt=nowISO();
-  await put('planning',p);await queue('UPDATE','planning',p);
+  await persistPlanningChange(p);
   await audit('GUARDAR_CURVA_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó avance de curva de ${p.catalogName}`);
   resetTechnicalSnapshot();toast('Lecturas guardadas sin finalizar · sin generar notificación');
 }
@@ -2546,9 +2632,9 @@ async function latestConfirmedContainerRecord(reagent,container,excludePlanId=nu
   return best;
 }
 async function resolveContainerCurrentWeight(plan,reagent,container){
-  const latest=await latestConfirmedContainerRecord(reagent,container,plan.id);
-  if(latest){const f=Number(latest.container.finalWeight);if(Number.isFinite(f)){const dep=latest.container.depleted===true||f<=Number(latest.container.tareWeight)+0.000001;return dep?{weight:null,source:'AGOTADO',depleted:true}:{weight:f,source:'HISTORICO',depleted:false}}}
-  const configured=Number(container.initialWeight);return Number.isFinite(configured)?{weight:configured,source:'CATALOGO',depleted:false}:null;
+  const configured=Number(container.initialWeight);
+  if(container.status==='AGOTADO')return {weight:null,source:'CATALOGO_COMPARTIDO',depleted:true};
+  return Number.isFinite(configured)?{weight:configured,source:'CATALOGO_COMPARTIDO',depleted:false}:null;
 }
 function reagentCycleKey(r){
   return `${normalizeIdentityText(r?.name||'')}|${normalizeIdentityText(r?.lot||'')}|${normalizeIdentityText(r?.unit||'')}`;
@@ -2560,7 +2646,6 @@ async function resolvePreviousReagentWeight(plan,reagent){
 }
 async function renderFinishReagents(p){
   // Antes de mostrar cantidades, reconstruir el saldo global confirmado para evitar stock obsoleto por caché/PC/rol.
-  await reconcileInventoryFromConfirmedHistory();
   const block=$('#finishReagentBlock');if(!block)return;
   if(!planHasReagents(p)){block.classList.add('hidden');$('#finishReagentRows').innerHTML='';return}
   block.classList.remove('hidden');
@@ -2597,7 +2682,7 @@ async function renderFinishReagents(p){
     }else{
       const latest=await latestConfirmedReagentRecord(r,p.id);
       const hasOwnDraft=old.usedInActivity===true||Number(old.used)>0;
-      const currentStock=latest && (!r.stockAdjustedAt || latest.stamp>Date.parse(r.stockAdjustedAt)) && Number.isFinite(Number(latest?.item?.stockRemaining))?Number(latest.item.stockRemaining):Number(r.stockQuantity||0);
+      const currentStock=Number(r.stockQuantity||0);
       const stock=hasOwnDraft&&Number.isFinite(Number(old.stockBefore))?Number(old.stockBefore):currentStock;
       if(stock<=0&&!hasOwnDraft)continue;
       const checked=old.usedInActivity===true||Number(old.used)>0;
@@ -2610,6 +2695,15 @@ async function renderFinishReagents(p){
   $$('[data-env-new-initial]').forEach(el=>el.oninput=()=>{const x=$(`[data-env-initial="${el.dataset.envNewInitial}"]`);if(x)x.value=el.value;updateReagentCalculations(p)});
   $$('[data-correct-env-initial]').forEach(btn=>btn.onclick=()=>{const input=$(`[data-env-initial="${btn.dataset.correctEnvInitial}"]`);if(!input)return;if(input.readOnly){input.readOnly=false;input.dataset.envSource='CORREGIDO_MANUAL';input.classList.add('manual-correction');btn.textContent='Aplicar';input.focus();input.select()}else{input.readOnly=true;btn.textContent='Corregir';updateReagentCalculations(p)}});
   $$('[data-env-final], [data-reag-count]').forEach(el=>el.addEventListener('input',()=>updateReagentCalculations(p)));
+  for(const row of p.reagentResult?.items||[]){
+    if(row.usedInActivity!==true||row.notUsed||!(Number(row.used)>0))continue;
+    const ch=$(`[data-use-countable="${row.reagentId}"]`),count=$(`[data-reag-count="${row.reagentId}"]`);
+    if(ch)ch.disabled=true;if(count){count.readOnly=true;count.title='Consumo guardado; las correcciones requieren conciliación del JEFE';}
+    for(const env of row.containers||[]){const key=`${row.reagentId}|${env.containerId}`;
+      const used=$(`[data-use-container="${key}"]`),final=$(`[data-env-final="${key}"]`),correct=$(`[data-correct-env-initial="${key}"]`);
+      if(used)used.disabled=true;if(final)final.readOnly=true;if(correct)correct.disabled=true;
+    }
+  }
   updateReagentCalculations(p);
 }
 
@@ -2641,6 +2735,8 @@ function collectReagentResult(p,requireComplete=true){
   if(!planHasReagents(p))return {ok:true,complete:true,result:null};
   const items=[];let complete=true;
   for(const r of p.reagentConfig){
+    const recorded=(p.reagentResult?.items||[]).find(x=>x.reagentId===r.id);
+    if(recorded?.usedInActivity===true&&!recorded.notUsed&&Number(recorded.used)>0){items.push(JSON.parse(JSON.stringify(recorded)));continue;}
     if(r.mode==='WEIGHT'){
       const containers=Array.isArray(r.containers)&&r.containers.length?r.containers:[{id:'LEGACY',label:'Envase 1',containerType:'FRASCO',tareWeight:r.tareWeight,initialWeight:r.initialWeight}],usedContainers=[];
       for(const env of containers){
@@ -2673,6 +2769,236 @@ function collectReagentResult(p,requireComplete=true){
 
 // Compara entradas del analista. Los saldos de COUNT son derivados del inventario,
 // y no deben recalcularse al volver a abrir/finalizar un consumo ya guardado.
+// V49: registrar una solicitud no equivale a confirmar un movimiento.
+function stockRequestApplied(result){return result?.stockRequest?.state==='APPLIED'}
+function stockRequestPending(result){return ['PENDING','REVIEW'].includes(result?.stockRequest?.state)}
+function sameStockRequest(a,b){return !!a?.stockRequest?.id&&a.stockRequest.id===b?.stockRequest?.id&&a.stockRequest.signature===b.stockRequest.signature}
+function validNewStockRequest(old,next){
+  const q=next?.stockRequest;
+  if(!q||q.state!=='PENDING'||!Array.isArray(q.rows)||q.signature!==JSON.stringify(q.rows)||stockRequestPending(old)||q.id===old?.stockRequest?.id)return false;
+  if(!samePlanningTechnicalValue(q.baseResult?.items||[],old?.items||[]))return false;
+  return (old?.items||[]).filter(x=>x.usedInActivity===true&&!x.notUsed&&Number(x.used)>0)
+    .every(x=>(next.items||[]).some(y=>recoveryReagentKey(x)===recoveryReagentKey(y)&&samePlanningTechnicalValue(x,y)));
+}
+function protectLocalTechnicalEvidence(local,remote){
+  if(remote?.reagentRecovery?.id)return false;
+  if(sameStockRequest(local?.reagentResult,remote?.reagentResult)&&(stockRequestApplied(remote.reagentResult)||(remote.reagentResult.stockRequest.appliedRows||[]).length))return false;
+  const used=(local?.reagentResult?.items||[]).filter(x=>x.usedInActivity===true&&!x.notUsed&&Number(x.used)>0);
+  return used.some(x=>!(remote?.reagentResult?.items||[]).some(y=>recoveryReagentKey(x)===recoveryReagentKey(y)&&samePlanningTechnicalValue(x,y)));
+}
+async function persistPlanningChange(local,payload=local){
+  await queue('UPDATE','planning',payload,{localPlanning:local});
+}
+function prepareStockRequest(plan,input){
+  if(!input?.completed||!Array.isArray(input.items))throw Error('Complete los datos del consumo antes de guardarlos.');
+  const old=plan.reagentResult;
+  if(stockRequestPending(old)){
+    if(sameReagentConsumptionInput(old,input))return {unchanged:true,result:old};
+    throw Error('El consumo anterior está pendiente de confirmación compartida. No se reemplazó; espere la confirmación automática.');
+  }
+  const previous=new Map((old?.items||[]).map(x=>[recoveryReagentKey(x),x]));
+  const incoming=new Map(input.items.map(x=>[recoveryReagentKey(x),x]));
+  if(incoming.size!==input.items.length)throw Error('Hay reactivos duplicados por nombre, lote y unidad. Revise la ficha.');
+  const merged=[],rows=[];
+  for(const [key,item] of previous){
+    const next=incoming.get(key);
+    if(item.usedInActivity===true&&!item.notUsed&&Number(item.used)>0){
+      if(next&&!sameReagentConsumptionInput({completed:true,items:[item]},{completed:true,items:[next]}))
+        throw Error(`El consumo guardado de ${item.name} no puede desmarcarse ni reemplazarse. Requiere conciliación del JEFE.`);
+      merged.push(JSON.parse(JSON.stringify(item)));incoming.delete(key);
+    }else if(!next){merged.push(JSON.parse(JSON.stringify(item)));}
+  }
+  for(const item of incoming.values()){
+    const before=previous.get(recoveryReagentKey(item));
+    if(before&&sameReagentConsumptionInput({completed:true,items:[before]},{completed:true,items:[item]}))merged.push(JSON.parse(JSON.stringify(before)));
+    else{const copy=JSON.parse(JSON.stringify(item));merged.push(copy);rows.push(copy);}
+  }
+  if(!rows.length)return {unchanged:true,result:old||input};
+  const signature=JSON.stringify(rows),id=uid('STOCK');
+  return {unchanged:false,result:{...input,items:merged,inventoryCommittedAt:old?.inventoryCommittedAt||null,
+    inventorySignature:old?.inventorySignature||null,schemaVersion:2,
+    stockRequest:{id,planId:plan.id,requestedByUID:firebaseBridge.authUser?.uid||currentSessionUser?.firebaseUid||null,createdAt:nowISO(),state:'PENDING',signature,rows,baseResult:old?{items:old.items,completed:old.completed,inventoryCommittedAt:old.inventoryCommittedAt||null}:null}}};
+}
+function buildStockSettlement(plan,catalogs,actor,stamp){
+  const result=JSON.parse(JSON.stringify(plan.reagentResult)),request=result?.stockRequest;
+  if(!request||request.state!=='PENDING')throw Error('La solicitud ya cambió o fue aplicada.');
+  if(plan.status==='CANCELADO'||plan.status==='REALIZADO')throw Error('La actividad ya está cerrada o cancelada.');
+  if(request.planId!==plan.id||request.signature!==JSON.stringify(request.rows))throw Error('La evidencia de la solicitud no coincide.');
+  const nextCatalogs=JSON.parse(JSON.stringify(catalogs)),resolved=new Map(),movements=[];
+  for(const raw of request.rows){
+    const item=JSON.parse(JSON.stringify(raw)),key=recoveryReagentKey(item);
+    if(resolved.has(key))throw Error('Identidad de reactivo duplicada en la solicitud.');
+    if(item.usedInActivity===false&&item.notUsed===true&&item.used===0){resolved.set(key,item);continue;}
+    const matches=[];
+    for(const c of nextCatalogs){
+      if((c.reagentConfig||[]).length>16)throw Error('La ficha supera el límite de 16 reactivos para actualización protegida. Solicite dividir la ficha al JEFE.');
+      const hit=(c.reagentConfig||[]).filter(r=>recoveryReagentKey(r)===key);
+      if(hit.length>1)throw Error(`Lote duplicado en ${c.code||c.id}.`);
+      for(const r of hit){
+        if(r.stockAdjustedAt&&Date.parse(r.stockAdjustedAt)>Date.parse(request.revalidatedAt||request.createdAt))
+          throw Error(`${item.name}: hubo un ajuste posterior. El JEFE debe revalidar la solicitud.`);
+        matches.push(r);
+      }
+    }
+    if(!matches.length)throw Error(`No existe el lote compartido de ${item.name}.`);
+    if(item.mode==='COUNT'){
+      const stock=matches[0].stockQuantity,used=item.used;
+      if(!Number.isFinite(stock)||!Number.isFinite(used)||used<=0||stock<used||matches.some(r=>r.stockQuantity!==stock))
+        throw Error(`${item.name}: saldo insuficiente, inválido o diferente entre fichas. No se aplicó el movimiento.`);
+      item.stockBefore=stock;item.stockRemaining=stock-used;
+      matches.forEach(r=>{r.stockQuantity=item.stockRemaining;r.inventoryStatus=item.stockRemaining>0?'ACTIVO':'AGOTADO';});
+      movements.push({key,name:item.name,lot:item.lot,mode:'COUNT',before:stock,used,after:item.stockRemaining});
+    }else if(item.mode==='WEIGHT'){
+      const containers=item.containers||[];
+      if(containers.length>5)throw Error('El reactivo supera el límite de 5 envases para actualización protegida. Solicite revisión del JEFE.');
+      if(!containers.length||new Set(containers.map(c=>c.containerId||c.label)).size!==containers.length||!Number.isFinite(item.used)||item.used<0)throw Error('Registro por peso incompleto o envase duplicado.');
+      const mass=containers.reduce((n,c)=>n+(c.initialWeight-c.finalWeight),0);
+      if(!Number.isFinite(mass)||Math.abs(mass-item.used)>0.000001)throw Error('El consumo total no coincide con los pesos registrados.');
+      for(const env of containers){
+        const peers=matches.map(r=>(r.containers||[]).find(c=>sameReagentContainer(r,c,item,env)));
+        const before=peers[0]?.initialWeight,after=env.finalWeight;
+        if(peers.some(c=>!c||c.initialWeight!==before)||!Number.isFinite(before)||!Number.isFinite(after)||after<0||after>before||env.initialWeight!==before)
+          throw Error(`${item.name} · ${env.label}: el peso inicial ya cambió. Revise el registro antes de consumir.`);
+        peers.forEach(c=>{c.initialWeight=after;c.stockInputIndex=containers.indexOf(env);});
+        for(const c of peers)c.status=env.depleted?'AGOTADO':'ACTIVO';
+        movements.push({key,name:item.name,lot:item.lot,mode:'WEIGHT',container:env.label,before,used:before-after,after});
+      }
+      for(const r of matches)r.inventoryStatus=(r.containers||[]).some(c=>c.status!=='AGOTADO')?'ACTIVO':'AGOTADO';
+    }else throw Error('Modo de inventario no reconocido.');
+    matches.forEach(r=>{r.stockLedgerOperationId=request.id;r.stockLedgerAt=stamp;r.stockPlanId=plan.id;r.stockRequestRow=request.rows.indexOf(raw);});
+    resolved.set(key,item);
+  }
+  result.items=result.items.map(x=>resolved.get(recoveryReagentKey(x))||x);
+  result.stockRequest={...request,state:'APPLIED',appliedAt:stamp,appliedBy:actor};
+  result.inventoryCommittedAt=stamp;result.inventorySignature=JSON.stringify(result.items);
+  const nextPlan={...plan,reagentResult:result,updatedAt:stamp,_cloudUpdatedAt:stamp};
+  const writes=nextCatalogs.filter((c,i)=>JSON.stringify(c.reagentConfig)!==JSON.stringify(catalogs[i].reagentConfig))
+    .map(c=>({...c,inventoryProtocol:2,inventoryRevision:Number(c.inventoryRevision||0)+1,lastStockReceiptId:request.id,lastStockPlanId:plan.id,updatedAt:stamp,_cloudUpdatedAt:stamp}));
+  return {plan:nextPlan,catalogs:writes,receipt:{id:request.id,createdAt:stamp,user:actor,action:'APLICAR_CONSUMO_COMPARTIDO',
+    module:'INVENTARIO',recordId:plan.id,requestSignature:request.signature,requestCreatedAt:request.createdAt,movements,
+    detail:'Movimiento confirmado junto con planning y catálogos en una sola transacción'}};
+}
+function buildStockRowSettlement(plan,catalogs,actor,stamp,actorUID){
+  const original=plan.reagentResult.stockRequest,applied=original.appliedRows||[];
+  const index=original.rows.findIndex((_,i)=>!applied.includes(i));
+  if(index<0)throw Error('La solicitud no tiene filas pendientes válidas.');
+  const stepId=original.id+'-'+index,one=JSON.parse(JSON.stringify(plan));
+  one.reagentResult.stockRequest={...original,id:stepId,rows:[original.rows[index]],signature:JSON.stringify([original.rows[index]])};
+  const write=buildStockSettlement(one,catalogs,actor,stamp),done=[...applied,index],final=done.length===original.rows.length;
+  write.plan.reagentResult.stockRequest={...original,appliedRows:done,lastReceiptId:stepId,state:final?'APPLIED':'PENDING',appliedAt:final?stamp:null,appliedBy:actor};
+  if(!final){write.plan.reagentResult.inventoryCommittedAt=plan.reagentResult.inventoryCommittedAt||null;write.plan.reagentResult.inventorySignature=plan.reagentResult.inventorySignature||null;}
+  for(const cat of write.catalogs){
+    cat.lastStockCatalogRow=cat.reagentConfig.findIndex(r=>r.stockLedgerOperationId===stepId);
+    for(const r of cat.reagentConfig||[])if(r.stockLedgerOperationId===stepId)r.stockRequestRow=index;
+  }
+  write.receipt={...write.receipt,id:stepId,requestId:original.id,rowIndex:index,requestSignature:original.signature,actorUID,result:write.plan.reagentResult};
+  return write;
+}
+let sharedStockWorkerBusy=false;
+const sharedStockRetryAt=new Map();
+async function settleSharedStockRequests(){
+  if(!['JEFE','ANALISTA'].includes(currentSessionUser?.role)||sharedStockWorkerBusy||firebaseBridge.busy||!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine||quotaPauseRemaining()>0)return;
+  sharedStockWorkerBusy=true;
+  try{
+    const plans=(await getAll('planning')).filter(p=>p.reagentResult?.stockRequest?.state==='PENDING'&&(currentSessionUser.role==='JEFE'||p.analystId===currentSessionUser.analystId)&&Date.now()>(sharedStockRetryAt.get(p.id)||0)).slice(0,2);
+    for(const candidate of plans){
+      const sdk=firebaseBridge.mods,ref=sdk.doc(firebaseBridge.db,'planning',candidate.id),request=candidate.reagentResult.stockRequest;
+      const catalogs=(await getAll('catalog')).filter(c=>(c.reagentConfig||[]).some(r=>request.rows.some(x=>recoveryReagentKey(x)===recoveryReagentKey(r))));
+      try{
+        let committed;
+        // Una constancia por fila mantiene acotada la validación de reglas Spark.
+        // Cada fila se descuenta a lo sumo una vez, incluso si se corta la conexión.
+        for(let step=0;step<16;step++){
+          for(let collision=0;collision<3;collision++){
+            try{
+            await sdk.runTransaction(firebaseBridge.db,async tx=>{
+            const snap=await tx.get(ref);
+            if(!snap.exists())throw Error('La actividad no existe en Firebase.');
+            const p=snap.data(),q=p.reagentResult?.stockRequest;
+            if(q?.id!==request.id)throw Error('La solicitud cambió durante la revisión.');
+            if(q.state==='APPLIED'){committed={plan:p,catalogs:[]};return;}
+            const index=q.rows.findIndex((_,i)=>!(q.appliedRows||[]).includes(i));
+            if(index<0)throw Error('Solicitud inconsistente: requiere revisión.');
+            const receiptRef=sdk.doc(firebaseBridge.db,'stockReceipts',q.id+'-'+index);
+            const receipt=await tx.get(receiptRef);
+            if(receipt.exists())throw Error('Existe una constancia sin su fila confirmada. No se repitió el descuento.');
+            const row=q.rows[index],affected=catalogs.filter(c=>(c.reagentConfig||[]).some(r=>recoveryReagentKey(r)===recoveryReagentKey(row)));
+            const current=[];
+            for(const cat of affected){const r=sdk.doc(firebaseBridge.db,'catalog',cat.id),snap=await tx.get(r);if(!snap.exists())throw Error('Falta una ficha del lote.');current.push({...snap.data(),id:cat.id});}
+            const write=buildStockRowSettlement(p,current,currentSessionUser.name||'Analista',nowISO(),firebaseBridge.authUser.uid);
+            tx.set(ref,write.plan);tx.set(receiptRef,write.receipt);
+            for(const c of write.catalogs)tx.set(sdk.doc(firebaseBridge.db,'catalog',c.id),c);
+            committed=write;
+          });
+              break;
+            }catch(err){
+              if(collision>=2||!['permission-denied','aborted'].includes(String(err.code||'').replace('firestore/','')))throw err;
+              await new Promise(resolve=>setTimeout(resolve,100*(collision+1)));
+            }
+          }
+          for(const cat of committed.catalogs)await put('catalog',cat);
+          if(committed.receipt)await put('audit',{...committed.receipt,storage:'stockReceipts'});
+          if(stockRequestApplied(committed.plan.reagentResult))break;
+        }
+        const priorLocal=await getOne('planning',candidate.id);
+        if(priorLocal?.pendingClosure&&committed.plan.status!=='REALIZADO')committed.plan.pendingClosure=priorLocal.pendingClosure;
+        await put('planning',committed.plan);
+        const issue=await getOne('config','stockIssue:'+candidate.id);
+        if(issue)await del('config',issue.key);
+        sharedStockRetryAt.delete(candidate.id);await renderMyDay();
+      }catch(err){
+        sharedStockRetryAt.set(candidate.id,Date.now()+60000);
+        await put('config',{key:'stockIssue:'+candidate.id,value:{planId:candidate.id,requestId:request.id,message:String(err.message||err),at:nowISO()}});
+        if(isFirebaseQuotaError(err)){registerFirebaseQuotaError(err);break;}
+      }
+    }
+  }finally{sharedStockWorkerBusy=false;}
+}
+async function showSharedStockPending(){
+  if(currentSessionUser?.role!=='JEFE')return;
+  const plans=(await getAll('planning')).filter(p=>stockRequestPending(p.reagentResult));
+  const issues=await getAll('config');
+  let d=document.getElementById('sharedStockPending');
+  if(!d){d=document.createElement('dialog');d.id='sharedStockPending';d.style.cssText='width:min(850px,95vw);max-height:90vh;overflow:auto;padding:22px;border-radius:14px';document.body.appendChild(d);}
+  d.innerHTML=`<h2>Inventario compartido pendiente</h2><p>Cada analista confirma sus movimientos automáticamente con una constancia única. Mientras esté pendiente no se confirma el cierre.</p>${plans.map(p=>`<article style="border-top:1px solid #ccc;padding:12px"><b>${escapeHtml(p.analystName)} · ${escapeHtml(p.catalogName)}</b><p>${escapeHtml(issues.find(x=>x.key==='stockIssue:'+p.id)?.value?.message||'Esperando confirmación automática del movimiento compartido.')}</p><button type="button" data-stock-revalidate="${escapeHtml(p.id)}">Revisar saldo y revalidar solicitud</button></article>`).join('')||'<p>No hay solicitudes pendientes.</p>'}<button type="button" id="closeSharedStock">Cerrar</button>`;
+  d.querySelector('#closeSharedStock').onclick=()=>d.close();
+  d.querySelectorAll('[data-stock-revalidate]').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.stockRevalidate;
+    if(!confirm('Revise primero el saldo físico y compartido del lote. ¿Revalidar esta solicitud contra el saldo actual? No se modifica la cantidad solicitada.'))return;
+    const sdk=firebaseBridge.mods,ref=sdk.doc(firebaseBridge.db,'planning',id);
+    await sdk.runTransaction(firebaseBridge.db,async tx=>{const s=await tx.get(ref);if(!s.exists()||s.data().reagentResult?.stockRequest?.state!=='PENDING')throw Error('La solicitud cambió.');const p=s.data();tx.set(ref,{...p,reagentResult:{...p.reagentResult,stockRequest:{...p.reagentResult.stockRequest,revalidatedAt:nowISO(),revalidatedBy:currentSessionUser.name}},updatedAt:nowISO()});});
+    sharedStockRetryAt.delete(id);d.close();await settleSharedStockRequests();
+  });
+  d.showModal();
+}
+function makeAtomicClosureEvents(plan){
+  const safe=String(plan.id).replace(/[^a-zA-Z0-9_-]/g,'_'),stamp=nowISO();
+  const common={planId:plan.id,analystId:plan.analystId,analystName:plan.analystName,authorType:'SISTEMA',authorName:'Alerta de actividad',
+    createdAt:stamp,threadStatus:'OPEN',readBy:[],priority:'INFO',actionRequired:'CONOCIMIENTO',autoGenerated:true,recipientRole:'JEFE',
+    createdByRole:currentSessionUser?.role||'ANALISTA',createdByName:currentSessionUser?.name||plan.analystName,
+    committedWithPlanning:true};
+  const lifecycle={...common,id:'AUTO-FINAL-'+safe,notificationType:'ACTIVIDAD',lifecycleStage:'FINALIZACION',closureEvidence:activityClosureEvidence(plan),
+    text:`✅ FINALIZACIÓN DE ACTIVIDAD · ${plan.catalogName} · ${plan.analystName} finalizó a las ${formatActualStamp(plan.actualFinishedAt)} · ${plan.actualSamples??'No aplica'} muestra(s).`};
+  const technical={...common,id:'AUTO-TECNICA-FINAL-'+safe,authorName:'Alerta técnica',notificationType:'TECNICA',technicalKind:'CIERRE_TECNICO',technicalStage:'FINAL',
+    technicalPayload:{reagents:plan.reagentResult?.items||[]},text:`🧪 DATOS TÉCNICOS CONFIRMADOS · ${technicalAlertReagentSummary(plan.reagentResult).text||'Sin consumo de reactivos.'}`};
+  return [lifecycle,technical];
+}
+function mergeCatalogLedgerSafe(current,incoming){
+  if(!current?.inventoryProtocol)return incoming;
+  const next={...incoming,inventoryProtocol:2,inventoryRevision:Number(current.inventoryRevision||0)+1,lastStockReceiptId:current.lastStockReceiptId||null,lastStockPlanId:current.lastStockPlanId||null,lastStockCatalogRow:current.lastStockCatalogRow??null};
+  const missingLedger=(current.reagentConfig||[]).some(r=>r.stockLedgerOperationId&&!(incoming.reagentConfig||[]).some(x=>recoveryReagentKey(x)===recoveryReagentKey(r)));
+  if(missingLedger)throw Error('La ficha omite un lote con movimientos confirmados. Recargue el catálogo antes de editar; se conservó el inventario.');
+  next.reagentConfig=(incoming.reagentConfig||[]).map(r=>{
+    const old=(current.reagentConfig||[]).find(x=>recoveryReagentKey(x)===recoveryReagentKey(r));
+    if(!old?.stockLedgerOperationId)return r;
+    const explicitAdjustment=r.stockAdjustedAt&&String(r.stockAdjustedAt)>String(old.stockAdjustedAt||'')&&r.stockLedgerOperationId===old.stockLedgerOperationId;
+    if(explicitAdjustment)return r;
+    return {...r,stockQuantity:old.stockQuantity,containers:old.containers,inventoryStatus:old.inventoryStatus,
+      stockLedgerOperationId:old.stockLedgerOperationId,stockLedgerAt:old.stockLedgerAt,stockPlanId:old.stockPlanId,stockRequestRow:old.stockRequestRow,stockAdjustedAt:old.stockAdjustedAt};
+  });
+  return next;
+}
+
 function sameReagentConsumptionInput(a,b){
   const strip=v=>Array.isArray(v)?v.map(strip):v&&typeof v==='object'?
     Object.fromEntries(Object.entries(v).filter(([k])=>!['initialSource','initialWeightCorrected'].includes(k)).map(([k,val])=>[k,strip(val)])):v;
@@ -2684,32 +3010,21 @@ function sameReagentConsumptionInput(a,b){
   return !!a?.completed&&!!b?.completed&&sameCloudFunctionalPayload({items:normalize(a)},{items:normalize(b)});
 }
 // Los consumos confirmados son independientes del cierre horario de la actividad.
+const reagentSaveLocks=new Set();
 async function commitReagentConsumption(p,result){
-  if(!result?.completed)return {ok:false,text:'Complete o desmarque los consumos antes de guardarlos.'};
-  const previous=p.reagentResult;
-  if(previous?.inventoryCommittedAt&&sameReagentConsumptionInput(previous,result)){
-    p.reagentResult=previous;
-    return {ok:true,unchanged:true};
-  }
-  if(previous?.inventoryCommittedAt)return {ok:false,text:'El consumo ya fue registrado y ahora contiene valores diferentes. Requiere conciliación del JEFE; no se modificó el inventario.'};
-  // Una corrección requiere reconciliar el saldo previo, no volver a descontar
-  // el consumo íntegro. Los valores finales son absolutos por envase.
-  const catalogs=await getAll('catalog');
-  for(const item of (result.items||[]).filter(x=>x.usedInActivity!==false&&!x.notUsed)){
-    const live=catalogs.flatMap(c=>c.reagentConfig||[]).find(r=>normalizeIdentityText(r.name||'')===normalizeIdentityText(item.name||'')&&normalizeIdentityText(r.lot||'')===normalizeIdentityText(item.lot||''));
-    if(!live)continue;
-    if(item.mode==='COUNT'){
-      const baseline=Number(live.stockQuantity||0);
-      if(Number(item.used)>baseline)return {ok:false,text:`Stock insuficiente de ${item.name}. Disponible: ${baseline}.`};
-      item.stockBefore=baseline;item.stockRemaining=Math.max(0,baseline-Number(item.used||0));
-    }
-  }
-  p.reagentResult={...result,inventoryCommittedAt:nowISO(),inventorySignature:JSON.stringify(result.items||[])};
-  p.updatedAt=nowISO();
-  await put('planning',p);await queue('UPDATE','planning',p);
-  await applyConfirmedReagentInventoryToCatalog(p);
-  await propagateLiveInventoryToOpenPlans();
-  return {ok:true};
+  if(reagentSaveLocks.has(p.id))return {ok:false,text:'El consumo ya se está guardando.'};
+  reagentSaveLocks.add(p.id);
+  try{
+    const prepared=prepareStockRequest(p,result);
+    p.reagentResult=prepared.result;
+    if(prepared.unchanged)return {ok:true,unchanged:true,pending:stockRequestPending(p.reagentResult)};
+    p.updatedAt=nowISO();await persistPlanningChange(p);
+    if(currentSessionUser?.role==='JEFE'||currentSessionUser?.role==='ANALISTA')setTimeout(()=>settleSharedStockRequests().catch(console.warn),400);
+    return {ok:true,pending:true};
+  }catch(err){
+    await put('config',{key:'technicalDraft:'+p.id,value:{at:nowISO(),result,message:String(err.message||err)}});
+    return {ok:false,text:String(err.message||err)+' El formulario quedó respaldado localmente.'};
+  }finally{reagentSaveLocks.delete(p.id)}
 }
 
 // Protección de salida: no descartar accidentalmente registros técnicos sin guardar.
@@ -2732,7 +3047,7 @@ async function saveReagentDraft(){
   const rr=collectReagentResult(p,false);if(!rr.ok)return toast(rr.text);
   const committed=await commitReagentConsumption(p,rr.result);if(!committed.ok)return toast(committed.text);
   await audit('GUARDAR_CONSUMO_REACTIVOS_PARCIAL','MI JORNADA',p.code,`${p.analystName} guardó consumos parciales de ${p.catalogName}`);
-  resetTechnicalSnapshot();toast('Consumos guardados sin finalizar · inventario independiente del cierre');
+  resetTechnicalSnapshot();toast(stockRequestPending(p.reagentResult)?'Consumo guardado · pendiente de confirmación automática':'Consumo confirmado · sin finalizar');
 }
 
 
@@ -2750,13 +3065,13 @@ async function getTechnicalRequirementsForPlan(p){
 function technicalRequirementMenuHtml(p,req){
   if(!req.curve&&!req.reagents&&!requiresActualSamples(p.section))return '';
   const doneCurve=!req.curve||!!p.calibrationResult?.completed;
-  const doneReagents=!req.reagents||!!p.reagentResult?.completed;
+  const doneReagents=!req.reagents||(!!p.reagentResult?.completed&&!stockRequestPending(p.reagentResult)&&(p.reagentConfig||[]).every(r=>(p.reagentResult.items||[]).some(x=>x.reagentId===r.id)));
   const doneSamples=!requiresActualSamples(p.section)||!!Object.keys(p.sampleParameterCounts||{}).length;
   const allDone=doneCurve&&doneReagents&&doneSamples;
   const rows=[];
   if(requiresActualSamples(p.section))rows.push(`<div class="tech-req-item ${doneSamples?'done':''}"><span class="tech-req-icon">${doneSamples?'✓':'1'}</span><span><b>Muestras por parámetro</b><small>${doneSamples?`${p.actualSamples??'—'} muestras · ${Object.keys(p.sampleParameterCounts||{}).length} parámetro(s)`: 'Registrar cantidades por parámetro desde Mi Jornada'}</small></span></div>`);
   if(req.curve)rows.push(`<div class="tech-req-item ${doneCurve?'done':''}"><span class="tech-req-icon">${doneCurve?'✓':'1'}</span><span><b>Curva de calibración</b><small>${doneCurve?'Datos registrados':'Registrar absorbancia 1, 2 y 3 por cada punto'}</small></span></div>`);
-  if(req.reagents)rows.push(`<div class="tech-req-item ${doneReagents?'done':''}"><span class="tech-req-icon">${doneReagents?'✓':'2'}</span><span><b>Reactivos / materiales</b><small>${doneReagents?'Consumos registrados':'Registrar peso final o cantidad utilizada'}</small></span></div>`);
+  if(req.reagents)rows.push(`<div class="tech-req-item ${doneReagents?'done':''}"><span class="tech-req-icon">${doneReagents?'✓':'2'}</span><span><b>Reactivos / materiales</b><small>${stockRequestPending(p.reagentResult)?'Guardado · pendiente de confirmación automática':doneReagents?'Consumos confirmados':'Registrar peso final o cantidad utilizada'}</small></span></div>`);
   const button=p.status==='REALIZADO'
     ?`<button type="button" class="btn secondary tech-req-action" data-edit-technical="${p.id}">Ver datos técnicos</button>`
     :`<button type="button" class="btn secondary tech-req-action" data-open-technical="${p.id}">${allDone?'Revisar datos técnicos':'Registrar datos técnicos'}</button>`;
@@ -2779,20 +3094,21 @@ async function hydratePlanTechnicalRequirements(p){
       const capturedIds=new Set((p.reagentResult?.items||[]).map(x=>x?.reagentId).filter(Boolean));
       const addedPending=merged.some(r=>r?.id&&!capturedIds.has(r.id));
       p.reagentConfig=merged;
-      // Si el catálogo agregó un reactivo/lote después de que el analista había
-      // completado el formulario anterior, el registro vuelve a PENDIENTE para
-      // que el nuevo insumo se vea y pueda marcarse USADO o NO UTILIZADO.
-      if(addedPending&&p.reagentResult?.completed)p.reagentResult={...p.reagentResult,completed:false,catalogExpandedAt:nowISO()};
+      // Si el catálogo agregó un lote, mostrar el requisito nuevo sin cambiar
+      // el resultado ya guardado ni escribir al abrir el formulario.
+      // La ampliación de la ficha no cambia ni invalida el consumo guardado.
+      if(addedPending)p.requirementRefreshAt=nowISO();
       changed=true;
     }
     p.reagentResult=p.reagentResult||null;
   }
-  if(changed){p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p)}
+  // Solo hidratar la vista; no escribir planning ni generar Outbox al abrir.
   return p;
 }
 
 async function openTechnicalData(planId){
   let p=await getOne('planning',planId);if(!p)return;
+  if(p.pendingClosure)return toast('El cierre está en confirmación; los datos técnicos se conservan sin cambios.');
   if(!assertOwnPlan(p)&&currentSessionUser?.role!=='JEFE')return toast('No tiene permiso para consultar esta actividad');
   p=await hydratePlanTechnicalRequirements(p);
   if(!planRequiresCalibration(p)&&!planHasReagents(p))return toast('Esta actividad no tiene datos técnicos configurados');
@@ -2846,6 +3162,7 @@ async function saveOperationalSamples(event){
  event.preventDefault();
  const id=$('#operationalSamplesPlanId').value;
  const p=await getOne('planning',id);
+ if(p?.pendingClosure)return toast('El cierre está en confirmación. Se conservan las muestras originales.');
  if(!p||!requiresActualSamples(p.section)||p.status==='REALIZADO')return toast('La actividad no admite cambios de muestras');
  if(!assertOwnPlan(p)&&currentSessionUser?.role!=='JEFE')return toast('No tiene permiso para modificar esta actividad');
  const input=$('#operationalSamplesCount');
@@ -2871,8 +3188,7 @@ async function saveOperationalSamples(event){
  p.operationalSamplesUpdatedAt=nowISO();
  p.operationalSamplesUpdatedBy=currentSessionUser?.name||currentSessionUser?.email||'Usuario';
  p.updatedAt=p.operationalSamplesUpdatedAt;
- await put('planning',p);
- await queue('UPDATE','planning',p);
+ await persistPlanningChange(p);
  await audit('REGISTRO_OPERATIVO_MUESTRAS','MI JORNADA',p.code,`${p.operationalSamplesUpdatedBy} registró ${n} muestras procesadas, sin finalizar ni consumir inventario`);
  $('#operationalSamplesDialog').close();
  toast('Muestras guardadas localmente · pendiente de confirmación de Firebase si hay cambios en cola');
@@ -2958,7 +3274,7 @@ async function applyConfirmedReagentInventoryToCatalog(p){
       }
       return next;
     });
-    if(changed){catalog.updatedAt=nowISO();await put('catalog',catalog);await queue('UPDATE','catalog',catalog)}
+    if(changed){catalog.updatedAt=nowISO();await put('catalog',catalog);if(currentSessionUser?.role==='JEFE')await queue('UPDATE','catalog',catalog)}
   }
   reagentMasterProfiles=[];
 }
@@ -2977,7 +3293,8 @@ async function propagateLiveInventoryToOpenPlans(){
     });
     if(JSON.stringify(next)!==JSON.stringify(p.reagentConfig||[])){
       p.reagentConfig=next;p.inventorySyncedAt=nowISO();p.updatedAt=nowISO();
-      await put('planning',p);await queue('UPDATE','planning',p);changed++;
+      // El saldo se consulta desde catálogo al abrir; no reenviar snapshots completos.
+      changed++;
     }
   }
   return changed;
@@ -3012,7 +3329,6 @@ async function reconcileInventoryFromConfirmedHistory(){
 }
 async function validateReagentResultAgainstLiveInventory(result){
   if(!result?.items?.length)return {ok:true};
-  await reconcileInventoryFromConfirmedHistory();
   const catalogs=await getAll('catalog');
   const all=catalogs.flatMap(c=>c.reagentConfig||[]);
   for(const item of result.items.filter(x=>x?.usedInActivity!==false&&!x?.notUsed)){
@@ -3057,7 +3373,7 @@ async function verifyActivityCloudClosure(planId, timeoutMs=18000){
         const snap=await sdk.getDocFromServer(sdk.doc(firebaseBridge.db,cloudCollectionFor('planning'),planId));
         const remote=snap.exists()?snap.data():null;
         if(!remote||remote.status!=='REALIZADO'||!remote.completionCommittedAt)return {ok:false,reason:'Firebase no confirma la finalización.'};
-        const local=await getOne('planning',planId);
+        const stored=await getOne('planning',planId),local=stored?.pendingClosure?.desired||stored;
         const technical=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
         const differences=technical.filter(k=>!samePlanningTechnicalValue(local?.[k]??null,remote[k]??null));
         if(local?.actualFinishedAt!==remote.actualFinishedAt)differences.push('actualFinishedAt');
@@ -3157,11 +3473,11 @@ function buildReagentRecoveryWrite(proposal,remote,catalogs,by,stamp){
     previousLocalReagentResult:JSON.parse(JSON.stringify(proposal.local.reagentResult)),
     restoredItems:JSON.parse(JSON.stringify(proposal.extra)),catalogIds:proposal.catalogIds,
     reason:'Recuperación de consumo original retenido en Outbox; cierre horario original conservado'};
-  const planning={...remote,reagentResult:result,status:'REALIZADO',actualFinishedAt:proposal.local.actualFinishedAt,
+  const planning={...remote,reagentResult:result,status:'REALIZADO',completionProtocol:2,actualFinishedAt:proposal.local.actualFinishedAt,
     completionCommittedAt:proposal.local.completionCommittedAt,completionCommittedBy:proposal.local.completionCommittedBy,
     completionOperationId:proposal.local.completionOperationId||`FINAL-${remote.id}`,
     reagentRecovery:repair,updatedAt:stamp,_cloudUpdatedAt:stamp};
-  const catalogWrites=catalogs.map(c=>({...c,reagentConfig:(c.reagentConfig||[]).map(r=>{
+  const catalogWrites=catalogs.map(c=>({...c,...(c.inventoryProtocol?{inventoryRevision:Number(c.inventoryRevision||0)+1}:{}),reagentConfig:(c.reagentConfig||[]).map(r=>{
     const x=proposal.extra.find(e=>recoveryReagentKey(e)===recoveryReagentKey(r));
     return x?{...r,stockQuantity:x.stockRemaining,inventoryStatus:x.stockRemaining>0?'ACTIVO':'AGOTADO',
       stockReconciledAt:stamp,stockReconciliationId:checked.repairId}:r;
@@ -3259,7 +3575,7 @@ async function chiefRecoverReagentsAndClosure(planId){
   finally{chiefReagentRecoveryBusy.delete(planId)}
 }
 async function retryLocalActivityClosure(planId){
-  const p=await getOne('planning',planId);
+  const stored=await getOne('planning',planId),p=stored?.pendingClosure?.desired||stored;
   if(!p||p.status!=='REALIZADO'||!p.completionCommittedAt||!assertOwnPlan(p))return toast('Cierre local no disponible para este usuario');
   if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)return toast('Conéctese a Firebase antes de confirmar');
   const sdk=firebaseBridge.mods;
@@ -3268,6 +3584,7 @@ async function retryLocalActivityClosure(planId){
     const remote=snap.exists()?snap.data():null;
     if(!remote||remote.status==='CANCELADO'||remote.id!==p.id||remote.date!==p.date||remote.analystId!==p.analystId)
       throw Error('La identidad, fecha o estado de la actividad difiere en Firebase.');
+    if(stored?.pendingClosure){await flushOutbox(false);return showActivityCloudClosureResult(p);}
     const keys=['actualSamples','sampleParameterCounts','reagentResult','calibrationResult','operationalSamplesResult','sampleResult'];
     const different=keys.filter(k=>!samePlanningTechnicalValue(p[k]??null,remote[k]??null));
     if(different.length)throw Error('Diferencia técnica en: '+different.join(', ')+'. Conserve ambos registros para revisión del JEFE.');
@@ -3295,11 +3612,24 @@ function samePlanningTechnicalValue(a,b){
   return JSON.stringify(normalize(a))===JSON.stringify(normalize(b));
 }
 async function ensureConfirmedClosureAlerts(payload){
+  if(payload.completionProtocol===2){
+    // Planning puede llegar antes que su snapshot de avisos; nunca crear una
+    // segunda escritura para eventos que ya se confirmaron atómicamente.
+    for(const ev of makeAtomicClosureEvents(payload)){
+      const local=await getOne('planComments',ev.id);
+      if(local?.committedWithPlanning)continue;
+      const sdk=firebaseBridge.mods,snap=await sdk.getDocFromServer(sdk.doc(firebaseBridge.db,'planComments',ev.id));
+      if(!snap.exists()||snap.data().planId!==payload.id)throw Error('Falta verificar el aviso atómico del cierre. Se conserva pendiente.');
+      await put('planComments',{...snap.data(),committedWithPlanning:true});
+    }
+    return;
+  }
   const records=[await createActivityLifecycleAlert(payload,'FINALIZACION')];
   if(payload.calibrationResult?.completed||payload.reagentResult?.completed)
     records.push(await createTechnicalAlert(payload,'CIERRE_TECNICO',{stage:'FINAL'}));
   // Si hubo interrupción entre guardar el aviso y ponerlo en cola, recuperarlo.
   for(const rec of records.filter(Boolean)){
+    if(rec.committedWithPlanning)continue;
     const ops=(await getAll('outbox')).filter(x=>x.entity==='planComments'&&x.recordId===rec.id);
     if(!ops.some(x=>['PENDIENTE','ERROR','SINCRONIZADO'].includes(x.status)))await queue('CREATE','planComments',rec);
   }
@@ -3315,23 +3645,22 @@ async function showActivityCloudClosureResult(p){
 }
 
 async function completeActivityRecord(p,actualSamples=null,finalComment='',calibrationResult=undefined,reagentResult=undefined){
-  p.status='REALIZADO';p.actualFinishedAt=nowISO();p.completionCommittedAt=p.actualFinishedAt;p.completionCommittedBy=currentSessionUser?.email||currentSessionUser?.name||'Usuario';p.completionOperationId=p.completionOperationId||`FINAL-${String(p.id||'PLAN').replace(/[^a-zA-Z0-9_-]/g,'_')}`;p.updatedAt=nowISO();
-  if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;if(reagentResult!==undefined)p.reagentResult=reagentResult;
-  await put('planning',p);await queue('UPDATE','planning',p);
-  // Confirmar el saldo como inventario vivo: el siguiente uso parte del peso/stock final real.
-  if(!p.reagentResult?.inventoryCommittedAt&&p.reagentResult?.completed){const committed=await commitReagentConsumption(p,p.reagentResult);if(!committed.ok)throw Error(committed.text)}
-  if(finalComment){
-    const comment={id:uid('COM'),planId:p.id,analystId:p.analystId,authorName:p.analystName,text:finalComment,createdAt:nowISO()};
-    await put('planComments',comment);await queue('CREATE','planComments',comment);
-  }
-  const sampleDetail=p.actualSamples!==null&&p.actualSamples!==undefined?` · ${p.actualSamples} muestras analizadas`:'';const curveDetail=p.calibrationResult?.completed?` · curva ${p.calibrationResult.points.length} puntos × ${Number(p.calibrationResult.replicates||p.calibrationConfig?.replicates||3)} · R² ${p.calibrationResult.regression?.r2?.toFixed(6)??'—'}`:'';const reagentDetail=p.reagentResult?.completed?` · ${p.reagentResult.items.length} consumo(s) de reactivos registrados`:'';
-  await audit('FINALIZAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} finalizó ${p.catalogName} a las ${formatActualStamp(p.actualFinishedAt)}${sampleDetail}${curveDetail}${reagentDetail}`);
-  // 28.21.29: NO crear evidencia histórica de cierre antes del ACK del servidor.
-  // El procesador de cola publica los avisos únicamente tras confirmar Firestore.
-  toast(`Actividad guardada localmente${sampleDetail} · comprobando Firebase…`);
+  if(p.status==='REALIZADO'){toast('La actividad ya está finalizada.');return;}
+  if(p.pendingClosure){toast('El cierre original ya está pendiente de confirmación.');return showActivityCloudClosureResult(p.pendingClosure.desired);}
+  if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));
+  if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;
+  if(reagentResult!==undefined)p.reagentResult=reagentResult;
+  const stamp=nowISO(),operation=p.completionOperationId||`FINAL-${String(p.id).replace(/[^a-zA-Z0-9_-]/g,'_')}`;
+  const desired={...p,status:'REALIZADO',completionProtocol:2,actualFinishedAt:stamp,completionCommittedAt:stamp,
+    completionCommittedBy:currentSessionUser?.email||currentSessionUser?.name||'Usuario',completionOperationId:operation,updatedAt:stamp};
+  delete desired.pendingClosure;
+  p.pendingClosure={requestedAt:stamp,operationId:operation,desired};
+  await persistPlanningChange(p,desired);
+  if(finalComment){const comment={id:uid('COM'),planId:p.id,analystId:p.analystId,authorName:p.analystName,text:finalComment,createdAt:stamp};await put('planComments',comment);await queue('CREATE','planComments',comment);}
+  await audit('SOLICITAR_FINALIZACION','MI JORNADA',p.code,`${p.analystName} solicitó finalizar a las ${formatActualStamp(stamp)}. Confirmación Firebase pendiente.`);
+  toast('Cierre guardado de forma segura · pendiente de confirmación compartida');
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();await renderManagementDashboard();
-  releaseActivityCompletion(p.id);
-  await showActivityCloudClosureResult(p);
+  releaseActivityCompletion(p.id);await showActivityCloudClosureResult(desired);
 }
 const technicalSubmissionLocks=new Set();
 async function submitFinishActivity(e){
@@ -3346,6 +3675,7 @@ async function submitFinishActivityOnce(e){
   e.preventDefault();
   let p=await getOne('planning',$('#finishActivityPlanId').value);if(!p)return;
   p=await hydratePlanTechnicalRequirements(p);
+  if(p.pendingClosure)return toast('El cierre original sigue en confirmación automática. No vuelva a finalizar.');
   // V28.21.3: impedir un segundo cierre si ya existe evidencia histórica exacta.
   const priorClosure=(await getAll('planComments')).some(c=>c.planId===p.id&&c.lifecycleStage==='FINALIZACION');
   if(p.status==='REALIZADO'||priorClosure){
@@ -3379,7 +3709,7 @@ async function submitFinishActivityOnce(e){
     p.technicalEditedAt=nowISO();
     p.technicalEditedBy=currentSessionUser?.name||currentSessionUser?.email||'Usuario';
     p.updatedAt=nowISO();
-    await put('planning',p);await queue('UPDATE','planning',p);
+    await persistPlanningChange(p);
     if(comment){
       const rec={id:uid('COM'),planId:p.id,text:`${mode==='1'?'[EDICIÓN TÉCNICA POST-CIERRE]':'[REGISTRO TÉCNICO]'} ${comment}`,author:p.technicalEditedBy,authorName:p.technicalEditedBy,createdAt:nowISO()};
       await put('planComments',rec);await queue('CREATE','planComments',rec);
@@ -3388,7 +3718,7 @@ async function submitFinishActivityOnce(e){
     const _corrected=(p.reagentResult?.items||[]).filter(x=>x.initialWeightCorrected);
     if(_corrected.length)await audit('CORREGIR_PESO_INICIAL_REACTIVO','MI JORNADA',p.code,`${p.technicalEditedBy} corrigió peso inicial de: ${_corrected.map(x=>`${x.name} (${x.initialWeight} g)`).join(', ')}`);
     technicalSnapshot='';$('#finishActivityDialog').close();$('#finishTechnicalEditMode').value='0';
-    toast(mode==='1'?'Datos técnicos actualizados · sin nueva notificación':'Datos técnicos guardados · sin notificar · ahora puede finalizar cuando corresponda');
+    toast(stockRequestPending(p.reagentResult)?'Datos guardados · consumo pendiente de confirmación automática':mode==='1'?'Datos técnicos actualizados · sin nueva notificación':'Datos técnicos guardados · puede solicitar el cierre cuando corresponda');
     await renderMyDay();return;
   }
 
@@ -3439,7 +3769,7 @@ async function reflowAnalystDay(date,analystId,orderedIds,reason='REORDENAR'){
     if(!slot)throw new Error(`No existe espacio laboral suficiente para ${p.catalogName}`);
     const old=`${p.startTime}-${p.endTime}`;
     p.startTime=minutesToTime(slot.start);p.endTime=minutesToTime(slot.end);p.analystOrder=order++;p.updatedAt=nowISO();
-    await put('planning',p);await queue('UPDATE','planning',p);virtual.push({...p});
+    await persistPlanningChange(p);virtual.push({...p});
     if(old!==`${p.startTime}-${p.endTime}`)changes.push(`${p.catalogName}: ${old} → ${p.startTime}-${p.endTime}`);
   }
   await audit(reason,'MI JORNADA',analystId,changes.length?changes.join(' · '):'Cambio de prioridad sin modificación horaria');
@@ -3467,7 +3797,7 @@ async function restoreBossSchedule(date,analystId){
   for(const p of list){
     if(p.status==='PROGRAMADO'&&p.originalStartTime){
       p.startTime=p.originalStartTime;p.endTime=p.originalEndTime;p.analystOrder=null;p.updatedAt=nowISO();
-      await put('planning',p);await queue('UPDATE','planning',p);changed++;
+      await persistPlanningChange(p);changed++;
     }
   }
   if(changed){await audit('RESTAURAR_PLAN_JEFE','MI JORNADA',analystId,`${changed} actividad(es) restauradas al horario original`);toast('Planificación original restaurada')}
@@ -3616,6 +3946,7 @@ async function renderMyDay(){
   const date=$('#myDayDate').value,analystId=$('#myDayAnalyst').value;
   await renderMyDayControlCharts(date,analystId);
   const myDayOutbox=await getAll('outbox');
+  const stockIssues=(await getAll('config')).filter(x=>String(x.key).startsWith('stockIssue:'));
   const plans=(await visiblePlanningRows()).filter(p=>p.date===date&&p.analystId===analystId&&p.status!=='CANCELADO').sort((a,b)=>a.startTime.localeCompare(b.startTime));
   $('#myDayEmpty').classList.toggle('hidden',plans.length>0);
   const a=(await getAll('analysts')).find(x=>x.id===analystId);
@@ -3711,7 +4042,7 @@ async function renderMyDay(){
     if(late)smartDetail=`${Math.max(1,nowMin-st)} min desde la hora planificada`;
     else if(isNext&&today)smartDetail=`Comienza en ${Math.max(0,st-nowMin)} min`;
     const flex=p.status==='PROGRAMADO'?`<div class="flex-order-actions"><button class="icon-order" title="Subir prioridad" data-move-up="${p.id}">↑</button><button class="icon-order" title="Bajar prioridad" data-move-down="${p.id}">↓</button><button class="btn secondary compact" data-prioritize="${p.id}">⇥ Hacer primero</button></div>`:'';
-    const action=p.status==='PROGRAMADO'
+    const action=p.pendingClosure?`<span class="done-pill" style="background:#fff1d6;color:#754800">Cierre pendiente · ${formatActualStamp(p.pendingClosure.requestedAt)}</span><button class="btn secondary" data-retry-closure="${p.id}">Comprobar confirmación</button>`:p.status==='PROGRAMADO'
       ?(futureDay?`${flex}<button class="btn secondary myday-action future-locked" disabled>🗓 Disponible el ${formatShortDate(p.date)}</button>`:`${flex}<button class="btn primary myday-action" data-start-activity="${p.id}">▶ Iniciar actividad</button>`)
       :p.status==='EN PROCESO'
         ?joeClosureConflict?(currentSessionUser?.role==='JEFE'?`<button type="button" class="btn secondary myday-action" data-joe-reconcile="${escapeHtml(p.id)}">🔎 Verificar y conciliar cierre en Firebase (JEFE)</button>`:`<button class="btn secondary myday-action" disabled title="Existe evidencia de finalización; requiere conciliación por JEFE">⚠ Cierre pendiente de conciliación</button>`):`<button class="btn primary myday-action" data-finish-activity="${p.id}">✓ Finalizar actividad</button>`
@@ -3742,6 +4073,7 @@ async function renderMyDay(){
         ${ss.length?`<details class="myday-breakdown compact-breakdown" data-ui-key="breakdown-${p.id}"><summary>Ver desglose · ${ss.length} subactividades</summary><div>${ss.map(x=>`<span>• ${escapeHtml(x.name)} · ${minutesText(x.minutes)}</span>`).join('')}</div></details>`:''}
         ${requiresActualSamples(p.section)?`<div class="operational-samples-panel"><div><b>📋 Registro de muestras</b><small>${p.actualSamples!==null&&p.actualSamples!==undefined?`${p.actualSamples} muestras · ${Object.keys(p.sampleParameterCounts||{}).length} parámetros registrados`:'Pendiente: registre las muestras por parámetro'}</small></div><button type="button" class="btn secondary compact" data-operational-samples="${p.id}">${p.status==='REALIZADO'?'Ver muestras':'Registrar muestras'}</button></div>`:''}
         ${technicalRequirementMenuHtml(p,_req)}
+        ${stockRequestPending(p.reagentResult)&&stockIssues.some(x=>x.key==='stockIssue:'+p.id)?`<div class="inline-alert info"><b>Consumo guardado · confirmación pendiente</b><p>${escapeHtml(stockIssues.find(x=>x.key==='stockIssue:'+p.id).value.message)}</p><small>No vuelva a registrar el consumo. El sistema lo reintenta conservando su evidencia.</small></div>`:''}
         ${hasHeldConsumption?`<div style="padding:12px;border:1px solid #b98320;border-radius:10px;background:#fff8e8"><b>Consumo original retenido en conflictos</b><p>Existe un registro anterior de consumo que difiere de la copia local actual. Requiere revisión del JEFE antes de recuperar el cierre.</p>${currentSessionUser?.role==='JEFE'?`<button type="button" class="btn primary" data-chief-recover-reagents="${escapeHtml(p.id)}">Revisar consumo original y conciliar cierre · JEFE</button>`:'<small>Ingrese con la cuenta del JEFE en esta misma computadora y navegador.</small>'}</div>`:''}
         <div class="myday-actions-row">${action}</div>${actual}
         <details class="comment-thread compact-comments" data-ui-key="comments-${p.id}" ${comments.length?'open':''}>
@@ -3891,14 +4223,14 @@ async function applyBossRecommendation(recId){
   if(!confirm(`¿Aplicar esta propuesta?\n\n${r.title}\n${r.start}–${r.end}\n\nQuedará registrada en trazabilidad.`))return;
   if(!p.originalAnalystId){p.originalAnalystId=p.analystId;p.originalAnalystName=p.analystName;p.originalStartTime=p.originalStartTime||p.startTime;p.originalEndTime=p.originalEndTime||p.endTime}
   p.analystId=r.analystId;p.analystName=r.analystName;p.startTime=r.start;p.endTime=r.end;p.updatedAt=nowISO();p.aiOptimized=true;
-  await put('planning',p);await queue('UPDATE','planning',p);
+  await persistPlanningChange(p);
   await audit('APLICAR_RECOMENDACION_IA','PLANIFICADOR',p.code,`${p.catalogName}: ${p.originalAnalystName||'—'} → ${r.analystName} · ${r.start}-${r.end}`);
   toast('Propuesta aplicada');
   await refreshPlanner();await analyzeBossDay();await renderMyDay();
 }
 
 async function renderAgenda(){if(!$('#agendaBody'))return;const date=$('#planDate').value,st=$('#agendaStatus').value;let data=(await visiblePlanningRows()).filter(p=>p.date===date&&(!st||p.status===st));data.sort((a,b)=>a.startTime.localeCompare(b.startTime)||a.analystName.localeCompare(b.analystName,'es'));$('#agendaEmpty').classList.toggle('hidden',data.length>0);$('#agendaTableWrap').classList.toggle('hidden',data.length===0);const steps=await getAll('compositeSteps'),comments=await getAll('planComments');$('#agendaBody').innerHTML=data.map(p=>{const ss=steps.filter(s=>s.catalogId===p.catalogId).sort((a,b)=>a.order-b.order),cc=comments.filter(c=>c.planId===p.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));const detail=ss.length?`<div class="agenda-detail">${ss.map(s=>`${escapeHtml(s.name)} (${minutesText(s.minutes)})`).join(' · ')}</div>`:'';const note=p.notes?`<div class="agenda-note"><b>Jefe:</b> ${escapeHtml(p.notes)}</div>`:'';const comm=cc.length?`<div class="agenda-comments"><b>Analista (${cc.length}):</b> ${cc.map(c=>escapeHtml(c.text)).join(' · ')}</div>`:'';return `<tr><td><b>${p.startTime}-${p.endTime}</b></td><td>${escapeHtml(p.analystName)}</td><td>${escapeHtml(sectionMeta(p.section).label)}</td><td><b>${escapeHtml(p.catalogName)}</b>${p.samples?`<div class="agenda-detail">${p.samples} muestras</div>`:''}${detail}${note}${comm}</td><td>${minutesText(p.durationMinutes)}</td><td><select class="status-select" data-plan-status="${p.id}"><option ${p.status==='PROGRAMADO'?'selected':''}>PROGRAMADO</option><option ${p.status==='EN PROCESO'?'selected':''}>EN PROCESO</option><option ${p.status==='REALIZADO'?'selected':''}>REALIZADO</option><option ${p.status==='CANCELADO'?'selected':''}>CANCELADO</option></select></td><td class="row-actions"><button data-plan-reassign="${p.id}" ${p.status!=='PROGRAMADO'?'disabled title="Solo disponible mientras está PROGRAMADO"':''}>Cambiar asignación</button><button data-plan-delete="${p.id}">Eliminar</button></td></tr>`}).join('');$$('[data-plan-status]').forEach(el=>el.onchange=()=>changePlanStatus(el.dataset.planStatus,el.value));$$('[data-plan-reassign]').forEach(el=>el.onclick=()=>openReassignPlan(el.dataset.planReassign));$$('[data-plan-delete]').forEach(el=>el.onclick=()=>deletePlan(el.dataset.planDelete))}
-async function changePlanStatus(id,status){const p=await getOne('planning',id);if(!p)return;p.status=status;p.updatedAt=nowISO();await put('planning',p);await queue('UPDATE','planning',p);await audit('CAMBIAR_ESTADO','PLANIFICADOR',p.code,`${p.catalogName}: ${status}`);toast('Estado actualizado');if(typeof refreshPlanner==='function')await refreshPlanner();await renderAudit()}
+async function changePlanStatus(id,status){if(status==='REALIZADO')return toast('Use el cierre de Mi Jornada para confirmar datos y avisos.');const p=await getOne('planning',id);if(!p)return;p.status=status;p.updatedAt=nowISO();await persistPlanningChange(p);await audit('CAMBIAR_ESTADO','PLANIFICADOR',p.code,`${p.catalogName}: ${status}`);toast('Estado actualizado');if(typeof refreshPlanner==='function')await refreshPlanner();await renderAudit()}
 async function openReassignPlan(id){
   if(currentSessionUser?.role!=='JEFE')return toast('Solo JEFE puede cambiar asignaciones');
   const p=await getOne('planning',id);if(!p)return toast('No se encontró la planificación');
@@ -3928,7 +4260,7 @@ async function saveReassignPlan(ev){
   const oldAnalyst=p.analystName,oldStart=p.startTime,oldEnd=p.endTime;
   if(!p.originalAnalystId){p.originalAnalystId=p.analystId;p.originalAnalystName=p.analystName;p.originalStartTime=p.startTime;p.originalEndTime=p.endTime}
   p.analystId=a.id;p.analystCode=a.code;p.analystName=a.name;p.startTime=start;p.endTime=minutesToTime(addWorkingMinutes(startMin,dur));p.updatedAt=nowISO();p.reassignedAt=nowISO();
-  await put('planning',p);await queue('UPDATE','planning',p);
+  await persistPlanningChange(p);
   await audit('CAMBIAR_ASIGNACION','PLANIFICADOR',p.code,`${p.catalogName}: ${oldAnalyst} ${oldStart}-${oldEnd} → ${a.name} ${p.startTime}-${p.endTime}`);
   $('#reassignPlanDialog').close();toast('Asignación cambiada sin perder trazabilidad');await refreshPlanner();await renderAudit();
   if(firebaseBridge.ready&&firebaseBridge.authUser)await flushOutbox(false);
@@ -4282,7 +4614,7 @@ async function savePlanningEdit(e){
   if(conflict)return alert(`No se puede guardar: existe cruce con "${conflict.catalogName}" (${conflict.startTime}-${conflict.endTime}).`);
   const before=`${p.date} · ${p.analystName} · ${p.startTime}-${p.endTime}`;
   p.date=date;p.analystId=analyst.id;p.analystName=analyst.name;p.startTime=start;p.endTime=end;p.notes=$('#editPlanNotes').value.trim();p.updatedAt=nowISO();
-  await put('planning',p);await queue('UPDATE','planning',p);
+  await persistPlanningChange(p);
   await audit('EDITAR_PLANIFICACION','DASHBOARD GESTION',p.code,`${before} → ${p.date} · ${p.analystName} · ${p.startTime}-${p.endTime}`);
   $('#planningEditDialog').close();toast('Planificación actualizada');
   await renderManagementDashboard();await refreshPlanner();await renderMyDay();
@@ -4739,8 +5071,7 @@ async function propagateCatalogTechnicalConfigToOpenPlans(catalogRec){
     p.catalogConfigSyncedAt=nowISO();
     p.catalogConfigVersionAt=catalogRec.updatedAt;
     p.updatedAt=nowISO();
-    await put('planning',p);
-    await queue('UPDATE','planning',p);
+    await persistPlanningChange(p);
     changed++;
   }
   if(changed){
@@ -6102,6 +6433,7 @@ function applyRoleUI(){
   const allowed=ROLE_ACCESS[role]||[];
   $$('.nav-item').forEach(b=>b.classList.toggle('role-hidden',!allowed.includes(b.dataset.view)));
   if($('#sessionRoleBadge')){$('#sessionRoleBadge').textContent=role;$('#sessionRoleBadge').className=`role-badge role-${role.toLowerCase()}`}
+  if($('#btnSharedStock'))$('#btnSharedStock').classList.toggle('hidden',role!=='JEFE');
   if($('#btnBackup'))$('#btnBackup').classList.toggle('hidden',role!=='JEFE');if($('#btnNotifications'))$('#btnNotifications').classList.toggle('hidden',!currentSessionUser);
   if($('#myDayAnalyst')){
     if(role==='ANALISTA'){ $('#myDayAnalyst').value=currentSessionUser?.analystId||'';$('#myDayAnalyst').disabled=true }
@@ -6255,7 +6587,7 @@ async function saveMaster32(ev){
   const chosen=new Set($$('[data-master32-cat]:checked').map(e=>e.dataset.master32Cat));
   if(!chosen.size)return toast('Seleccione al menos un parámetro o actividad');
   const prev=products.find(x=>x.key===master32EditingKey),base=prev?.profile||{};
-  const changedStock=!prev||(mode==='COUNT'&&Number(base.stockQuantity)!==stock);
+  const changedStock=!prev||(mode==='COUNT'&&Number(base.stockQuantity)!==stock)||(mode==='WEIGHT'&&JSON.stringify(base.containers||[])!==JSON.stringify(master32Containers));
   const changedIdentity=master32EditingKey&&master32EditingKey!==newKey;
   const now=nowISO();
   const profile={...base,id:base.id||uid('REA'),name,lot,mode,unit:mode==='WEIGHT'?'g':unit,stockQuantity:mode==='WEIGHT'?null:stock,physicalState:mode==='WEIGHT'?physicalState:null,density:mode==='WEIGHT'&&physicalState==='LIQUID'?Number(density):null,containers:mode==='WEIGHT'?master32Containers.map(c=>({...c,lot:c.lot||lot})):[],productType:$('#master32Type').value,brand:$('#master32Brand').value.trim(),presentation:$('#master32Presentation').value.trim(),inventoryStatus:mode==='WEIGHT'?'ACTIVO':stock<=0?'AGOTADO':'ACTIVO',...(changedStock?{stockAdjustedAt:now}:{})};
@@ -6734,3 +7066,6 @@ document.getElementById('finishActivityDialog')?.addEventListener('cancel',e=>{
   }
   setInterval(mount,2000);if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
 })();
+
+setInterval(()=>settleSharedStockRequests().catch(console.warn),30000);
+if($('#btnSharedStock'))$('#btnSharedStock').onclick=showSharedStockPending;

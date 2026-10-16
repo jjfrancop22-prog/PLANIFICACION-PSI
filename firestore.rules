@@ -8,12 +8,122 @@ service cloud.firestore {
     }
     function activeUser() { return signedIn() && userProfile().data.status == 'ACTIVO'; }
     function isBoss() { return activeUser() && userProfile().data.role == 'JEFE'; }
+    function ownsPlan() { return isBoss() || (activeUser() && resource.data.analystId == userProfile().data.analystId && request.resource.data.analystId == resource.data.analystId && request.resource.data.get('date', null) == resource.data.get('date', null) && request.resource.data.get('catalogId', null) == resource.data.get('catalogId', null)); }
+    function stockReady(result) {
+      return !(result is map) || !('stockRequest' in result) || result.stockRequest.state == 'APPLIED';
+    }
+    function validStockResult(id) {
+      let before = resource.data.get('reagentResult', null);
+      let after = request.resource.data.get('reagentResult', null);
+      return before == after || (isBoss() && stockReady(after) && (!(after is map) || after.get('schemaVersion', 0) != 2)) || (
+        after is map && after.get('schemaVersion', 0) == 2 && (
+          validStockReceipt(id) || (
+            after.stockRequest.planId == id && after.stockRequest.state == 'PENDING' &&
+            after.stockRequest.get('appliedRows', []).size() == 0 &&
+            (!(before is map) || !('stockRequest' in before) || before.stockRequest.state == 'APPLIED') &&
+            (isBoss() || after.stockRequest.requestedByUID == request.auth.uid) &&
+            after.get('inventoryCommittedAt', null) == (before is map ? before.get('inventoryCommittedAt', null) : null)
+          ) || (isBoss() && before is map && after.items == before.items &&
+            after.stockRequest.diff(before.stockRequest).affectedKeys().hasOnly(['revalidatedAt', 'revalidatedBy']))
+        )
+      );
+    }
+    function validStockReceipt(id) {
+      let before = resource.data.get('reagentResult', null);
+      let after = request.resource.data.get('reagentResult', null);
+      return before == after || (after is map && after.get('schemaVersion', 0) == 2 && after.stockRequest.get('lastReceiptId', null) != null &&
+        getAfter(/databases/$(database)/documents/stockReceipts/$(after.stockRequest.lastReceiptId)).data.recordId == id &&
+        getAfter(/databases/$(database)/documents/stockReceipts/$(after.stockRequest.lastReceiptId)).data.requestId == after.stockRequest.id &&
+        getAfter(/databases/$(database)/documents/stockReceipts/$(after.stockRequest.lastReceiptId)).data.result == after);
+    }
+    function atomicClosure(id) {
+      let finalId = 'AUTO-FINAL-' + id;
+      let technicalId = 'AUTO-TECNICA-FINAL-' + id;
+      let closing = request.resource.data.status == 'REALIZADO' && resource.data.status != 'REALIZADO';
+      return !closing || (
+        request.resource.data.get('completionCommittedAt', null) != null && stockReady(request.resource.data.get('reagentResult', null)) &&
+        getAfter(/databases/$(database)/documents/planComments/$(finalId)).data.planId == id &&
+        getAfter(/databases/$(database)/documents/planComments/$(finalId)).data.lifecycleStage == 'FINALIZACION' &&
+        getAfter(/databases/$(database)/documents/planComments/$(finalId)).data.closureEvidence.finishedAt == request.resource.data.actualFinishedAt &&
+        getAfter(/databases/$(database)/documents/planComments/$(technicalId)).data.planId == id
+      );
+    }
 
     match /users/{userId} {
       allow read: if signedIn() && (request.auth.uid == userId || isBoss());
       allow create, update, delete: if isBoss();
     }
-    match /catalog/{id} { allow read: if activeUser(); allow write: if isBoss(); }
+    function ownRecord(p) { return isBoss() || (activeUser() && p.analystId == userProfile().data.analystId); }
+    function validWeightEnv(a, b, row) {
+      let e = row.containers[b.stockInputIndex];
+      return b.diff(a).affectedKeys().hasOnly(['initialWeight', 'status', 'stockInputIndex']) &&
+        (e.containerId == a.id || (e.label == a.label && e.get('containerType', 'FRASCO') == a.get('containerType', 'FRASCO'))) &&
+        e.initialWeight == a.initialWeight && e.finalWeight == b.initialWeight &&
+        b.initialWeight is number && b.initialWeight >= 0 && b.initialWeight <= a.initialWeight;
+    }
+    function validEnvAt(a, b, row, i) {
+      return i >= a.size() || a[i] == b[i] || validWeightEnv(a[i], b[i], row);
+    }
+    function validStockMovement(a, b, q, receipt) {
+      let row = q.rows[b.stockRequestRow];
+      return b.stockPlanId == q.planId && b.stockLedgerOperationId == receipt.id && b.stockRequestRow == receipt.rowIndex &&
+        row.name == a.name && row.get('lot', '') == a.get('lot', '') && row.mode == a.mode &&
+        row.usedInActivity == true && row.notUsed == false &&
+        ((a.mode == 'COUNT' && row.unit == a.get('unit', 'unidad') && row.used is number && row.used > 0 &&
+          b.stockQuantity is number && b.stockQuantity >= 0 && b.stockQuantity == a.stockQuantity - row.used &&
+          b.get('containers', null) == a.get('containers', null)) ||
+         (a.mode == 'WEIGHT' && b.get('stockQuantity', null) == a.get('stockQuantity', null) &&
+          a.containers.size() == b.containers.size() && a.containers.size() <= 5 &&
+          validEnvAt(a.containers, b.containers, row, 0) && validEnvAt(a.containers, b.containers, row, 1) &&
+          validEnvAt(a.containers, b.containers, row, 2) && validEnvAt(a.containers, b.containers, row, 3) &&
+          validEnvAt(a.containers, b.containers, row, 4)));
+    }
+    function analystStockOnly() {
+      let next = request.resource.data;
+      let p = get(/databases/$(database)/documents/planning/$(next.lastStockPlanId)).data;
+      let q = p.reagentResult.stockRequest;
+      let receipt = getAfter(/databases/$(database)/documents/stockReceipts/$(next.lastStockReceiptId)).data;
+      let a = resource.data.reagentConfig;
+      let b = next.reagentConfig;
+      let i = next.lastStockCatalogRow;
+      return activeUser() && p.status == 'EN PROCESO' && ownRecord(p) && q.state == 'PENDING' &&
+        receipt.requestId == q.id && receipt.recordId == p.id &&
+        receipt.result == getAfter(/databases/$(database)/documents/planning/$(p.id)).data.reagentResult &&
+        next.diff(resource.data).affectedKeys().hasOnly(['reagentConfig', 'updatedAt', '_cloudUpdatedAt',
+          'inventoryProtocol', 'inventoryRevision', 'lastStockReceiptId', 'lastStockPlanId', 'lastStockCatalogRow']) &&
+        next.inventoryProtocol == 2 && next.inventoryRevision == resource.data.get('inventoryRevision', 0) + 1 &&
+        i is int && i >= 0 && i < a.size() && a.size() == b.size() &&
+        a.toSet().size() == a.size() && b.toSet().size() == b.size() &&
+        a.removeAll([a[i]]) == b.removeAll([b[i]]) &&
+        b[i].diff(a[i]).affectedKeys().hasOnly(['stockQuantity', 'containers', 'inventoryStatus',
+          'stockLedgerOperationId', 'stockLedgerAt', 'stockPlanId', 'stockRequestRow']) && validStockMovement(a[i], b[i], q, receipt);
+    }
+    function validReceipt(id) {
+      let r = request.resource.data;
+      let p = get(/databases/$(database)/documents/planning/$(r.recordId)).data;
+      let q = p.reagentResult.stockRequest;
+      let done = q.get('appliedRows', []).concat([r.rowIndex]);
+      return activeUser() && ownRecord(p) && p.status == 'EN PROCESO' && q.state == 'PENDING' &&
+        r.requestId == q.id && r.id == id && r.actorUID == request.auth.uid && r.requestSignature == q.signature &&
+        r.rowIndex is int && r.rowIndex >= 0 && r.rowIndex < q.rows.size() && !q.get('appliedRows', []).hasAny([r.rowIndex]) &&
+        r.result.stockRequest.diff(q).affectedKeys().hasOnly(['state', 'appliedAt', 'appliedBy', 'appliedRows', 'lastReceiptId']) &&
+        r.result.stockRequest.appliedRows == done && r.result.stockRequest.lastReceiptId == id &&
+        r.result.stockRequest.state == (done.size() == q.rows.size() ? 'APPLIED' : 'PENDING') &&
+        getAfter(/databases/$(database)/documents/planning/$(r.recordId)).data.reagentResult == r.result;
+    }
+    match /stockReceipts/{id} {
+      allow read: if activeUser();
+      allow create: if validReceipt(id);
+      allow update, delete: if false;
+    }
+    match /catalog/{id} {
+      allow read: if activeUser();
+      allow create, delete: if isBoss();
+      allow update: if (isBoss() && (resource.data.get('inventoryProtocol', 0) != 2 || (
+        request.resource.data.get('inventoryProtocol', 0) == 2 &&
+        request.resource.data.get('inventoryRevision', -1) == resource.data.get('inventoryRevision', 0) + 1
+      ))) || (request.resource.data.get('lastStockPlanId', null) is string && analystStockOnly());
+    }
     match /timeRules/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /compositeSteps/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /analysts/{id} { allow read: if activeUser(); allow write: if isBoss(); }
@@ -22,7 +132,7 @@ service cloud.firestore {
       allow create, delete: if isBoss();
       // El cierre confirmado es irreversible mediante sincronización ordinaria.
       // No afecta actividades sin cierre ni la edición de otros campos.
-      allow update: if activeUser() && (
+      allow update: if activeUser() && ownsPlan() && validStockResult(id) && atomicClosure(id) && (
         !(resource.data.status == 'REALIZADO' || resource.data.get('completionCommittedAt', null) != null)
         || (request.resource.data.status == 'REALIZADO' && request.resource.data.get('completionCommittedAt', null) != null)
       );
