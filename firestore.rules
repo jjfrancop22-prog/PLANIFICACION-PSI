@@ -41,6 +41,15 @@ service cloud.firestore {
       allow update: if activeUser();
       allow delete: if isBoss();
     }
+    // Diagnóstico por usuario: JEFE ve todo; cada analista solo su documento.
+    match /syncHealth/{userId} {
+      allow read: if isBoss() || (activeUser() && request.auth.uid == userId);
+      allow create, update: if activeUser() && request.auth.uid == userId
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.role == userProfile().data.role
+        && request.resource.data.name == userProfile().data.name;
+      allow delete: if false;
+    }
     match /audit/{id} {
       allow read: if isBoss();
       allow create: if activeUser();

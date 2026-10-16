@@ -1,0 +1,7 @@
+MONITOR DISTRIBUIDO V28.21.51 - PRUEBA
+Publicar firestore.rules antes de probar.
+Diagnósticos en syncHealth/{uid}; JEFE lectura global, analista lectura propia.
+Heartbeat cada 45 segundos con sesión activa; al estar desconectado no puede avisar al JEFE.
+No se alteran las operaciones ni la cola de sincronización.
+La detección de operaciones confirmadas se basa en ACK local de outbox, no en verificación independiente de cada consumo.
+No incluye push con navegador cerrado.

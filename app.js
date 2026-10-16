@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.49';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.51';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -3319,7 +3319,7 @@ async function showActivityCloudClosureResult(p){
   await refreshSyncUI();
 }
 
-// V28.21.49 · Prevalidación autoritativa antes de generar un cierre local.
+// V28.21.51 · Prevalidación autoritativa antes de generar un cierre local.
 // Si la red, los permisos o la revisión remota fallan, no se escribe REALIZADO.
 async function requireAuthoritativeActivityClosure(p){
   const sdk=firebaseBridge?.mods;
