@@ -1,0 +1,1 @@
+Se alinearon APP_VERSION, indicador lateral, CURRENT, cache Service Worker y parámetros de scripts con V28.21.53. Sin modificaciones de lógica operativa ni reglas Firebase.

@@ -1,0 +1,1 @@
+V28.21.53: Clasificación de BLOQUEADO_PERMISOS como RETENIDA_PERMISOS (histórica/no confirmada), sin alarma crítica automática. Se muestran fechas de creación y retención. No se alteran outbox, escrituras operativas ni reglas de Firebase. Prueba primero en entorno separado.
