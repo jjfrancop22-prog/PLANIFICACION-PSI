@@ -1,0 +1,1 @@
+V28.21.57: corte histórico global desde 2026-10-16T14:43:35Z. Solo alertas de operaciones con fecha de creación posterior al corte; no se reactiva una incidencia antigua por reintentos o cambios de estado. Equipos sin contacto solo si reportaron después del corte. Los datos antiguos siguen en outbox y Firestore, ocultos del panel principal. No se modifican procesos ni reglas.
