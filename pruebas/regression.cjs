@@ -9,12 +9,12 @@ function extract(name){
  const end=first.endsWith('}')?lineEnd:source.indexOf('\n}',lineEnd)+2;
  const code=source.slice(start,end);new Function(code);return code;
 }
-const names=['queue','saveOutboxAttempt','persistPlanningChange','prepareStockRequest','recoveryReagentKey','sameStockRequest','stockRequestApplied','stockRequestPending','validNewStockRequest','protectLocalTechnicalEvidence','makeAtomicClosureEvents','activityClosureEvidence','technicalAlertReagentSummary','mergeCatalogLedgerSafe','sameCloudFunctionalPayload','sameReagentConsumptionInput','commitReagentConsumption','completeActivityRecord','samePlanningTechnicalValue','planningOperationCoveredByCloud','verifyActivityCloudClosure','retryLocalActivityClosure','flushOutbox','ensureConfirmedClosureAlerts','closureNeedsCloudConfirmation','submitFinishActivity','submitFinishActivityOnce'];
+const names=['queue','saveOutboxAttempt','sameCloudFunctionalPayload','sameReagentConsumptionInput','commitReagentConsumption','completeActivityRecord','samePlanningTechnicalValue','planningOperationCoveredByCloud','verifyActivityCloudClosure','retryLocalActivityClosure','flushOutbox','ensureConfirmedClosureAlerts','closureNeedsCloudConfirmation','submitFinishActivity','submitFinishActivityOnce'];
 const context=vm.createContext({console,structuredClone,Date,Math,JSON,Set,Map,Promise,Error,Number,String,Object,Array,setTimeout,clearTimeout,navigator:{onLine:true},indexedDB:memory});
 const page={addScriptTag:async({content})=>vm.runInContext(content,context),evaluate:async fn=>vm.runInContext('('+fn.toString()+')()',context)};
 (async()=>{
  await page.addScriptTag({content:`
- var db,currentSessionUser={role:'ANALISTA',analystId:'A',name:'Analista'},firebaseBridge={ready:true,authUser:{},configured:true,mods:{},db:{},busy:false},PAGE_SESSION_ID='TEST',confirmedCloudClosureIds=new Set(),reagentSaveLocks=new Set();
+ var db,currentSessionUser={role:'ANALISTA',analystId:'A',name:'Analista'},firebaseBridge={ready:true,authUser:{},configured:true,mods:{},db:{},busy:false},PAGE_SESSION_ID='TEST',confirmedCloudClosureIds=new Set();
  var FIREBASE_SYNC_STORES=['planning','planComments','catalog'];
  var inventoryWrites=0,propagations=0,alerts=[],renders=0,cloud={},outboxRetryNotBefore=0,redundantConflictLastCheck=0;
  var serial=0;function uid(prefix){return prefix+'-'+(++serial)}function nowISO(){return new Date().toISOString()}
@@ -22,11 +22,11 @@ const page={addScriptTag:async({content})=>vm.runInContext(content,context),eval
  function planStage(s){return ({'PROGRAMADO':0,'EN PROCESO':1,'REALIZADO':2,'CANCELADO':3})[s]??-1}
  function isProgressivePlanUpdate(a,b){return !!a&&planStage(b.status)>planStage(a.status)&&planStage(a.status)>=0}
  function normalizeIdentityText(s){return String(s).toUpperCase()}
- async function settleSharedStockRequests(){}async function refreshSyncUI(){}function scheduleOutboxFlush(){}function setSyncState(){}function setSyncStateVisualOnly(){}function toast(){}
+ async function refreshSyncUI(){}function scheduleOutboxFlush(){}function setSyncState(){}function setSyncStateVisualOnly(){}function toast(){}
  function quotaPauseRemaining(){return 0}function clearFirebaseQuotaBackoff(){}function isFirebaseQuotaError(){return false}
  async function applyConfirmedReagentInventoryToCatalog(){inventoryWrites++}async function propagateLiveInventoryToOpenPlans(){propagations++}
  async function audit(){}async function renderMyDay(){renders++}async function renderAgenda(){}async function renderDailyLoad(){}async function renderAudit(){}async function renderManagementDashboard(){}
- function releaseActivityCompletion(){}async function showActivityCloudClosureResult(){}function formatActualStamp(s){return s}
+ async function requireAuthoritativeActivityClosure(){}function releaseActivityCompletion(){}async function showActivityCloudClosureResult(){}function formatActualStamp(s){return s}
  function assertOwnPlan(p){return p.analystId==='A'}function alert(s){alerts.push(s)}
  async function reconcileRedundantPlanningConflicts(){return 0}
  async function createActivityLifecycleAlert(p){return {id:'AUTO-FINAL-'+p.id,planId:p.id}}
@@ -40,7 +40,7 @@ const page={addScriptTag:async({content})=>vm.runInContext(content,context),eval
  `+names.map(extract).join('\n')});
  const result=await page.evaluate(async()=>{
   const tests=[];const check=(condition,label)=>{if(!condition)throw Error(label);tests.push(label)};
-  db=await new Promise((resolve,reject)=>{const r=indexedDB.open('closure-regression',1);r.onupgradeneeded=()=>{for(const name of ['outbox','planning','catalog','planComments','config','audit'])r.result.createObjectStore(name,{keyPath:name==='config'?'key':'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
+  db=await new Promise((resolve,reject)=>{const r=indexedDB.open('closure-regression',1);r.onupgradeneeded=()=>{for(const name of ['outbox','planning','catalog','planComments','config'])r.result.createObjectStore(name,{keyPath:name==='config'?'key':'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
   const item={reagentId:'R',name:'Reactivo',lot:'L',mode:'COUNT',unit:'unidad',stockBefore:99,used:4,stockRemaining:95,usedInActivity:true,notUsed:false};
   let p={id:'P',analystId:'A',date:'2026-10-15',status:'EN PROCESO',actualStartedAt:'2026-10-15T13:23:00Z',actualSamples:5,sampleParameterCounts:{DQO:5},reagentResult:{completed:true,items:[item],inventoryCommittedAt:'saved',inventorySignature:'original'}};
   const saved=JSON.stringify(p.reagentResult);
@@ -63,7 +63,7 @@ const page={addScriptTag:async({content})=>vm.runInContext(content,context),eval
   cloud['planning/P']=structuredClone(p);await put('planning',closed);
   await flushOutbox(false);
   check(cloud['planning/P'].status==='REALIZADO'&&cloud['planning/P'].reagentResult.items[0].stockRemaining===95,'Transacción confirma cierre sobre evidencia técnica idéntica sin repetir consumo');
-  check(!!cloud['planComments/AUTO-FINAL-P']&&!!cloud['planComments/AUTO-TECNICA-FINAL-P'],'Cierre y avisos determinísticos se guardan en la misma transacción');
+  check((await getAll('outbox')).some(x=>x.recordId==='AUTO-FINAL-P')&&(await getAll('outbox')).some(x=>x.recordId==='AUTO-TECNICA-FINAL-P'),'Cierre confirmado genera avisos determinísticos de cierre y datos técnicos');
   await flushOutbox(false);
   check(!!cloud['planComments/AUTO-FINAL-P'],'Aviso de cierre llega al servidor simulado');
   await queue('UPDATE','planning',p);await flushOutbox(false);
@@ -85,14 +85,13 @@ const page={addScriptTag:async({content})=>vm.runInContext(content,context),eval
   check(inventoryWrites===writesBefore&&JSON.stringify(replay.reagentResult)===saved,'Completar actividad conserva el objeto de consumo confirmado');
   const dif={...structuredClone(closed),sampleParameterCounts:{DQO:6}};
   check(!planningOperationCoveredByCloud(dif,closed),'Conciliación no archiva diferencias en muestras por parámetro');
-  confirmedCloudClosureIds.delete(closed.id);
   check(closureNeedsCloudConfirmation(closed,[]),'Cierre local legado se identifica aunque el conflicto no conserve payload REALIZADO');
   confirmedCloudClosureIds.add(closed.id);
   check(!closureNeedsCloudConfirmation(closed,[]),'Cierre observado como REALIZADO en Firebase deja de mostrarse pendiente');
   const fresh={id:'NEW',analystId:'A',status:'EN PROCESO'};await put('catalog',{id:'CAT',reagentConfig:[{name:'Reactivo',lot:'L',stockQuantity:99}]});
   const first={completed:true,items:[{...item,stockBefore:264,stockRemaining:260}]};
   const countBefore=inventoryWrites;await commitReagentConsumption(fresh,first);
-  check(fresh.reagentResult.stockRequest.state==='PENDING'&&inventoryWrites===countBefore,'El primer guardado conserva una solicitud durable sin descontar inventario local');
+  check(fresh.reagentResult.items[0].stockBefore===99&&fresh.reagentResult.items[0].stockRemaining===95&&inventoryWrites===countBefore+1,'Primer guardado toma el saldo disponible y aplica un solo movimiento local');
   return tests;
  });
  const submission=await page.evaluate(async()=>{

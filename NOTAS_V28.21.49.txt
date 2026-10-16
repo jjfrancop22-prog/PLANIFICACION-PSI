@@ -1,0 +1,8 @@
+V28.21.49 — CONTROL PREVENTIVO (base V28.21.48)
+- Antes de finalizar, comprueba en el servidor Firebase la apertura, propiedad de la actividad y ausencia de conflictos o revisiones pendientes.
+- Sin conexión confirmada no se inicia un cierre nuevo ni se registra un consumo nuevo.
+- Se conservan formularios, recuperación TNT874 y reglas de Firestore V48 sin cambios.
+- No modifica inventario histórico ni los 17 conflictos pendientes.
+- IMPORTANTE: no es una transacción atómica de inventario y cierre. Para garantizar consistencia completa entre usuarios aún se requiere migrar ambos a una transacción única y probar con Firebase real.
+- Validación local: node --check, pruebas/regression.cjs y pruebas/recuperacion.cjs. No probado contra producción.
+- Hacer copia de seguridad antes de desplegar. Probar en sitio de ensayo con dos analistas y JEFE antes de reemplazar producción.

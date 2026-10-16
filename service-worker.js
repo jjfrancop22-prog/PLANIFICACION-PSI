@@ -1,5 +1,5 @@
-const SW_VERSION='V1.0.5.6.33.25.10.28.21.50';
-const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.10.28.21.50';
+const SW_VERSION='V1.0.5.6.33.25.10.28.21.49';
+const CACHE_NAME='erp-planificacion-v1.0.5.6.33.25.10.28.21.49';
 const APP_SHELL=[
   './','./index.html','./styles.css','./app.js','./firebase-config.js',
   './manifest.webmanifest','./version.json','./icons/icon-192.png','./icons/icon-512.png'
@@ -32,10 +32,11 @@ self.addEventListener('fetch',event=>{
     event.respondWith(
       fetch(req,{cache:'no-store'})
         .then(r=>{
-          if(r.ok){const copy=r.clone();caches.open(CACHE_NAME).then(c=>c.put(req,copy));}
+          const copy=r.clone();
+          caches.open(CACHE_NAME).then(c=>c.put(req,copy));
           return r;
         })
-        .catch(()=>caches.match(req,{ignoreSearch:true}).then(r=>r||(req.mode==='navigate'?caches.match('./index.html'):Response.error())))
+        .catch(()=>caches.match(req).then(r=>r||caches.match('./index.html')))
     );
     return;
   }

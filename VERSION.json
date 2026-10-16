@@ -1,8 +1,8 @@
 {
-  "version": "1.0.5.6.33.25.10.28.21.48",
-  "build": "V28.21.48",
-  "name": "CONCILIACION-CONSUMO-ORIGINAL-Y-CIERRE",
+  "version": "1.0.5.6.33.25.10.28.21.49",
+  "build": "V28.21.49",
+  "name": "PREVALIDACION-CIERRE-Y-CONSUMO",
   "date": "2026-10-15",
-  "notes": "JEFE puede revisar consumos adicionales originales conservados en Outbox, validar saldos actuales y recuperar consumo y cierre mediante una sola transacción con auditoría y avisos.",
-  "validation": "Pruebas locales con almacenamiento y Firestore simulados, incluidas reproducciones con ambos respaldos. Sin acceso a Firebase de producción."
+  "notes": "Prevalidación remota de apertura y cierre, bloqueo de cierres con conflictos y prevención de consumos nuevos sin conexión. Conserva conciliación V48.",
+  "validation": "Pruebas locales; requiere verificación real multiusuario antes de producción."
 }

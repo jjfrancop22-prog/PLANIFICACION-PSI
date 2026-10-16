@@ -1,79 +1,63 @@
-# ERP Planificación V28.21.50 — base V48, flujo de analistas con Spark
+# ERP Planificación V28.21.48 — recuperar consumo original y cierre
 
-Se partió del ZIP V28.21.48 aportado por el usuario. La numeración V50 distingue esta entrega. Se conserva la conciliación de V48 y se corrige el flujo diario sin depender de una sesión JEFE. El ZIP original permanece intacto; su huella está en BASE_ORIGINAL.json.
+## Hallazgo en los respaldos del 15 de octubre de 2026
 
-## Resultado para los analistas
+Archivos analizados: «JISPSON RESPALDO.json» (JEFE) y «RESPALDO_ERP_PLANIFICACION_V1.0.5.6.33.25.10.28.21.47_2026-10-15.json» (María Elena). Los originales se mantienen intactos y no se incluyen en el sitio.
 
-1. INICIAR: confirma EN PROCESO y la hora de inicio contra Firebase. Un doble clic o reintento conserva el inicio original.
-2. REGISTRAR MUESTRAS: conserva total y parámetros junto con la operación de envío en una transacción local.
-3. GUARDAR REACTIVOS: guarda una solicitud durable; la propia sesión del analista confirma sus consumos automáticamente. Cada fila se aplica con su constancia única y los saldos compartidos de ese lote en una transacción. Si se interrumpe una solicitud de varias filas, continúa por las no aplicadas; no repite las ya confirmadas. Cerrar la tarjeta no significa consumir de nuevo.
-4. FINALIZAR: guarda la hora solicitada y mantiene el cierre pendiente hasta confirmar el inventario. Después guarda REALIZADO y los dos avisos en la misma transacción. Mientras confirma, no permite cambiar las muestras o los consumos incluidos en ese cierre.
+Actividad: PLA-20261015-0384, Recepción de muestras e ingreso de OT (Alta demanda), María Elena, 15/10/2026.
 
-No requiere cambiar Spark a Blaze, activar Cloud Functions, instalar n8n ni mantener una sesión JEFE abierta. Requiere conexión, autenticación y cuota de Firestore disponible para confirmar. No procesa operaciones con la aplicación cerrada en todos los equipos: las conserva y continúa cuando el analista vuelve a abrirla.
+| Evidencia | Respaldo del JEFE | Respaldo de María Elena |
+|---|---|---|
+| Estado | EN PROCESO | REALIZADO local |
+| Inicio | 08:23 | 08:23 |
+| Cierre | Ausente | 16:10:53 |
+| Muestras | 5 | 5 |
+| Parámetros | DQO 4; DBO5 2; Tensoactivos 4 | Coinciden |
+| Kit DQO, lote AG2A1229 | 264 − 4 = 260 | Coincide |
+| TNT874, lote 26015 | Ausente del resultado de consumo; catálogo 99 | El conflicto original conserva 99 − 4 = 95; la copia posterior lo marca no utilizado con saldo 95 |
 
-## Instalación: aplicación Y reglas
+El consumo original de TNT874 está en la operación OUT-1792095479476-W56C1, registrado a las 15:17:59 del 15/10/2026. No es necesario inventar ni volver a ingresar las cuatro unidades: se recupera esa evidencia original.
 
-Actualizar solo Netlify no basta: las reglas de V48 impedían al analista confirmar el inventario compartido. Las reglas nuevas conceden un permiso acotado a descuentos documentados de sus propias actividades, sin autorizar edición administrativa de catálogo.
+Los 43 conflictos de María Elena son operaciones, no 43 actividades distintas. De ellos, 26 corresponden a esta actividad. Además existen 99 operaciones de catálogo BLOQUEADO_PERMISOS: la cuenta ANALISTA no tiene autorización para modificar el catálogo compartido.
 
-1. Exportar un respaldo actual en ambas computadoras. Conservar los datos del navegador, perfil y dirección del ERP.
-2. Coordinar la actualización sin registros en curso. Publicar todos los archivos de este paquete en el mismo repositorio/sitio GitHub-Netlify.
-3. Publicar el archivo **firestore.rules** completo de esta entrega en Firebase Console → proyecto **inventario-psi** → Firestore Database → Reglas → Publicar. No usar las reglas de V49.
+## Uso de la conciliación
 
-Alternativa mediante Terminal, desde la carpeta que contiene firebase.json:
+1. Publicar todos los archivos de V28.21.48 en el mismo sitio GitHub/Netlify.
+2. En la computadora de María Elena, conservar el mismo navegador, perfil y dirección. No borrar datos ni IndexedDB.
+3. Ingresar con la cuenta del JEFE. Entrar a Mi Jornada, seleccionar María Elena y el 15/10/2026.
+4. En Recepción aparecerá «Consumo original retenido en conflictos» y el botón «Revisar consumo original y conciliar cierre · JEFE».
+5. El botón consulta Firebase y prepara una confirmación con nombre, lote, cantidad original, saldo, muestras y hora de cierre. Revisar que corresponda a TNT874 lote 26015, 4 unidades, 99 → 95, cinco muestras y cierre original 16:10.
+6. Confirmar una vez. Esperar el mensaje «CONCILIACIÓN CONFIRMADA».
+7. En la computadora del JEFE, verificar REALIZADO, aviso de cierre y consumo, y saldo 95 del lote en las tres fichas compartidas. Las 4 unidades del kit DQO se conservan como estaban, sin otro descuento.
 
-```bash
-npx firebase-tools login
-npx firebase-tools deploy --only firestore:rules --project inventario-psi
-```
+La conciliación requiere JEFE y evidencia original local. Por eso debe ejecutarse en la computadora y navegador de María Elena que conservan los conflictos. La computadora del JEFE no dispone de esa cola local.
 
-4. Cerrar las pestañas antiguas del ERP y volver a abrirlo en cada computadora. Confirmar V28.21.50 tanto en el pie como en el indicador de versión. No borrar datos ni IndexedDB para actualizar.
-5. Hacer una prueba controlada: iniciar una actividad, registrar muestras, guardar un consumo, comprobar el saldo en otra computadora y finalizar una sola vez. Deben aparecer REALIZADO y los avisos. Comprobar de nuevo no debe cambiar el saldo.
-6. Si queda pendiente, conservar los datos y revisar el mensaje en la tarjeta. Un error de permisos exige comprobar que se publicaron estas reglas y que el usuario está vinculado al analista correcto. Si hay saldos realmente distintos, saldo insuficiente o un peso inicial ya modificado, exige revisión; no se inventa un saldo para mostrar verde.
+## Comportamiento y controles
 
-**No importar el ZIP como respaldo.** Es una actualización de archivos de aplicación. Los respaldos JSON son datos y se conservan aparte.
+- Compara identidad, inicio, muestras, parámetros y curvas contra el servidor. Las cantidades de reactivos ya confirmadas deben coincidir exactamente.
+- Solo recupera reactivos adicionales ausentes del resultado de Firebase, con consumo positivo y saldos aritméticamente consistentes en una operación original de Outbox.
+- Si hay varias evidencias originales con valores contradictorios, no elige una automáticamente.
+- Revalida dentro de una transacción el planning y las fichas del lote. Solo acepta el saldo original 99 o el saldo final 95. Un saldo diferente o un ajuste posterior bloquean el cambio completo.
+- Publica en la misma transacción el planning recuperado, las tres fichas de lote, la auditoría y dos avisos determinísticos. La hora de finalización sigue siendo la original; la fecha administrativa de conciliación se conserva aparte.
+- Conserva la fecha original del consumo; no lo convierte en un movimiento nuevo fechado en el momento de la conciliación.
+- Guarda en auditoría el resultado previo remoto, la copia local posterior y la operación original elegida. No elimina las revisiones: archiva únicamente las compatibles con la conciliación confirmada, conservando payload y error original.
+- En la reproducción de estos respaldos, 26 revisiones son archivables y 17 conflictos corresponden a otros registros y permanecen protegidos. El número real puede variar si los datos cambian antes de aplicar.
+- Si el consumo o saldo ya fue conciliado por esta acción, repetir el botón no vuelve a descontar.
+- No reactiva los 99 intentos administrativos bloqueados ni cambia las reglas de permisos de Firebase.
 
-## Los 17 conflictos existentes
+Esta herramienta recupera el caso documentado. No aplica una limpieza masiva de otros conflictos ni establece cuál versión de otros registros es correcta.
 
-Si ya quedaron 17 después de la conciliación, esos siguen siendo los pendientes actuales. Esta actualización no restaura los 43 ni vuelve a descontar los 26 conciliados. Tampoco borra o elige automáticamente versiones de los otros registros. No repetir la recuperación de María Elena si ya fue confirmada.
+## Validación realizada
 
-Se conserva «Revisar consumo original y conciliar cierre · JEFE» de V48 para el caso documentado que aún no se haya recuperado. Esa herramienta necesita los originales locales en la computadora de María Elena; el flujo de nuevas operaciones funciona con la cuenta del analista.
+23 comprobaciones previas de regresión y 20 comprobaciones específicas de recuperación en Node.js con Firestore y almacenamiento simulados. Las pruebas de recuperación también se ejecutaron con los valores de ambos respaldos reales: selección de la operación original, estado, saldos, tres fichas, cierre, auditoría, avisos, archivo de revisiones y repetición sin descuento adicional. Se comprobó que la condición y el HTML del botón funcionan con los datos de María Elena.
 
-## Protección aplicada
-
-- Los analistas solo pueden modificar sus actividades. Catálogos: solo pueden descontar la fila del reactivo correspondiente a una solicitud pendiente propia, con aritmética validada, sin cambiar nombre, lote, modo, precio, asignaciones ni aumentar stock.
-- En WEIGHT, el peso inicial debe coincidir con el compartido vigente y el final con la medición guardada. No se recalculan mediciones antiguas.
-- Resultado por fila, saldo de las fichas compartidas y constancia se confirman juntos. Las constancias son inmutables en la colección stockReceipts y se referencian desde la solicitud de planning. Las confirmaciones recibidas se copian al registro de auditoría local, incluido en el respaldo tradicional de ese equipo. El respaldo tradicional no es una exportación completa de todas las constancias de otros equipos del servidor.
-- Una respuesta perdida se recupera leyendo el estado confirmado. Las colisiones transitorias tienen reintentos acotados; cuota agotada o conexión caída activan espera.
-- Abrir una ficha no escribe planificación ni borra consumos. Un reactivo adicional conserva lo ya confirmado y añade únicamente su nuevo registro.
-- Los cierres confirmados no se reabren por una copia antigua. Los avisos determinísticos existentes no se vuelven a crear ni sobrescribir.
-- No se hace una descarga completa adicional de Firebase cada 30 segundos. El verificador consulta primero la cola local y solo procesa solicitudes pendientes propias; JEFE puede revisar pendientes, pero no es una dependencia del trabajo normal.
-
-Límites de esta entrega: hasta 16 filas de solicitud y 5 envases por reactivo para estas transacciones acotadas. El respaldo aportado tiene como máximo 10 reactivos por ficha y 2 envases. Una configuración que los supere se conserva pendiente con aviso para reorganizarla; no se salta la validación. Si un lote no tiene el mismo saldo en sus distintas fichas, la operación se detiene para conciliación. Las modificaciones administrativas de identidad/asignación de un lote con movimientos confirmados requieren revisión y no pueden eliminar su evidencia usando una copia antigua.
-
-La aplicación depende de las cuotas normales de Spark; no garantiza confirmación inmediata sin conexión ni ausencia absoluta de incidentes. Los datos pendientes son visibles y conservan su evidencia.
-
-## Pruebas realizadas
-
-- 23 comprobaciones de regresión local.
-- 24 comprobaciones de prevención con almacenamiento y servidor optimista simulados: concurrencia, doble clic, respuesta perdida, cola de consumo y cierre, stock insuficiente y protección de datos.
-- 20 comprobaciones de recuperación sintética. Reproducción adicional con los dos respaldos reales: se mantiene la evidencia original TNT874, saldo 99 − 4 = 95 y 26 revisiones compatibles; no se modifica producción.
-- 27 comprobaciones con **Firestore Emulator**: dos usuarios ANALISTA independientes, sin sesión JEFE para consumir, permisos acotados, aritmética, pesos, tres fichas compartidas, 10 reactivos, constancias y avisos. Incluye las funciones reales de iniciar, formulario de muestras, guardar consumo, sincronizar, confirmar y finalizar, con almacenes locales separados y una respuesta perdida después del commit.
-
-No se ha instalado en producción ni realizado una prueba visual en navegador. La prueba operativa final en sus equipos sigue pendiente. Se incluyen scripts y resultados, sin los respaldos originales ni credenciales.
+No se ejecutó en un navegador ni se conectó a Firebase de producción. El estado de producción solo cambia cuando el JEFE revisa y confirma desde el ERP.
 
 ```bash
 node --check app.js
-node --check service-worker.js
 node pruebas/regression.cjs
-node pruebas/prevencion.cjs
 node pruebas/recuperacion.cjs
+python3 -m http.server 8080
 ```
 
-Para repetir las pruebas de integración, instalar las dependencias fuera del directorio público del sitio y utilizar exclusivamente el proyecto demo:
-
-```bash
-npm install --prefix ../erp-test-deps firebase-tools@13.35.1 @firebase/rules-unit-testing@6.0.0 firebase@13.0.0
-NODE_PATH=../erp-test-deps/node_modules ../erp-test-deps/node_modules/.bin/firebase emulators:exec --only firestore --project demo-erp-validation 'node pruebas/firebase-reglas.cjs'
-```
-
-La versión fijada del emulador se probó con Java 17 y Node 24. Estas dependencias son para pruebas, no forman parte de la aplicación publicada. El helper de integración no sustituye una prueba visual en navegador.
+Las pruebas usan datos sintéticos en memoria y no realizan conexiones de red. Abrir la aplicación real en localhost utiliza su configuración Firebase habitual.
