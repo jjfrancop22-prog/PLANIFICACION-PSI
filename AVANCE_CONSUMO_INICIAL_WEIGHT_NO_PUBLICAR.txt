@@ -1,0 +1,6 @@
+V28.21.58 - Avance experimental 2026-10-16
+Nueva callable: commitInitialWeightConsumption.
+Calcula descuento inicial por envase sobre currentWeight conciliado, transacción Firestore con actividad, catálogo y auditoría, verificación de usuario activo/asignado, idempotencia por requestId.
+NO se ha conectado el cliente; WEIGHT permanece bloqueado en la interfaz experimental. NO publicar ni desplegar functions en producción.
+Pruebas: node tests/weight-initial.test.cjs (8), node tests/weight-commit.test.cjs (6), node --check functions/index.cjs.
+Pendiente: integración de UI, conciliación real de saldos, emuladores Firestore/Functions, pruebas multiusuario y permisos.

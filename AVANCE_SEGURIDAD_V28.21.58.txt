@@ -1,0 +1,6 @@
+V28.21.58 - Refuerzo de alcance de correcciones COUNT (16 octubre 2026)
+- Se agregó autorización-core.cjs para impedir que una solicitud de corrección sustituya, agregue o elimine reactivos/lotes respecto al consumo confirmado.
+- Backend valida cobertura de lotes y exige catalogId en planificación.
+- 11 pruebas anteriores y 4 pruebas adicionales pasan localmente; app.js y functions/index.cjs superan node --check.
+- PENDIENTE CRÍTICO: guardado inicial no atómico; lecturas del catálogo fuera de transacción; autorización finalizada no aprobada en servidor con flujo independiente; pesables; pruebas emulador y 2 dispositivos.
+- NO PUBLICAR NI DESPLEGAR FUNCTIONS. No se ha probado contra Firebase real.

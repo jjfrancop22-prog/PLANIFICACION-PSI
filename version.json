@@ -1,8 +1,8 @@
 {
-  "version": "1.0.5.6.33.25.10.28.21.60",
-  "build": "V28.21.60",
-  "name": "DIAGNOSTICO-DESCUENTOS-PRUEBA",
+  "version": "1.0.5.6.33.25.10.28.21.58",
+  "build": "V28.21.58-PRUEBA",
+  "name": "PREVALIDACION-CIERRE-Y-CONSUMO",
   "date": "2026-10-15",
   "notes": "Prevalidación remota de apertura y cierre, bloqueo de cierres con conflictos y prevención de consumos nuevos sin conexión. Conserva conciliación V48.",
-  "validation": "Sintaxis comprobada; no validado en Firebase real ni emulador. Reglas experimentales."
+  "validation": "PARCIAL: corrección COUNT JEFE; no publicar. Falta autorización postcierre, WEIGHT y pruebas multiusuario."
 }

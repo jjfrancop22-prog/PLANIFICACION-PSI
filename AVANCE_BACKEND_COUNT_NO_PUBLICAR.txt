@@ -1,0 +1,6 @@
+V28.21.58: backend de correcciones COUNT añadido como código preparatorio.
+NO PUBLICAR NI DESPLEGAR FUNCTIONS todavía.
+Pendiente: conectar interfaz a callable; corregir alta inicial para que sea transaccional;
+revisar reglas planning (actualmente permiten sobrescritura de reagentResult),
+probar catálogo y auditoría con emulador y dos cuentas, proteger sincronización/outbox;
+implementar WEIGHT y flujo post-cierre completo.

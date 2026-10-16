@@ -1,0 +1,6 @@
+V28.21.58 - Corrección de alcance de catálogo COUNT (experimental)
+- Las operaciones iniciales y de corrección COUNT leen únicamente catalog/{plan.catalogId} dentro de la transacción.
+- No se propagan descuentos a catálogos ajenos que compartan nombre y lote.
+- Si un mismo lote aparece duplicado en el catálogo asignado, se rechaza la operación en vez de descontar varias veces.
+- Se agregaron verificaciones estáticas de regresión y se ejecutaron las pruebas locales disponibles.
+- NO PUBLICAR: faltan emulador Firebase, conciliación histórica y pruebas de sincronización multiusuario.

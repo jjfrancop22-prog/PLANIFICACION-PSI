@@ -1971,18 +1971,39 @@ function setFinishTechnicalReadOnly(readonly){
   $('#btnSaveReagentDraft')?.classList.toggle('hidden',!!readonly);
   dialog.classList.toggle('technical-readonly',!!readonly);
 }
+// V28.21.58: la autorización visual nunca sustituye las reglas de Firestore.
+let activeCompletedCorrectionAuthorization=null;
 async function unlockCompletedTechnicalEdit(){
-  const p=await getOne('planning',$('#finishActivityPlanId')?.value);if(!p||p.status!=='REALIZADO')return;
-  const password=prompt('Ingrese la contraseña para editar una actividad finalizada:');
-  if(password===null)return;
-  if(password!=='2026')return toast('Contraseña incorrecta');
-  $('#finishTechnicalEditMode').value='1';
-  setFinishTechnicalReadOnly(false);
-  const title=$('#finishActivityTitle');if(title)title.textContent='Editar actividad finalizada';
-  $('#finishActivityHelp').textContent='Edición técnica autorizada. El estado REALIZADO y los tiempos originales no cambian.';
-  const submit=$('#finishSubmitBtn');if(submit){submit.classList.remove('hidden');submit.textContent='Guardar edición técnica'}
-  $('#btnUnlockTechnicalEdit')?.classList.add('hidden');
-  toast('Edición habilitada');
+  const p=await getOne('planning',$('#finishActivityPlanId')?.value);
+  if(!p||p.status!=='REALIZADO')return;
+  if(currentSessionUser?.role!=='JEFE')return toast('Solo JEFE puede autorizar correcciones.');
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)return toast('Necesita conexión Firebase para autorizar.');
+  const reason=prompt('Motivo obligatorio de la autorización (actividad finalizada):');
+  if(reason===null)return;
+  if(reason.trim().length<10)return toast('Indique un motivo de al menos 10 caracteres.');
+  const sdk=firebaseBridge.mods;
+  try{
+    const remoteSnap=await sdk.getDocFromServer(sdk.doc(firebaseBridge.db,'planning',p.id));
+    if(!remoteSnap.exists()||remoteSnap.data().status!=='REALIZADO')throw Error('Estado no confirmado en Firebase.');
+    if(!firebaseBridge.functionsMod){
+      firebaseBridge.functionsMod=await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js');
+      firebaseBridge.functions=firebaseBridge.functionsMod.getFunctions(firebaseBridge.app,'us-central1');
+    }
+    const call=firebaseBridge.functionsMod.httpsCallable(firebaseBridge.functions,'authorizeCompletedTechnicalEdit');
+    const result=await call({planId:p.id,reason:reason.trim(),requestId:crypto.randomUUID()});
+    if(!result.data?.ok)throw Error('El servidor no confirmó la autorización');
+    activeCompletedCorrectionAuthorization={planId:p.id,id:result.data.authorizationId,reason:reason.trim()};
+    $('#finishTechnicalEditMode').value='1';
+    setFinishTechnicalReadOnly(false);
+    // COUNT post-cierre utiliza exclusivamente la autorización de un solo uso.
+    // Los pesables siguen bloqueados hasta contar con transacción por envase.
+    if((p.reagentResult?.items||[]).some(x=>x.mode!=='COUNT'))$('#finishReagentBlock')?.querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=true);
+    const title=$('#finishActivityTitle');if(title)title.textContent='Edición técnica autorizada por JEFE';
+    $('#finishActivityHelp').textContent='Autorización de un solo uso registrada. Puede corregir consumos COUNT; los pesables permanecen bloqueados. Confirme en Firebase antes de salir.';
+    const submit=$('#finishSubmitBtn');if(submit){submit.classList.remove('hidden');submit.textContent='Guardar edición técnica'}
+    $('#btnUnlockTechnicalEdit')?.classList.add('hidden');
+    toast('Autorización registrada en Firebase · inventario protegido');
+  }catch(e){toast('No se autorizó: '+String(e.message||e))}
 }
 
 function communicationUserKey(){
@@ -2664,8 +2685,17 @@ function collectReagentResult(p,requireComplete=true){
       if(!selected){items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used:0,stockRemaining:stockBefore,usedInActivity:false,notUsed:true});continue}
       const raw=$(`[data-reag-count="${r.id}"]`)?.value;
       if(raw===''){complete=false;if(requireComplete)return {ok:false,text:`Ingrese la cantidad utilizada de ${r.name} · lote ${r.lot||'—'}, o desmarque “Usar en esta actividad”.`};continue}
-      const used=Number(raw);if(!Number.isFinite(used)||used<=0||!Number.isFinite(stockBefore)||used>stockBefore)return {ok:false,text:`Revise la cantidad utilizada de ${r.name}; debe ser mayor que 0 y no puede superar el stock disponible.`};
-      items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used,stockRemaining:stockBefore-used,usedInActivity:true,notUsed:false});
+      const used=Number(raw);
+      // V28.21.58: al editar un consumo YA descontado, el saldo disponible
+      // incluye lo previamente consumido por ESTA actividad (no por otras).
+      // El servidor vuelve a verificar la diferencia dentro de la transacción.
+      const saved=(p?.reagentResult?.inventoryCommittedAt?(p.reagentResult.items||[]):[])
+        .filter(x=>x.mode==='COUNT'&&normalizeIdentityText(x.name||'')===normalizeIdentityText(r.name||'')&&normalizeIdentityText(x.lot||'')===normalizeIdentityText(r.lot||''))
+        .reduce((n,x)=>n+Number(x.used||0),0);
+      const available=stockBefore+saved;
+      if(!Number.isFinite(used)||used<=0||!Number.isFinite(stockBefore)||stockBefore<0||used>available)
+        return {ok:false,text:`Revise la cantidad de ${r.name}. Disponible para corrección: ${available} (incluye ${saved} ya descontadas).`};
+      items.push({reagentId:r.id,name:r.name,lot:r.lot||'',mode:r.mode,unit:r.unit||'unidad',stockBefore,used,stockRemaining:Math.max(0,available-used),usedInActivity:true,notUsed:false});
     }
   }
   return {ok:true,complete,result:{items,completed:complete,capturedAt:nowISO()}};
@@ -2683,115 +2713,114 @@ function sameReagentConsumptionInput(a,b){
   });
   return !!a?.completed&&!!b?.completed&&sameCloudFunctionalPayload({items:normalize(a)},{items:normalize(b)});
 }
-// Los consumos confirmados son independientes del cierre horario de la actividad.
-const reagentCommitLocks=new Set();
-async function commitReagentConsumption(p,result){
-  if(!result?.completed)return {ok:false,text:'Complete o desmarque los consumos antes de guardarlos.'};
-  if(!(result.items||[]).some(x=>x.usedInActivity!==false&&!x.notUsed&&Number(x.used)>0))return {ok:false,text:'No hay consumo positivo. Para evitar confirmar accidentalmente cero, registre una cantidad antes de descontar.'};
-  if(reagentCommitLocks.has(p.id))return {ok:false,text:'Consumo en proceso de confirmación; espere.'};
-  // El estado local no es evidencia suficiente: un intento anterior pudo
-  // dejar una marca en IndexedDB sin que Firebase confirmara el descuento.
-  // La transacción que sigue decide usando exclusivamente planning remoto.
-  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)
-    return {ok:false,text:'Sin conexión confirmada a Firebase: no se aplicó el consumo.'};
-  reagentCommitLocks.add(p.id);
-  try{
-    const sdk=firebaseBridge.mods,planRef=sdk.doc(firebaseBridge.db,'planning',p.id);
-    // Se obtiene la lista de catálogos desde el servidor, nunca de una caché local.
-    let catalogSnapshot;
-    try { catalogSnapshot=await sdk.getDocsFromServer(sdk.collection(firebaseBridge.db,'catalog')); }
-    catch(e) { throw Error('Lectura de catalog rechazada por Firebase ('+(e.code||'sin código')+'): '+(e.message||e)); }
-    const catalogDocs=catalogSnapshot.docs.filter(d=>(d.data().reagentConfig||[]).length);
-    const used=(result.items||[]).filter(x=>x.usedInActivity!==false&&!x.notUsed);
-    const identity=x=>`${normalizeIdentityText(x.name||'')}|${normalizeIdentityText(x.lot||'')}`;
-    const usedMap=new Map(used.map(x=>[identity(x),x]));
-    let savedPlan=null,savedCatalogs=[];
-    await sdk.runTransaction(firebaseBridge.db,async tx=>{
-      let planSnap;
-      try { planSnap=await tx.get(planRef); }
-      catch(e) { throw Error('Lectura de planning rechazada por Firebase ('+(e.code||'sin código')+'): '+(e.message||e)); }
-      if(!planSnap.exists())throw Error('La actividad no existe en Firebase; espere la sincronización de apertura.');
-      const remote=planSnap.data();
-      if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw Error('Actividad finalizada: consumo bloqueado.');
-      if(remote.reagentResult?.inventoryCommittedAt){
-        if(sameReagentConsumptionInput(remote.reagentResult,result)){savedPlan=remote;savedCatalogs=[];return;}
-        const prior=remote.reagentResult;
-        const recoverZero=prior.completed===true&&!prior.inventoryReceiptId&&Array.isArray(prior.items)&&prior.items.length>0&&prior.items.every(x=>x.notUsed===true&&Number(x.used)===0&&x.usedInActivity===false);
-        if(!recoverZero)throw Error('Consumo positivo ya confirmado en Firebase: se requiere corrección supervisada; no se descontó inventario.');
-      }
-      // Leer todos los documentos afectados antes de realizar la primera escritura.
-      const refs=catalogDocs.filter(d=>(d.data().reagentConfig||[]).some(r=>usedMap.has(identity(r)))).map(d=>sdk.doc(firebaseBridge.db,'catalog',d.id));
-      const snaps=[];
-      for(const ref of refs){
-        try { snaps.push(await tx.get(ref)); }
-        catch(e) { throw Error('Lectura de catálogo '+ref.id+' rechazada ('+(e.code||'sin código')+'): '+(e.message||e)); }
-      }
-      const liveByKey=new Map();
-      for(const snap of snaps){if(!snap.exists())continue;for(const r of snap.data().reagentConfig||[]){const k=identity(r);if(usedMap.has(k)&&!liveByKey.has(k))liveByKey.set(k,r);}}
-      for(const item of used){
-        const live=liveByKey.get(identity(item));
-        if(!live)throw Error(`No existe en catálogo el lote ${item.name} (${item.lot||'sin lote'}).`);
-        if(item.mode==='COUNT'){
-          const stock=Number(live.stockQuantity),qty=Number(item.used);
-          if(!Number.isFinite(stock)||!Number.isFinite(qty)||qty<=0||qty>stock)throw Error(`Stock insuficiente de ${item.name}. Disponible: ${stock}.`);
-          item.stockBefore=stock;item.stockRemaining=stock-qty;
-        }
-        if(item.mode==='WEIGHT'){
-          for(const c of item.containers||[]){
-            const env=(live.containers||[]).find(e=>e.id===c.containerId);
-            if(!env)throw Error(`Envase no encontrado para ${item.name}.`);
-            if(Math.abs(Number(env.initialWeight)-Number(c.initialWeight))>0.001)
-              throw Error(`El peso inicial de ${item.name} cambió en otra computadora. Actualice antes de guardar.`);
-          }
-        }
-      }
-      const stamp=nowISO(),receipt=`INV-${p.id}`;
-      const committed={...result,inventoryCommittedAt:stamp,inventorySignature:JSON.stringify(result.items||[]),inventoryReceiptId:receipt};
-      const nextPlan={...remote,reagentResult:committed,updatedAt:stamp};
-      // Vincular la operación del catálogo con la misma actividad en esta transacción.
-      tx.update(planRef,{reagentResult:committed,updatedAt:stamp});
-      const updated=[];
-      for(const snap of snaps){
-        if(!snap.exists())continue;
-        const data=snap.data();let changed=false;
-        const configs=(data.reagentConfig||[]).map(r=>{
-          const item=usedMap.get(identity(r));if(!item)return r;
-          const next={...r};
-          if(next.mode==='COUNT'&&item.mode==='COUNT'){
-            const old=Number(next.stockQuantity||0),qty=Number(item.used||0);
-            if(old<qty)throw Error(`Stock insuficiente de ${item.name} en catálogo ${snap.id}.`);
-            next.stockQuantity=old-qty;next.inventoryStatus=next.stockQuantity<=0?'AGOTADO':'ACTIVO';changed=true;
-          }else if(next.mode==='WEIGHT'&&item.mode==='WEIGHT'){
-            next.containers=(next.containers||[]).map(env=>{
-              const hit=(item.containers||[]).find(x=>x.containerId===env.id);
-              if(!hit)return env;
-              if(Math.abs(Number(env.initialWeight)-Number(hit.initialWeight))>0.001)throw Error(`Peso inicial modificado en ${item.name}.`);
-              changed=true;return {...env,initialWeight:Number(hit.finalWeight),status:hit.depleted?'AGOTADO':'ACTIVO'};
-            });
-            next.inventoryStatus=next.containers.some(e=>e.status!=='AGOTADO')?'ACTIVO':'AGOTADO';
-          }
-          return next;
-        });
-        if(changed){
-          const update={reagentConfig:configs,updatedAt:stamp,inventoryCommitPlanId:p.id,inventoryCommitReceiptId:receipt};
-          tx.update(snap.ref,update);updated.push({id:snap.id,...data,...update});
-        }
-      }
-      savedPlan=nextPlan;savedCatalogs=updated;
-    });
-    // La Promise de runTransaction confirma el commit remoto.
-    p.reagentResult=savedPlan.reagentResult;p.updatedAt=savedPlan.updatedAt;
-    await put('planning',p);
-    for(const c of savedCatalogs)await put('catalog',c);
-    reagentMasterProfiles=[];
-    // No encolar un segundo descuento de catálogo ni repetir la transacción.
-    return {ok:true,unchanged:savedCatalogs.length===0};
-  }catch(err){
-    console.error('Consumo Firebase no confirmado',err);
-    return {ok:false,text:'No se guardó el consumo en Firebase (sin descuento). '+String(err.message||err)+' Si indica permisos, revise las reglas publicadas y el rol ACTIVO.'};
-  }finally{reagentCommitLocks.delete(p.id)}
+// V28.21.58 experimental: correcciones COUNT y WEIGHT mediante Cloud Functions.
+const pendingReagentCorrections=new Set();
+// No aplicar una corrección transaccional mientras existan escrituras locales
+// pendientes que puedan sobrescribir después el mismo consumo o su inventario.
+async function pendingInventorySyncForCorrection(planId, catalogIds){
+  const pending=await getAll('outbox');
+  const ids=new Set(catalogIds);
+  return pending.filter(x=>['PENDIENTE','ERROR','ENVIANDO','CONFLICTO_LOCAL'].includes(x.status)&&(
+    (x.entity==='planning'&&x.recordId===planId)||
+    (x.entity==='catalog'&&ids.has(x.recordId))
+  ));
 }
 
+async function correctCommittedReagentConsumption(plan,nextResult){
+  if(pendingReagentCorrections.has(plan.id))return {ok:false,text:'Corrección en curso. Espere la confirmación.'};
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)return {ok:false,text:'Se necesita conexión Firebase para corregir.'};
+  // Correcciones COUNT y WEIGHT pasan exclusivamente por Cloud Functions (Admin SDK).
+  // Nunca se conceden permisos generales de escritura de catálogo al analista.
+  const old=plan.reagentResult;
+  const items=[...(old?.items||[]),...(nextResult.items||[])];
+  const modes=new Set(items.map(x=>x.mode));
+  if(modes.size!==1||!['COUNT','WEIGHT'].includes([...modes][0]))return {ok:false,text:'No se permite mezclar reactivos contables y pesables en una misma transacción.'};
+  const isWeight=modes.has('WEIGHT');
+  pendingReagentCorrections.add(plan.id);
+  try{
+    const affected=(await getAll('catalog')).filter(c=>c.id===plan.catalogId);
+    const outstanding=await pendingInventorySyncForCorrection(plan.id,affected.map(c=>c.id));
+    if(outstanding.length)return {ok:false,text:'Existen operaciones pendientes de sincronización. Concílielas antes de corregir.'};
+    if(!firebaseBridge.functionsMod){
+      firebaseBridge.functionsMod=await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js');
+      firebaseBridge.functions=firebaseBridge.functionsMod.getFunctions(firebaseBridge.app,'us-central1');
+    }
+    const remote=await firebaseBridge.mods.getDocFromServer(firebaseBridge.mods.doc(firebaseBridge.db,'planning',plan.id));
+    if(!remote.exists())throw Error('Actividad no encontrada en Firebase');
+    const rr=remote.data().reagentResult;
+    if(!rr?.inventoryCommittedAt)throw Error('Consumo inicial no confirmado en Firebase');
+    if(Number(rr.correctionRevision||0)!==Number(old.correctionRevision||0))throw Error('Otra computadora modificó este consumo. Actualice antes de continuar.');
+    const closed=remote.data().status==='REALIZADO'||!!remote.data().completionCommittedAt;
+    let reason='',authorizationId=null;
+    if(closed){
+      if(currentSessionUser?.role!=='JEFE')throw Error('Actividad finalizada: requiere autorización del JEFE');
+      const authorization=activeCompletedCorrectionAuthorization;
+      if(!authorization||authorization.planId!==plan.id||!authorization.id)throw Error('Primero pulse Autorizar corrección en esta actividad');
+      reason=authorization.reason;authorizationId=authorization.id;
+      if(reason.length<10)throw Error('Autorización sin motivo válido');
+    }
+    const requestId=crypto.randomUUID();
+    const call=firebaseBridge.functionsMod.httpsCallable(firebaseBridge.functions,isWeight?'correctWeightConsumption':'correctCountConsumption');
+    const response=await call({planId:plan.id,items:nextResult.items,expectedRevision:Number(rr.correctionRevision||0),requestId,reason,authorizationId});
+    if(!response.data?.ok)throw Error('Servidor no confirmó la corrección');
+    const verified=await firebaseBridge.mods.getDocFromServer(firebaseBridge.mods.doc(firebaseBridge.db,'planning',plan.id));
+    if(!verified.exists()||Number(verified.data().reagentResult?.correctionRevision)!==response.data.revision)throw Error('Servidor respondió pero la revisión aún no está verificada; actualice antes de reintentar');
+    Object.assign(plan,verified.data());await put('planning',plan);
+    if(closed)activeCompletedCorrectionAuthorization=null;
+    for(const c of affected){const snap=await firebaseBridge.mods.getDocFromServer(firebaseBridge.mods.doc(firebaseBridge.db,'catalog',c.id));if(snap.exists())await put('catalog',{...snap.data(),id:c.id});}
+    reagentMasterProfiles=[];
+    return {ok:true,corrected:true};
+  }catch(e){return {ok:false,text:'Corrección no confirmada: '+String(e.message||e)}}
+  finally{pendingReagentCorrections.delete(plan.id)}
+}
+
+// Los consumos confirmados son independientes del cierre horario de la actividad.
+async function commitReagentConsumption(p,result){
+  if(!result?.completed)return {ok:false,text:'Complete o desmarque los consumos antes de guardarlos.'};
+  const previous=p.reagentResult;
+  if(previous?.inventoryCommittedAt&&sameReagentConsumptionInput(previous,result)){
+    p.reagentResult=previous;
+    return {ok:true,unchanged:true};
+  }
+  if(previous?.inventoryCommittedAt)return await correctCommittedReagentConsumption(p,result);
+  // No registrar nuevos descuentos mientras la conexión no permita verificarlos.
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine){
+    return {ok:false,text:'Firebase sin conexión confirmada: no se aplicó el consumo. Reintente cuando sincronice.'};
+  }
+  // COUNT y WEIGHT iniciales requieren confirmación del servidor antes de modificar el estado local.
+  const initialModes=new Set((result.items||[]).map(x=>x.mode));
+  if(initialModes.size!==1||!['COUNT','WEIGHT'].includes([...initialModes][0]))return {ok:false,text:'Consumo mixto o vacío: requiere validación antes de guardar. No se modificó el inventario.'};
+  const isInitialWeight=initialModes.has('WEIGHT');
+  if((result.items||[]).length){
+    if(pendingReagentCorrections.has(p.id))return {ok:false,text:'Ya hay un guardado de consumo en curso.'};
+    pendingReagentCorrections.add(p.id);
+    try{
+      const related=(await getAll('catalog')).filter(c=>c.id===p.catalogId);
+      if((await pendingInventorySyncForCorrection(p.id,related.map(c=>c.id))).length)return {ok:false,text:'Existen cambios pendientes de sincronización; sincronice antes de guardar.'};
+      if(!firebaseBridge.functionsMod){
+        firebaseBridge.functionsMod=await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js');
+        firebaseBridge.functions=firebaseBridge.functionsMod.getFunctions(firebaseBridge.app,'us-central1');
+      }
+      const ref=firebaseBridge.mods.doc(firebaseBridge.db,'planning',p.id);
+      const before=await firebaseBridge.mods.getDocFromServer(ref);
+      if(!before.exists())throw Error('La actividad todavía no existe en Firebase; espere a sincronizar.');
+      if(before.data().reagentResult?.inventoryCommittedAt)throw Error('Ya existe un consumo confirmado en Firebase. Actualice la actividad antes de continuar.');
+      const call=firebaseBridge.functionsMod.httpsCallable(firebaseBridge.functions,isInitialWeight?'commitInitialWeightConsumption':'commitInitialCountConsumption');
+      const response=await call({planId:p.id,items:result.items,requestId:crypto.randomUUID()});
+      if(!response.data?.ok)throw Error('El servidor no confirmó el consumo');
+      const verified=await firebaseBridge.mods.getDocFromServer(ref);
+      if(!verified.exists()||!verified.data().reagentResult?.inventoryCommittedAt)throw Error('No se pudo verificar el guardado; actualice antes de reintentar.');
+      Object.assign(p,verified.data());await put('planning',p);
+      for(const c of related){const snap=await firebaseBridge.mods.getDocFromServer(firebaseBridge.mods.doc(firebaseBridge.db,'catalog',c.id));if(snap.exists())await put('catalog',{...snap.data(),id:c.id});}
+      reagentMasterProfiles=[];
+      return {ok:true,serverConfirmed:true};
+    }catch(e){return {ok:false,text:'Consumo no confirmado localmente: '+String(e.message||e)};}
+    finally{pendingReagentCorrections.delete(p.id)}
+  }
+  // Sin elementos consumidos no existe una operación de inventario válida.
+  // Prohibido regresar al mecanismo heredado de descuento local + cola.
+  return {ok:false,text:'No hay consumos de reactivos para confirmar. No se modificó el inventario.'};
+}
 
 // Protección de salida: no descartar accidentalmente registros técnicos sin guardar.
 let technicalSnapshot='';
@@ -2879,6 +2908,7 @@ async function openTechnicalData(planId){
   if(!planRequiresCalibration(p)&&!planHasReagents(p))return toast('Esta actividad no tiene datos técnicos configurados');
 
   const isDone=p.status==='REALIZADO';
+  activeCompletedCorrectionAuthorization=null;
   $('#finishActivityPlanId').value=p.id;
   $('#finishTechnicalEditMode').value=isDone?'3':'2';
   const title=$('#finishActivityTitle');if(title)title.textContent=isDone?'Actividad finalizada · consulta':'Registro técnico';
@@ -3416,24 +3446,57 @@ async function requireAuthoritativeActivityClosure(p){
   return remote;
 }
 async function completeActivityRecord(p,actualSamples=null,finalComment='',calibrationResult=undefined,reagentResult=undefined){
-  p.status='REALIZADO';p.actualFinishedAt=nowISO();p.completionCommittedAt=p.actualFinishedAt;p.completionCommittedBy=currentSessionUser?.email||currentSessionUser?.name||'Usuario';p.completionOperationId=p.completionOperationId||`FINAL-${String(p.id||'PLAN').replace(/[^a-zA-Z0-9_-]/g,'_')}`;p.updatedAt=nowISO();
-  if(actualSamples!==null)p.actualSamples=Math.max(0,Number(actualSamples));if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;if(reagentResult!==undefined)p.reagentResult=reagentResult;
-  await put('planning',p);await queue('UPDATE','planning',p);
-  // Confirmar el saldo como inventario vivo: el siguiente uso parte del peso/stock final real.
-  if(!p.reagentResult?.inventoryCommittedAt&&p.reagentResult?.completed){const committed=await commitReagentConsumption(p,p.reagentResult);if(!committed.ok)throw Error(committed.text)}
-  if(finalComment){
-    const comment={id:uid('COM'),planId:p.id,analystId:p.analystId,authorName:p.analystName,text:finalComment,createdAt:nowISO()};
-    await put('planComments',comment);await queue('CREATE','planComments',comment);
+  // El cierre se confirma en el servidor antes de alterar el estado local.
+  if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)throw Error('No hay conexión verificada para finalizar.');
+  const pending=(await getAll('outbox')).filter(x=>x.entity==='planning'&&x.recordId===p.id&&['PENDIENTE','ERROR','CONFLICTO_LOCAL'].includes(x.status));
+  if(pending.length)throw Error('Existen operaciones pendientes o en conflicto; no se puede finalizar.');
+  if(!firebaseBridge.functionsMod){firebaseBridge.functionsMod=await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js');firebaseBridge.functions=firebaseBridge.functionsMod.getFunctions(firebaseBridge.app,'us-central1');}
+  const finishCall=firebaseBridge.functionsMod.httpsCallable(firebaseBridge.functions,'finalizeActivitySafely');
+  // Reutilizar el identificador de una solicitud cuyo resultado sea incierto.
+  // Si Firebase confirmó el cierre pero se perdió la respuesta, el reintento
+  // consulta la misma auditoría en lugar de crear un segundo cierre.
+  const finishPayload={planId:p.id,actualSamples,calibrationResult:calibrationResult===undefined?null:calibrationResult,expectedRevision:Number(p.reagentResult?.correctionRevision||0),expectedTechnicalEditedAt:p.technicalEditedAt||null};
+  // Persistir el ID incluso tras cerrar/reabrir el navegador. Aislarlo por
+  // usuario autenticado y actividad para no reutilizarlo entre analistas.
+  const finishStorageKey=`erp58:finish-request:${firebaseBridge.authUser.uid}:${p.id}`;
+  const finishSignature=JSON.stringify(finishPayload);
+  const finishTtlMs=7*24*60*60*1000;
+  let finishRequestId;
+  try{
+    const saved=JSON.parse(localStorage.getItem(finishStorageKey)||'null');
+    if(saved?.signature===finishSignature&&Number.isFinite(saved.createdAt)&&
+       Date.now()-saved.createdAt>=0&&Date.now()-saved.createdAt<finishTtlMs&&
+       /^[\w-]{8,100}$/.test(saved.requestId||''))finishRequestId=saved.requestId;
+  }catch(_err){/* Almacenamiento bloqueado: el servidor mantiene la idempotencia. */}
+  if(!finishRequestId){
+    finishRequestId=crypto.randomUUID();
+    try{localStorage.setItem(finishStorageKey,JSON.stringify({signature:finishSignature,requestId:finishRequestId,createdAt:Date.now()}));}catch(_err){}
   }
-  const sampleDetail=p.actualSamples!==null&&p.actualSamples!==undefined?` · ${p.actualSamples} muestras analizadas`:'';const curveDetail=p.calibrationResult?.completed?` · curva ${p.calibrationResult.points.length} puntos × ${Number(p.calibrationResult.replicates||p.calibrationConfig?.replicates||3)} · R² ${p.calibrationResult.regression?.r2?.toFixed(6)??'—'}`:'';const reagentDetail=p.reagentResult?.completed?` · ${p.reagentResult.items.length} consumo(s) de reactivos registrados`:'';
-  await audit('FINALIZAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} finalizó ${p.catalogName} a las ${formatActualStamp(p.actualFinishedAt)}${sampleDetail}${curveDetail}${reagentDetail}`);
-  // 28.21.29: NO crear evidencia histórica de cierre antes del ACK del servidor.
-  // El procesador de cola publica los avisos únicamente tras confirmar Firestore.
-  toast(`Actividad guardada localmente${sampleDetail} · comprobando Firebase…`);
+  // Reintento automático únicamente ante fallos transitorios de transporte.
+  // El mismo requestId garantiza que Firebase no ejecute dos cierres.
+  let response;
+  try{
+    response=await finishCall({...finishPayload,requestId:finishRequestId});
+  }catch(firstError){
+    const code=String(firstError?.code||'').toLowerCase();
+    const transient=['functions/unavailable','functions/deadline-exceeded','functions/internal','unavailable','deadline-exceeded'].includes(code);
+    if(!transient||!navigator.onLine)throw firstError;
+    await new Promise(resolve=>setTimeout(resolve,700));
+    response=await finishCall({...finishPayload,requestId:finishRequestId});
+  }
+  if(!response.data?.ok)throw Error('Firebase no confirmó el cierre.');
+  const snap=await firebaseBridge.mods.getDocFromServer(firebaseBridge.mods.doc(firebaseBridge.db,cloudCollectionFor('planning'),p.id));
+  if(!snap.exists()||snap.data().status!=='REALIZADO'||!snap.data().completionCommittedAt)throw Error('No se pudo verificar el cierre en el servidor.');
+  Object.assign(p,snap.data());await put('planning',p);
+  try{localStorage.removeItem(finishStorageKey);}catch(_err){}
+  if(finalComment){const comment={id:uid('COM'),planId:p.id,analystId:p.analystId,authorName:p.analystName,text:finalComment,createdAt:nowISO()};await put('planComments',comment);await queue('CREATE','planComments',comment);}
+  await audit('FINALIZAR_ACTIVIDAD','MI JORNADA',p.code,`${p.analystName} finalizó ${p.catalogName} con confirmación Firebase`);
+  await ensureConfirmedClosureAlerts(p);
   await renderMyDay();await renderAgenda();await renderDailyLoad();await renderAudit();await renderManagementDashboard();
   releaseActivityCompletion(p.id);
   await showActivityCloudClosureResult(p);
 }
+
 const technicalSubmissionLocks=new Set();
 async function submitFinishActivity(e){
   e.preventDefault();
@@ -3449,7 +3512,7 @@ async function submitFinishActivityOnce(e){
   p=await hydratePlanTechnicalRequirements(p);
   // V28.21.3: impedir un segundo cierre si ya existe evidencia histórica exacta.
   const priorClosure=(await getAll('planComments')).some(c=>c.planId===p.id&&c.lifecycleStage==='FINALIZACION');
-  if(p.status==='REALIZADO'||priorClosure){
+  if((p.status==='REALIZADO'||priorClosure)&&$('#finishTechnicalEditMode')?.value!=='1'){
     alert('Cierre previo detectado para esta actividad. No se permite finalizar otra vez. Solicite al JEFE la conciliación verificada en Firebase.');
     return;
   }
@@ -3475,12 +3538,40 @@ async function submitFinishActivityOnce(e){
   if(mode==='3')return toast('Actividad finalizada en modo solo lectura');
 
   if(mode==='1'||mode==='2'){
-    if(calibrationResult!==undefined)p.calibrationResult=calibrationResult;
+    // Las curvas post-cierre requieren un flujo autorizado propio. No simular
+    // su guardado ni mostrar error después de una corrección de inventario exitosa.
+    if(mode==='1'&&calibrationResult!==undefined&&JSON.stringify(calibrationResult)!==JSON.stringify(p.calibrationResult??null))
+      return toast('La modificación de curvas después del cierre todavía no está habilitada. No se modificó la curva.');
+    if(mode!=='1'&&calibrationResult!==undefined)p.calibrationResult=calibrationResult;
+    if(mode==='1'&&reagentResult!==undefined&&!sameReagentConsumptionInput(p.reagentResult,reagentResult)&&!activeCompletedCorrectionAuthorization)return toast('Debe autorizar primero la corrección.');
     if(reagentResult!==undefined){const committed=await commitReagentConsumption(p,reagentResult);if(!committed.ok)return toast(committed.text)}
-    p.technicalEditedAt=nowISO();
-    p.technicalEditedBy=currentSessionUser?.name||currentSessionUser?.email||'Usuario';
+    // Guardar metadatos técnicos de forma transaccional sin reemplazar reagentResult.
+    // Evita perder curvas por suprimir la cola antigua y evita sobrescribir inventario.
+    if(mode!=='1'&&p.reagentResult?.inventoryCommittedAt){
+      try{
+        if(!firebaseBridge.ready||!firebaseBridge.authUser||!navigator.onLine)throw Error('Se requiere conexión para guardar la curva y los datos técnicos.');
+        if(!firebaseBridge.functionsMod){
+          firebaseBridge.functionsMod=await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js');
+          firebaseBridge.functions=firebaseBridge.functionsMod.getFunctions(firebaseBridge.app,'us-central1');
+        }
+        const technicalCall=firebaseBridge.functionsMod.httpsCallable(firebaseBridge.functions,'saveTechnicalMetadata');
+        const technicalResponse=await technicalCall({planId:p.id,calibrationResult:calibrationResult===undefined?null:calibrationResult,expectedTechnicalEditedAt:p.technicalEditedAt||null,requestId:crypto.randomUUID()});
+        if(!technicalResponse.data?.ok)throw Error('No se confirmó el guardado técnico.');
+        const verified=await firebaseBridge.mods.getDocFromServer(firebaseBridge.mods.doc(firebaseBridge.db,'planning',p.id));
+        if(!verified.exists())throw Error('No se pudo verificar el guardado técnico.');
+        Object.assign(p,verified.data());
+      }catch(err){return toast('No se guardaron los datos técnicos: '+String(err.message||err));}
+    }
+    if(!p.reagentResult?.inventoryCommittedAt){
+      p.technicalEditedAt=nowISO();
+      p.technicalEditedBy=currentSessionUser?.name||currentSessionUser?.email||'Usuario';
+    }
     p.updatedAt=nowISO();
-    await put('planning',p);await queue('UPDATE','planning',p);
+    await put('planning',p);
+    // V28.21.58: NUNCA encolar el documento completo después de una transacción
+    // confirmada de inventario, incluso cuando correctionRevision === 0.
+    // La cola heredada podría sobrescribir el consumo confirmado desde otra PC.
+    if(mode!=='1'&&!p.reagentResult?.inventoryCommittedAt)await queue('UPDATE','planning',p);
     if(comment){
       const rec={id:uid('COM'),planId:p.id,text:`${mode==='1'?'[EDICIÓN TÉCNICA POST-CIERRE]':'[REGISTRO TÉCNICO]'} ${comment}`,author:p.technicalEditedBy,authorName:p.technicalEditedBy,createdAt:nowISO()};
       await put('planComments',rec);await queue('CREATE','planComments',rec);
@@ -3503,10 +3594,17 @@ async function submitFinishActivityOnce(e){
   const claim=await claimActivityCompletion(p);
   if(!claim.ok){toast(claim.reason);return;}
   const submitBtn=$('#finishSubmitBtn');if(submitBtn)submitBtn.disabled=true;
-  technicalSnapshot='';$('#finishActivityDialog').close();
-  try{await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment,calibrationResult,reagentResult===undefined?undefined:p.reagentResult);}
-  catch(err){releaseActivityCompletion(p.id);throw err;}
-  finally{if(submitBtn)submitBtn.disabled=false;}
+  // Mantener el formulario y sus datos visibles hasta verificar el cierre en Firebase.
+  // Si falla la red, el analista podrá reintentar sin perder su trabajo.
+  try{
+    await completeActivityRecord(p,requiresActualSamples(p.section)?samples:null,comment,calibrationResult,reagentResult===undefined?undefined:p.reagentResult);
+    technicalSnapshot='';
+    $('#finishActivityDialog').close();
+  }catch(err){
+    releaseActivityCompletion(p.id);
+    toast('No se confirmó la finalización. Conserve el formulario y vuelva a intentar: '+String(err.message||err));
+    return;
+  }finally{if(submitBtn)submitBtn.disabled=false;}
 }
 
 async function renderRecentMyActivities(analystId){

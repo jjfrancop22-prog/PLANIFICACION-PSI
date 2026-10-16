@@ -1,0 +1,10 @@
+V28.21.58 - INTEGRACION EXPERIMENTAL DE CORRECCION COUNT
+- Cliente llama a Firebase callable correctCountConsumption para correcciones COUNT previamente confirmadas.
+- Se permite solicitud de analista asignado y JEFE; el servidor verifica roles.
+- Para actividades cerradas JEFE debe introducir motivo.
+- Se verifican operaciones locales pendientes y revision remota.
+- Se refrescan planificación y catalogo tras respuesta del servidor.
+- Firebase.json declara functions/source para despliegue posterior.
+PRUEBAS: node --check app.js y 5 pruebas locales COUNT exitosas.
+NO PUBLICAR: sin pruebas integrales de Firebase, sin correcciones WEIGHT y sin migrar el guardado inicial a transaccion unica.
+ADVERTENCIA: backend requiere auditoria adicional de payload, permisos y concurrencia antes de despliegue.

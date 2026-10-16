@@ -1,0 +1,9 @@
+V28.21.58 — CONEXIÓN EXPERIMENTAL UI WEIGHT / COUNT
+- commitReagentConsumption selecciona callable commitInitialWeightConsumption para WEIGHT, o commitInitialCountConsumption para COUNT.
+- correctCommittedReagentConsumption selecciona correctWeightConsumption o correctCountConsumption.
+- Rechaza consumos mixtos WEIGHT/COUNT para evitar confirmaciones parciales.
+- Verifica en servidor la revisión del consumo corregido y la confirmación del inicial antes de guardar localmente.
+- Mantiene controles de sesión, pendientes de sincronización y autorización JEFE en actividades cerradas.
+- NO VALIDADO con emulador Firebase, esquema de datos real ni múltiples PCs.
+- Requiere currentWeight conciliado por envase; de lo contrario Firebase rechazará WEIGHT.
+- NO PUBLICAR EN PRODUCCIÓN.

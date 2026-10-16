@@ -1,0 +1,6 @@
+V28.21.58 - Protección de versión técnica en cierre
+Se agregó expectedTechnicalEditedAt al cierre transaccional.
+Cuando se envía curva en el cierre, Firebase comprueba que la versión técnica no haya cambiado desde otra computadora.
+La versión se incorpora a la huella de idempotencia de la solicitud.
+Pruebas: node --test tests/*.test.cjs; node --check app.js; node --check functions/index.cjs.
+Limitaciones: no se probó con emulador ni Firebase real; no publicar en producción.

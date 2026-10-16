@@ -1,0 +1,8 @@
+V28.21.58 - AVANCE EXPERIMENTAL. NO PUBLICAR EN PRODUCCION.
+- Botón JEFE «Autorizar corrección técnica»: exige motivo, conexión y escribe auditoría en Firebase.
+- Se eliminó el desbloqueo inseguro por contraseña fija 2026.
+- Inventario de actividades finalizadas BLOQUEADO incluso con autorización técnica.
+- Corrección COUNT transaccional pre-cierre sigue restringida al JEFE y no validada en entorno real.
+- Analistas, WEIGHT y autorización transaccional post-cierre NO implementados.
+- Falta diseñar operación de inventario inicial atómica y seguridad de roles en Firestore.
+- La prueba de sintaxis JS no sustituye pruebas funcionales ni de permisos.

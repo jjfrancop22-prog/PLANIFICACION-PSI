@@ -1,0 +1,8 @@
+V28.21.58 - PRUEBA / NO PUBLICAR
+- El botón Autorizar corrección conserva authorizationId y motivo para la actividad.
+- El cliente transmite authorizationId al backend correctCountConsumption en actividades finalizadas.
+- El servidor valida y consume la autorización en la misma transacción COUNT.
+- Se permite entrar en el flujo de guardado post-cierre autorizado; se mantiene bloqueo de pesables.
+- Se evita encolar una escritura genérica de planning al editar datos técnicos post-cierre.
+- Se comprobó sintaxis con node --check. NO se ha probado con emulador ni Firebase real.
+ADVERTENCIA: el flujo completo aún requiere pruebas de integración, revisión de seguridad y sincronización. No desplegar en producción.

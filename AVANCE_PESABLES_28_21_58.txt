@@ -1,0 +1,5 @@
+V28.21.58 - REVISIÓN DE INTEGRIDAD WEIGHT (NO PUBLICAR)
+Se endureció la validación de envases no utilizados, duplicados y eliminación de envases.
+11 pruebas WEIGHT locales superadas; app.js y functions/index.cjs sin errores de sintaxis.
+PENDIENTE: integración transaccional con estructura real de catalog.reagentConfig[].containers y ruta de guardado de interfaz. No se modificaron existencias de Firebase.
+La versión NO permite aún correcciones seguras de WEIGHT; se mantiene el bloqueo intencional para evitar inconsistencias.

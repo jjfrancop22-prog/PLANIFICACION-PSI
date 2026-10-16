@@ -1,0 +1,5 @@
+V28.21.58 - Diagnóstico de conciliación de saldos WEIGHT.
+Se incorpora función callable inspectWeightInventoryReadiness, SOLO LECTURA, exclusiva del JEFE.
+Detecta envases sin currentWeight confirmado, duplicados y pesos incompatibles.
+NO migra saldos ni habilita descuentos WEIGHT; NO desplegar en producción.
+Pendiente: conciliar saldos con inventario real, implementar escritura transaccional, integrar UI y probar emuladores.

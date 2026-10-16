@@ -1,0 +1,5 @@
+V28.21.58 - Revisión incremental NO PUBLICAR
+- Corrige el saldo proyectado COUNT durante edición: disponible = saldo actual + consumo previamente confirmado.
+- Rechaza saldos negativos y verifica la revisión confirmada por Firebase.
+- NO habilita todavía correcciones de analistas ni pesables.
+- NO se han realizado pruebas de integración Firebase.

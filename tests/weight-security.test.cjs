@@ -1,0 +1,11 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {weightDifferences}=require('../functions/weight-correction-core.cjs');
+const item=(used=true,containers=[])=>[{name:'Ácido',lot:'L1',mode:'WEIGHT',physicalState:'SOLID',usedInActivity:used,notUsed:!used,containers}];
+const env=(initial,final)=>({containerId:'E1',tareWeight:10,initialWeight:initial,finalWeight:final});
+assert.deepEqual(weightDifferences(item(false),item(false)),[]);
+assert.throws(()=>weightDifferences(item(false),item(false,[env(100,90)])),/no utilizados/);
+assert.throws(()=>weightDifferences(item(true,[env(100,90)]),item(false)),/cambiar envases/);
+assert.throws(()=>weightDifferences(item(true,[env(100,90)]),item(true,[env(100,90),env(100,90)])),/duplicado/);
+assert.equal(weightDifferences(item(true,[env(100,90)]),item(true,[env(100,80)]))[0].additionalUsedGrams,10);
+console.log('5 controles adicionales de integridad WEIGHT correctos');

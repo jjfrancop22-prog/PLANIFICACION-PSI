@@ -1,0 +1,6 @@
+ERP PLANIFICACION V28.21.58 - REVISION EXPERIMENTAL
+- Eliminado bloque de código heredado inalcanzable que descontaba inventario localmente y encolaba escrituras.
+- Las rutas de consumo COUNT y WEIGHT quedan dirigidas a Cloud Functions, con lectura de confirmación del servidor.
+- Agregadas 5 aserciones estáticas para prevenir que se reintroduzca el descuento local en commitReagentConsumption.
+- NO se ha validado Firebase Emulator, reglas Firestore ni funcionamiento real multi-PC.
+- NO PUBLICAR. Conservar V28.21.57 en producción.

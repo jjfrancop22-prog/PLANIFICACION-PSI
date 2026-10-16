@@ -1,0 +1,6 @@
+V28.21.58 - cierre de actividad y conservación del formulario
+- El formulario de finalización permanece abierto mientras Firebase procesa el cierre.
+- El formulario se cierra únicamente después de confirmación remota y verificación del estado REALIZADO.
+- Ante fallo de red o de transacción se libera el bloqueo, se reactiva el botón y se muestra un mensaje para reintentar.
+- Se incorpora prueba de regresión estática para prevenir cierre anticipado del diálogo.
+- Pendiente: pruebas con emulador Firebase y equipos concurrentes. NO PUBLICAR EN PRODUCCIÓN.

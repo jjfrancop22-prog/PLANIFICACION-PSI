@@ -1,0 +1,5 @@
+V28.21.58 - validación independiente para correcciones WEIGHT (sólidos y líquidos).
+Se agregó functions/weight-correction-core.cjs y tests/weight-correction.test.cjs.
+6 pruebas locales satisfactorias: aumento, devolución, densidad, tara, peso inicial y valores fuera de rango.
+IMPORTANTE: esta validación NO está conectada a la interfaz ni a Cloud Functions; NO actualiza inventario. No se ha validado con Firebase. No publicar.
+Pendiente: reconciliación de envases, transacciones de peso y pruebas con emulador antes de habilitar edición.

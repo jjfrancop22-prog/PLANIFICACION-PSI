@@ -1,0 +1,10 @@
+'use strict';
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+assert.match(source,/if\(mode!=='1'&&!p\.reagentResult\?\.inventoryCommittedAt\)await queue\('UPDATE','planning',p\)/);
+assert.doesNotMatch(source,/!p\.reagentResult\?\.correctionRevision\)await queue\('UPDATE','planning',p\)/);
+assert.match(source,/const affected=\(await getAll\('catalog'\)\)\.filter\(c=>c\.id===plan\.catalogId\)/);
+assert.match(source,/const related=\(await getAll\('catalog'\)\)\.filter\(c=>c\.id===p\.catalogId\)/);
+console.log('Protección de cola obsoleta y catálogo asignado: 4 verificaciones OK');

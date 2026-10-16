@@ -1,0 +1,6 @@
+V28.21.58 – Reintento de cierre persistente (experimental)
+- El identificador de cierre se guarda en localStorage por UID y actividad.
+- Se reutiliza con la misma carga útil tras cerrar/reabrir el navegador durante 7 días.
+- Al confirmar el cierre verificado en Firebase se elimina el identificador.
+- Si la carga útil cambia, se crea otra solicitud; el servidor comprueba el estado y la revisión.
+- Sin pruebas de Firebase Emulator ni pruebas reales multiusuario. NO PUBLICAR.

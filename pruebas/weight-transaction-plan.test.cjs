@@ -1,0 +1,15 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {prepareWeightCorrection}=require('../functions/weight-transaction-plan.cjs');
+const item=(final,mode='WEIGHT')=>({reagentId:'R1',name:'Acido',lot:'L1',mode,physicalState:'LIQUID',density:1.2,containers:[{containerId:'E1',tareWeight:100,initialWeight:500,finalWeight:final}]});
+const old=[item(450)];
+assert.equal(prepareWeightCorrection(old,[item(420)]).changes[0].additionalUsedGrams,30);
+assert.equal(prepareWeightCorrection(old,[item(470)]).changes[0].additionalUsedGrams,-20);
+assert.equal(prepareWeightCorrection(old,[item(450)]).changedContainers,0);
+assert.throws(()=>prepareWeightCorrection(old,[]),/agregar/);
+assert.throws(()=>prepareWeightCorrection(old,[item(420,'COUNT')]),/agregar|mixta/);
+assert.throws(()=>prepareWeightCorrection(old,[{...item(420),reagentId:'R2'}]),/agregar/);
+assert.throws(()=>prepareWeightCorrection(old,[{...item(420),containers:[{...item(420).containers[0],tareWeight:90}]}]),/Tara/);
+assert.throws(()=>prepareWeightCorrection(old,[{...item(420),density:1.4}]),/densidad/);
+assert.throws(()=>prepareWeightCorrection(old,[{...item(420),containers:[{...item(420).containers[0],initialWeight:490}]}]),/Peso inicial/);
+console.log('9 pruebas de preparación transaccional WEIGHT: OK');

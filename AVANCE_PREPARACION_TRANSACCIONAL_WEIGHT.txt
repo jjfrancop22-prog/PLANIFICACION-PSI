@@ -1,0 +1,5 @@
+V28.21.58 - Desarrollo experimental, NO PUBLICAR.
+Se incorpora functions/weight-transaction-plan.cjs, que prepara y valida diferencias por envase WEIGHT sin escribir Firestore.
+Pruebas: pruebas/weight-transaction-plan.test.cjs (9 escenarios OK).
+PENDIENTE: diseñar persistencia por envase, Cloud Function transaccional, integración UI, emulador Firebase, concurrencia y pruebas multi-PC.
+La ruta antigua de guardado WEIGHT NO ha sido sustituida en esta entrega. NO USAR EN PRODUCCION.

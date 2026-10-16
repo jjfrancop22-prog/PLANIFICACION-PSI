@@ -1,0 +1,6 @@
+V28.21.58 – REVISION SEGURA DE CORRECCIONES (EXPERIMENTAL)
+- Refuerza la detección de modificaciones concurrentes mediante correctionRevision.
+- Comprueba que la asignación de analista no haya cambiado antes de ajustar COUNT.
+- Se mantiene restringida al JEFE la corrección COUNT; reactivos WEIGHT siguen bloqueados.
+- La autorización técnica post-cierre NO habilita ajuste de inventario.
+- NO PUBLICAR. Requiere implementación de permisos de analistas, WEIGHT y pruebas Firebase.

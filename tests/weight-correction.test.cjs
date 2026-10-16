@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict');
+const {weightDifferences}=require('../functions/weight-correction-core.cjs');
+const item=(initial,final,density=null)=>[{name:'Reactivo',lot:'L1',mode:'WEIGHT',physicalState:density===null?'SOLID':'LIQUID',density,containers:[{containerId:'E1',tareWeight:10,initialWeight:initial,finalWeight:final}]}];
+assert.equal(weightDifferences(item(100,90),item(100,85))[0].additionalUsedGrams,5);
+assert.equal(weightDifferences(item(100,85),item(100,90))[0].additionalUsedGrams,-5);
+assert.equal(weightDifferences(item(100,90,2),item(100,85,2))[0].additionalUsedMl,2.5);
+assert.throws(()=>weightDifferences(item(100,90),item(100,9)),/Pesos incompatibles/);
+assert.throws(()=>weightDifferences(item(100,90),item(110,85)),/Peso inicial modificado/);
+assert.throws(()=>weightDifferences(item(100,90,2),item(100,85,3)),/Tara o densidad/);
+console.log('6 pruebas WEIGHT correctas');

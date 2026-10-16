@@ -13,42 +13,7 @@ service cloud.firestore {
       allow read: if signedIn() && (request.auth.uid == userId || isBoss());
       allow create, update, delete: if isBoss();
     }
-
-    // EXPERIMENTAL: vincula una actualización del catálogo con una confirmación
-    // simultánea en planning. No verifica cada elemento de reagentConfig.
-    function inventoryCommitAllowed() {
-      let pid = request.resource.data.get('inventoryCommitPlanId', '');
-      let receipt = request.resource.data.get('inventoryCommitReceiptId', '');
-      let before = get(/databases/$(database)/documents/planning/$(pid)).data;
-      let after = getAfter(/databases/$(database)/documents/planning/$(pid)).data;
-      let prior = before.get('reagentResult', {});
-      let wasZero = prior.get('completed', false) == true
-        && prior.get('inventoryReceiptId', '') == ''
-        && prior.get('items', []).size() > 0
-        && prior.get('inventorySignature', '') is string
-        && prior.get('inventorySignature', '').size() > 0;
-      // AVISO: recuperación multimaterial validada en el cliente, NO en las reglas.
-      // No publicar en producción sin modelo de inventario por documento.
-      // Firestore Rules no puede iterar y verificar todos los elementos del arreglo.
-      return pid is string && pid.size() > 0 && pid.size() < 150
-        && receipt == 'INV-' + pid
-        && before.get('completionCommittedAt', null) == null
-        && before.get('status', '') != 'REALIZADO'
-        && (prior.get('inventoryCommittedAt', null) == null || wasZero)
-        && after.get('reagentResult', {}).get('completed', false) == true
-        && after.get('reagentResult', {}).get('inventoryReceiptId', '') == receipt
-        && after.get('reagentResult', {}).get('inventoryCommittedAt', null) is string
-        && after.get('updatedAt', '') is string
-        && request.resource.data.get('updatedAt', '') is string;
-    }
-    match /catalog/{id} {
-      allow read: if activeUser();
-      allow create, delete: if isBoss();
-      allow update: if isBoss() || (activeUser()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'reagentConfig', 'updatedAt', 'inventoryCommitPlanId', 'inventoryCommitReceiptId'
-        ]) && inventoryCommitAllowed());
-    }
+    match /catalog/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /timeRules/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /compositeSteps/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /analysts/{id} { allow read: if activeUser(); allow write: if isBoss(); }

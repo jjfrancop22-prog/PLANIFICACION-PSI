@@ -1,0 +1,5 @@
+V28.21.58 - CIERRE AUTORITATIVO EXPERIMENTAL - NO PUBLICAR
+- Nueva callable finalizeActivitySafely: valida rol, actividad EN PROCESO, revision de consumos, idempotencia y actualiza campos de cierre en transaccion Firestore.
+- completeActivityRecord ya no encola UPDATE de planning completo; espera confirmacion de la callable y relee Firestore antes de actualizar el estado local.
+- Se conservan comentarios y alertas de cierre tras confirmacion.
+LIMITACIONES: sin emulador ni Firebase real; pendiente prueba integral, permisos, muestras/curvas, cierre concurrente y conciliacion de colas antiguas. No usar en produccion.

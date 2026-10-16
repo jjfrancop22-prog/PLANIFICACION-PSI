@@ -1,0 +1,7 @@
+V28.21.58 — Refuerzo de idempotencia (NO PUBLICAR)
+Se añadió huella SHA-256 de los datos de solicitud para ambas Cloud Functions COUNT.
+Si un requestId ya se aplicó, solo puede responder 'alreadyApplied' cuando usuario, actividad y huella coinciden.
+Reutilizar el mismo requestId con cantidades, revisión o motivo diferentes ahora se rechaza.
+Pruebas locales: 11 COUNT + 4 alcance + 5 huellas. Sintaxis backend validada.
+PENDIENTE: despliegue/emulador Firebase, reglas y permisos, reactivos WEIGHT, autorización de corrección finalizada, validación entre PCs.
+No sustituir V28.21.57 de producción.

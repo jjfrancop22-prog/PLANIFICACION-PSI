@@ -1,0 +1,6 @@
+V28.21.58 - REVISIÓN TRANSACCIONAL (NO PUBLICAR)
+Se corrigió la lectura de catálogo en correctCountConsumption para ejecutarse DENTRO de la transacción Firestore. Anteriormente se consultaba fuera de ella, creando riesgo de operar sobre un conjunto desactualizado de catálogos.
+Se reutilizan snapshots de la consulta transaccional y se bloquea el guardado inicial si ya existe un consumo confirmado.
+Validación realizada: node --check de app.js y functions/index.cjs. Sin pruebas con emulador Firebase ni con inventario real.
+Pendiente: verificación integral de escritura local/cola, aislamiento de catálogo, flujo de autorización JEFE, reactivos WEIGHT y pruebas de concurrencia reales.
+No desplegar en producción.

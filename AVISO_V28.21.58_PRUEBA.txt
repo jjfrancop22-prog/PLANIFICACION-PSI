@@ -1,0 +1,1 @@
+V28.21.58 EXPERIMENTAL / NO PUBLICAR. Ajuste de validación de cantidades COUNT ya descontadas. Solo JEFE; WEIGHT y autorización postcierre pendientes. No probado contra Firebase. Mantener V28.21.57 en producción.

@@ -1,0 +1,5 @@
+V28.21.58 — Integración experimental de guardado inicial COUNT.
+El guardado inicial exclusivamente COUNT llama commitInitialCountConsumption y verifica en Firestore el resultado antes de actualizar IndexedDB. No encola descuentos duplicados en la ruta COUNT.
+La corrección COUNT previamente incorporada sigue utilizando correctCountConsumption.
+IMPORTANTE: Requiere desplegar Cloud Functions; sin ellas la ruta COUNT rechazará el guardado. NO PUBLICAR EN PRODUCCIÓN.
+Pendiente: migración de consumos WEIGHT, reglas Firestore, control de duplicidad global en todos los clientes, autorización posterior al cierre y pruebas con emulador Firebase y dos equipos.

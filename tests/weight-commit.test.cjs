@@ -1,0 +1,12 @@
+const assert=require('node:assert/strict');
+const {computeWeightCatalogCorrection}=require('../functions/weight-commit-core.cjs');
+const item=(final)=>({reagentId:'R1',name:'Reactivo',lot:'L1',mode:'WEIGHT',physicalState:'SOLID',containers:[{containerId:'E1',tareWeight:10,initialWeight:100,finalWeight:final}]});
+const plan={catalogId:'CAT1',reagentResult:{inventoryCommittedAt:'2026-10-16',items:[item(90)]}};
+const catalog=()=>({id:'CAT1',reagentConfig:[{name:'Reactivo',lot:'L1',mode:'WEIGHT',containers:[{id:'E1',tareWeight:10,initialWeight:100,currentWeight:65}]}]});
+assert.equal(computeWeightCatalogCorrection(plan,catalog(),[item(85)]).reagentConfig[0].containers[0].currentWeight,60);
+assert.equal(computeWeightCatalogCorrection(plan,catalog(),[item(95)]).reagentConfig[0].containers[0].currentWeight,70);
+assert.equal(computeWeightCatalogCorrection(plan,catalog(),[item(90)]).reagentConfig[0].containers[0].currentWeight,65);
+assert.throws(()=>computeWeightCatalogCorrection(plan,{...catalog(),id:'OTHER'},[item(85)]),/Catálogo no corresponde/);
+assert.throws(()=>computeWeightCatalogCorrection(plan,{...catalog(),reagentConfig:[{...catalog().reagentConfig[0],containers:[{id:'E1',tareWeight:10,initialWeight:100}]}]},[item(85)]),/currentWeight confirmado/);
+assert.throws(()=>computeWeightCatalogCorrection(plan,{...catalog(),reagentConfig:[{...catalog().reagentConfig[0],containers:[{id:'E1',tareWeight:10,initialWeight:100,currentWeight:11}]}]},[item(85)]),/debajo de la tara/);
+console.log('6 pruebas de transacción WEIGHT correctas');

@@ -1,0 +1,10 @@
+REVISIÓN V28.21.58 — NO PUBLICAR / NO DESPLEGAR FUNCTIONS
+Se endureció el núcleo de cálculo COUNT y se ampliaron a 11 pruebas locales.
+BLOQUEOS DETECTADOS ANTES DE PRODUCCIÓN:
+1. Guardado INICIAL aún actualiza planning y catalog por operaciones separadas y cola local: no es atómico.
+2. El backend recibe items completos del cliente sin verificar contra la lista autorizada de reactivos/lotes del plan.
+3. La transacción del backend consulta catalog completo fuera de la transacción; no garantiza selección estable de documentos y puede actualizar otros catálogos con el mismo nombre/lote.
+4. La verificación de autorización posterior al cierre requiere un flujo de aprobación independiente y validado en servidor.
+5. No existe prueba real con emuladores Firebase, reglas Firestore, doble dispositivo ni desconexión.
+6. La interfaz no cubre correcciones de reactivos sólidos y líquidos.
+NO usar este ZIP con inventario real. Conservar V28.21.57 publicada.

@@ -1,0 +1,1 @@
+{"name":"erp-planificacion-consumos","private":true,"engines":{"node":"20"},"main":"index.cjs","dependencies":{"firebase-admin":"^12.7.0","firebase-functions":"^6.3.2"},"scripts":{"test":"node ../pruebas/correcciones-count.test.cjs"}}

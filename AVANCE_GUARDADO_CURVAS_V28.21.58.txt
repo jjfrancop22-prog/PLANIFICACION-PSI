@@ -1,0 +1,6 @@
+V28.21.58 - Guardado técnico acotado (EXPERIMENTAL)
+- Nueva Cloud Function saveTechnicalMetadata: actualiza únicamente calibrationResult y campos técnicos, nunca reagentResult ni catálogo.
+- app.js llama función tras confirmar inventario y verifica documento remoto.
+- Actividades finalizadas: esta ruta rechaza cambios de curva, hasta disponer de autorización transaccional específica.
+- No probado en emulador Firebase ni en producción. No publicar.
+- 6 archivos de pruebas node:test correctos; validación de sintaxis app.js/backend correcta.

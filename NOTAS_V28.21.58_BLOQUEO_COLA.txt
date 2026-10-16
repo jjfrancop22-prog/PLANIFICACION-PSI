@@ -1,0 +1,5 @@
+V28.21.58 — Revisión adicional de seguridad (NO PUBLICAR)
+Se agregó bloqueo preventivo de corrección COUNT si el equipo conserva operaciones pendientes, fallidas, enviándose o en conflicto de la misma planificación o catálogos afectados.
+Se valida además la identidad del catálogo remoto durante la transacción.
+NO habilita todavía correcciones de analistas, reactivos WEIGHT ni corrección post-cierre.
+No se ha probado con Firebase real. Mantener V28.21.57 en producción.

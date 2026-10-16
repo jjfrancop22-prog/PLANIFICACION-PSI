@@ -1,0 +1,1 @@
+V28.21.58: Reintento automatico unico para errores de red transitorios en el cierre. Usa el mismo requestId persistente. No reintenta errores de permisos, validacion o conflictos. Pendiente validacion en emulador Firebase y equipos reales. NO PUBLICAR.

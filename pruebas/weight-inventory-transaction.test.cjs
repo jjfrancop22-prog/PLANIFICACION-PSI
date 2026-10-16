@@ -1,0 +1,12 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {buildContainerUpdates}=require('../functions/weight-inventory-transaction.cjs');
+const base={reagentId:'R1',name:'Acido',lot:'L1',mode:'WEIGHT',physicalState:'SOLID',containers:[{id:'E1',tareWeight:20,initialWeight:500,finalWeight:450}]};
+const previous=[base],next=[{...base,containers:[{...base.containers[0],finalWeight:420}]}];
+const cat=[{name:'Acido',lot:'L1',mode:'WEIGHT',containers:[{id:'E1',tareWeight:20,initialWeight:500,currentWeight:450}]}];
+assert.equal(buildContainerUpdates(previous,next,cat)[0].currentWeight,420);
+assert.equal(buildContainerUpdates(next,previous,[{...cat[0],containers:[{...cat[0].containers[0],currentWeight:420}]}])[0].currentWeight,450);
+assert.throws(()=>buildContainerUpdates(previous,next,[{...cat[0],containers:[{id:'E1',tareWeight:20,initialWeight:500}]}]),/migración/);
+assert.throws(()=>buildContainerUpdates(previous,next,[...cat,...cat]),/ambiguo/);
+assert.throws(()=>buildContainerUpdates(previous,next,[{...cat[0],containers:[{...cat[0].containers[0],currentWeight:30}]}]),/tara/);
+console.log('5 pruebas de preparación transaccional por envase correctas');

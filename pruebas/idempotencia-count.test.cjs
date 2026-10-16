@@ -1,0 +1,11 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {requestFingerprint}=require('../functions/request-fingerprint.cjs');
+const a=[{name:'A',lot:'1',mode:'COUNT',used:4}];
+const b=[{name:'A',lot:'1',mode:'COUNT',used:7}];
+assert.equal(requestFingerprint('p',a,0,''),requestFingerprint('p',a,0,''));
+assert.notEqual(requestFingerprint('p',a,0,''),requestFingerprint('p',b,0,''));
+assert.notEqual(requestFingerprint('p',a,0,''),requestFingerprint('q',a,0,''));
+assert.notEqual(requestFingerprint('p',a,0,''),requestFingerprint('p',a,1,''));
+assert.notEqual(requestFingerprint('p',a,0,''),requestFingerprint('p',a,0,'motivo'));
+console.log('5 pruebas de huella de idempotencia correctas');

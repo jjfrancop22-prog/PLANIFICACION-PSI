@@ -1,0 +1,6 @@
+V28.21.58 - Separación de rutas post-cierre
+
+- Una corrección de inventario autorizada en actividad REALIZADO no llama saveTechnicalMetadata, función que correctamente rechaza actividades cerradas.
+- No se admite modificar curvas tras el cierre por la ruta de consumos; queda pendiente un flujo separado y auditado.
+- El guardado previo al cierre mantiene saveTechnicalMetadata.
+- Sin pruebas de Firebase real ni emulador. NO PUBLICAR.

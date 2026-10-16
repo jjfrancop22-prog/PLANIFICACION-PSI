@@ -1,0 +1,12 @@
+'use strict';
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const app=fs.readFileSync(require('node:path').join(__dirname,'../app.js'),'utf8');
+const section=app.slice(app.indexOf('async function commitReagentConsumption('),app.indexOf('// Protección de salida:',app.indexOf('async function commitReagentConsumption(')));
+assert.match(section,/commitInitialWeightConsumption/);
+assert.match(section,/commitInitialCountConsumption/);
+assert.match(section,/correctCommittedReagentConsumption/);
+assert.doesNotMatch(section,/applyConfirmedReagentInventoryToCatalog/,'El guardado de reactivos no puede usar el descuento local heredado');
+assert.doesNotMatch(section,/await queue\(/,'El guardado de reactivos no debe encolar confirmaciones de inventario');
+assert.match(section,/getDocFromServer/);
+console.log('5 controles estáticos de rutas transaccionales correctos');

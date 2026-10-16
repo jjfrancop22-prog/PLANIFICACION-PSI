@@ -1,0 +1,14 @@
+const assert=require('node:assert/strict');
+const {computeInitialWeightCatalog:run}=require('../functions/weight-initial-core.cjs');
+const item=(final=85)=>({reagentId:'R1',name:'Reactivo',lot:'L1',mode:'WEIGHT',physicalState:'SOLID',containers:[{containerId:'E1',tareWeight:10,initialWeight:100,finalWeight:final}]});
+const catalog=(current=80)=>({id:'CAT1',reagentConfig:[{name:'Reactivo',lot:'L1',mode:'WEIGHT',containers:[{id:'E1',tareWeight:10,initialWeight:100,currentWeight:current}]}]});
+const plan={catalogId:'CAT1'};
+assert.equal(run(plan,catalog(),[item()]).reagentConfig[0].containers[0].currentWeight,65);
+assert.equal(run(plan,catalog(),[item(100)]).reagentConfig[0].containers[0].currentWeight,80);
+assert.throws(()=>run(plan,catalog(20),[item()]),/Saldo insuficiente/);
+assert.throws(()=>run(plan,{...catalog(),id:'OTHER'},[item()]),/Catálogo ajeno/);
+assert.throws(()=>run({...plan,reagentResult:{inventoryCommittedAt:'date'}},catalog(),[item()]),/ya confirmado/);
+assert.throws(()=>run(plan,catalog(undefined),[{...item(),mode:'COUNT'}]),/Solo consumos WEIGHT/);
+assert.throws(()=>run(plan,{...catalog(),reagentConfig:[...catalog().reagentConfig,...catalog().reagentConfig]},[item()]),/ambiguo/);
+assert.throws(()=>run(plan,{...catalog(),reagentConfig:[{...catalog().reagentConfig[0],containers:[{id:'E1',tareWeight:10,initialWeight:100}]}]},[item()]),/sin saldo conciliado/);
+console.log('8 pruebas locales de consumo inicial WEIGHT correctas');

@@ -1,0 +1,1 @@
+V28.21.58 — Autorización técnica verificada por Cloud Function. El JEFE se valida en servidor y el registro audit se crea con Admin SDK. No habilita aún corrección de inventario tras cierre. NO PUBLICAR: requiere pruebas con emulador y revisión de reglas.

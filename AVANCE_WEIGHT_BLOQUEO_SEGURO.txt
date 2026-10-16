@@ -1,0 +1,6 @@
+V28.21.58 - DESARROLLO, NO PUBLICAR.
+1. Se ha deshabilitado el guardado heredado de WEIGHT que confirmaba localmente y encolaba descuentos sin transacción.
+2. Se añadió functions/weight-inventory-transaction.cjs para validar diferencias por envase contra currentWeight confirmado.
+3. El esquema existente no garantiza currentWeight en los envases; antes de conectar el backend hay que migrar/conciliar los saldos reales y definir fuente de verdad.
+4. El módulo NO escribe en Firestore. La corrección WEIGHT sigue deshabilitada. No se realizaron pruebas Firebase reales.
+5. Cinco pruebas locales nuevas superadas. Mantener V28.21.57 en producción.

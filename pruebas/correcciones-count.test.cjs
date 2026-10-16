@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict');
+const {deltas,adjustStock,quantities}=require('../functions/consumption-core.cjs');
+const mk=(n,q)=>({name:n,lot:'L1',mode:'COUNT',used:q});
+const d=deltas([mk('A',4),mk('B',4),mk('C',5)],[mk('A',7),mk('B',7),mk('C',11)]);
+assert.deepEqual([...d.values()],[3,3,6]);
+assert.equal(adjustStock(96,3),93);
+assert.equal(adjustStock(93,-3),96);
+assert.throws(()=>adjustStock(2,3),/Stock insuficiente/);
+assert.deepEqual([...deltas([mk('A',4)],[mk('A',4)]).values()],[0]);
+assert.throws(()=>quantities([mk('A',2),mk('A',3)]),/duplicado/);
+assert.throws(()=>quantities([mk('A',1.5)]),/entero/);
+assert.throws(()=>quantities([mk('A',-1)]),/entero/);
+assert.throws(()=>quantities([{name:'A',lot:'',mode:'COUNT',used:1}]),/Identidad/);
+assert.throws(()=>quantities([mk('A','7')]),/entero/);
+assert.throws(()=>adjustStock(2.5,1),/inválido/);
+console.log('11 pruebas locales COUNT correctas');

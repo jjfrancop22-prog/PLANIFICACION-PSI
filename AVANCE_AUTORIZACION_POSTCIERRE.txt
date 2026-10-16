@@ -1,0 +1,3 @@
+V28.21.58 - parche experimental NO PUBLICAR
+Se reforzó correctCountConsumption: para actividades REALIZADO, el JEFE debe presentar authorizationId de una autorización previa emitida por authorizeCompletedTechnicalEdit. La autorización se comprueba dentro de la transacción y se marca usada en la misma transacción que corrige inventario y consumo. Se incluye authorizationId en la huella de idempotencia y en la auditoría. Se impide autorizar actividades sin consumo confirmado.
+LIMITACIONES: la interfaz todavía debe enviar authorizationId al corregir consumos post-cierre; no se ha probado en emulador ni con Firebase real. No incluye reactivos pesables. Mantener V28.21.57 en producción.

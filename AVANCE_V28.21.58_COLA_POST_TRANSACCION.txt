@@ -1,0 +1,9 @@
+ERP PLANIFICACIÓN V28.21.58 - PARCHE EXPERIMENTAL, NO PUBLICAR
+
+Corregido: en el guardado técnico, una transacción inicial confirmada tenía correctionRevision=0 y la condición heredada podía volver a encolar UPDATE planning con el documento completo. Ahora se prohíbe encolar planning cuando inventoryCommittedAt existe, independientemente de la revisión.
+
+Corregido: las comprobaciones locales de pendientes y actualización de catálogo se limitan al catalogId asignado a la actividad.
+
+RIESGO PENDIENTE: cuando se guardan simultáneamente calibraciones y consumos, los campos técnicos adicionales pueden permanecer solo en IndexedDB al suprimirse la cola general. Requiere endpoint de guardado técnico con control de versión y escritura por campos. No usar en producción.
+
+PENDIENTE: emulador Firebase, sincronización real multiusuario, conciliación de saldos WEIGHT y cierre transaccional integral.

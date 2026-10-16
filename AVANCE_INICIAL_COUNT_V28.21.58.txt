@@ -1,0 +1,5 @@
+EXPERIMENTAL - NO PUBLICAR
+Se añadió commitInitialCountConsumption en functions/index.cjs y initial-count.cjs.
+El cliente NO invoca todavía esta función. El guardado previo sigue sin transacción.
+Se requiere revisar el esquema real de planning/catalog, reglas y validación en emulador Firebase antes de migrar el cliente.
+No desplegar functions ni aplicación a producción.
