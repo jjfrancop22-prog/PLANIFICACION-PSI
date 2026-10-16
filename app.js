@@ -1,4 +1,4 @@
-const APP_VERSION='V1.0.5.6.33.25.10.28.21.62';
+const APP_VERSION='V1.0.5.6.33.25.10.28.21.57';
 const PAGE_SESSION_ID=`SES-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 const DB_NAME='ERP_PLANIFICACION_NEXTGEN_CLEAN';
 const DB_VERSION=9;
@@ -2684,11 +2684,10 @@ function sameReagentConsumptionInput(a,b){
   return !!a?.completed&&!!b?.completed&&sameCloudFunctionalPayload({items:normalize(a)},{items:normalize(b)});
 }
 // Los consumos confirmados son independientes del cierre horario de la actividad.
-// V28.21.59: primer consumo confirmado mediante una sola transacción Firestore.
-// No se autoriza corregir un consumo previamente confirmado desde esta ruta.
 const reagentCommitLocks=new Set();
 async function commitReagentConsumption(p,result){
   if(!result?.completed)return {ok:false,text:'Complete o desmarque los consumos antes de guardarlos.'};
+  if(!(result.items||[]).some(x=>x.usedInActivity!==false&&!x.notUsed&&Number(x.used)>0))return {ok:false,text:'No hay consumo positivo. Para evitar confirmar accidentalmente cero, registre una cantidad antes de descontar.'};
   if(reagentCommitLocks.has(p.id))return {ok:false,text:'Consumo en proceso de confirmación; espere.'};
   // El estado local no es evidencia suficiente: un intento anterior pudo
   // dejar una marca en IndexedDB sin que Firebase confirmara el descuento.
@@ -2704,19 +2703,6 @@ async function commitReagentConsumption(p,result){
     const used=(result.items||[]).filter(x=>x.usedInActivity!==false&&!x.notUsed);
     const identity=x=>`${normalizeIdentityText(x.name||'')}|${normalizeIdentityText(x.lot||'')}`;
     const usedMap=new Map(used.map(x=>[identity(x),x]));
-    // V28.21.62 PRUEBA: habilitar múltiples materiales, fichas y modos COUNT/WEIGHT.
-    // La operación sigue siendo transaccional; usar solo Firebase de pruebas.
-    if(!used.length || usedMap.size!==used.length)
-      return {ok:false,text:'Seleccione al menos un consumo y compruebe que no existan reactivos/lotes duplicados.'};
-    if(used.some(x=>!['COUNT','WEIGHT'].includes(x.mode)))
-      return {ok:false,text:'Modo de consumo no reconocido; no se descontó inventario.'};
-    const matchingCatalogs=catalogDocs.filter(d=>(d.data().reagentConfig||[]).some(r=>usedMap.has(identity(r))));
-    if(!matchingCatalogs.length)
-      return {ok:false,text:'No se encontraron los materiales seleccionados en el catálogo de Firebase.'};
-    // Verificar que todos los materiales seleccionados existen antes de abrir la transacción.
-    const availableKeys=new Set(matchingCatalogs.flatMap(d=>(d.data().reagentConfig||[]).map(identity)));
-    const missing=used.find(x=>!availableKeys.has(identity(x)));
-    if(missing)return {ok:false,text:`No se encontró en Firebase ${missing.name}, lote ${missing.lot||'sin lote'}. No se descontó nada.`};
     let savedPlan=null,savedCatalogs=[];
     await sdk.runTransaction(firebaseBridge.db,async tx=>{
       const planSnap=await tx.get(planRef);
@@ -2725,14 +2711,9 @@ async function commitReagentConsumption(p,result){
       if(remote.status==='REALIZADO'||remote.completionCommittedAt)throw Error('Actividad finalizada: consumo bloqueado.');
       if(remote.reagentResult?.inventoryCommittedAt){
         if(sameReagentConsumptionInput(remote.reagentResult,result)){savedPlan=remote;savedCatalogs=[];return;}
-        // V28.21.63: recuperación ÚNICA de un registro histórico de cero consumo.
-        // No permite modificar consumos positivos ni confirmaciones con recibo.
-        // La transacción descuenta el stock actual del servidor una sola vez.
-        const previous=remote.reagentResult;
-        const zeroOnly=previous.completed===true && Array.isArray(previous.items) && previous.items.length>0
-          && previous.items.every(x=>x.notUsed===true && x.usedInActivity===false && Number(x.used)===0)
-          && !previous.inventoryReceiptId;
-        if(!zeroOnly)throw Error('Consumo confirmado en Firebase y bloqueado. Para modificarlo, solicite autorización de Calidad. No se descontó inventario.');
+        const prior=remote.reagentResult;
+        const recoverZero=prior.completed===true&&!prior.inventoryReceiptId&&Array.isArray(prior.items)&&prior.items.length>0&&prior.items.every(x=>x.notUsed===true&&Number(x.used)===0&&x.usedInActivity===false);
+        if(!recoverZero)throw Error('Consumo positivo ya confirmado en Firebase: se requiere corrección supervisada; no se descontó inventario.');
       }
       // Leer todos los documentos afectados antes de realizar la primera escritura.
       const refs=catalogDocs.filter(d=>(d.data().reagentConfig||[]).some(r=>usedMap.has(identity(r)))).map(d=>sdk.doc(firebaseBridge.db,'catalog',d.id));
@@ -2742,23 +2723,15 @@ async function commitReagentConsumption(p,result){
       for(const item of used){
         const live=liveByKey.get(identity(item));
         if(!live)throw Error(`No existe en catálogo el lote ${item.name} (${item.lot||'sin lote'}).`);
-        if(live.mode!==item.mode)throw Error(`El modo del material ${item.name} cambió en Firebase. Actualice la actividad.`);
         if(item.mode==='COUNT'){
           const stock=Number(live.stockQuantity),qty=Number(item.used);
           if(!Number.isFinite(stock)||!Number.isFinite(qty)||qty<=0||qty>stock)throw Error(`Stock insuficiente de ${item.name}. Disponible: ${stock}.`);
           item.stockBefore=stock;item.stockRemaining=stock-qty;
         }
         if(item.mode==='WEIGHT'){
-          if(!Array.isArray(item.containers)||!item.containers.length)throw Error(`Seleccione al menos un envase para ${item.name}.`);
-          const seenContainers=new Set();
           for(const c of item.containers||[]){
-            if(seenContainers.has(c.containerId))throw Error(`Envase duplicado en ${item.name}.`);
-            seenContainers.add(c.containerId);
             const env=(live.containers||[]).find(e=>e.id===c.containerId);
             if(!env)throw Error(`Envase no encontrado para ${item.name}.`);
-            const before=Number(env.initialWeight),after=Number(c.finalWeight),tare=Number(env.tareWeight||0);
-            if(!Number.isFinite(before)||!Number.isFinite(after)||!Number.isFinite(tare)||after<tare||after>=before)
-              throw Error(`Peso final inválido de ${item.name}: debe ser menor al inicial y no inferior a la tara.`);
             if(Math.abs(Number(env.initialWeight)-Number(c.initialWeight))>0.001)
               throw Error(`El peso inicial de ${item.name} cambió en otra computadora. Actualice antes de guardar.`);
           }
@@ -2776,7 +2749,6 @@ async function commitReagentConsumption(p,result){
         const configs=(data.reagentConfig||[]).map(r=>{
           const item=usedMap.get(identity(r));if(!item)return r;
           const next={...r};
-          if(next.mode!==item.mode)throw Error(`Modo de consumo incompatible en catálogo ${snap.id}.`);
           if(next.mode==='COUNT'&&item.mode==='COUNT'){
             const old=Number(next.stockQuantity||0),qty=Number(item.used||0);
             if(old<qty)throw Error(`Stock insuficiente de ${item.name} en catálogo ${snap.id}.`);
@@ -2792,7 +2764,6 @@ async function commitReagentConsumption(p,result){
           }
           return next;
         });
-        if(!changed)throw Error(`No se aplicó ningún descuento al catálogo ${snap.id}.`);
         if(changed){
           const update={reagentConfig:configs,updatedAt:stamp,inventoryCommitPlanId:p.id,inventoryCommitReceiptId:receipt};
           tx.update(snap.ref,update);updated.push({id:snap.id,...data,...update});
@@ -2812,6 +2783,7 @@ async function commitReagentConsumption(p,result){
     return {ok:false,text:'No se guardó el consumo: '+String(err.message||err)};
   }finally{reagentCommitLocks.delete(p.id)}
 }
+
 
 // Protección de salida: no descartar accidentalmente registros técnicos sin guardar.
 let technicalSnapshot='';

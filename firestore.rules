@@ -13,39 +13,37 @@ service cloud.firestore {
       allow read: if signedIn() && (request.auth.uid == userId || isBoss());
       allow create, update, delete: if isBoss();
     }
-    // V28.21.63 - SOLO PROYECTO FIREBASE DE PRUEBAS.
-    // Permite varios materiales y modalidades. NO valida cada delta del arreglo
-    // reagentConfig; no utilizar con inventario real.
-    function testInventoryCommit() {
+
+    // EXPERIMENTAL: vincula una actualización del catálogo con una confirmación
+    // simultánea en planning. No verifica cada elemento de reagentConfig.
+    function inventoryCommitAllowed() {
       let pid = request.resource.data.get('inventoryCommitPlanId', '');
       let receipt = request.resource.data.get('inventoryCommitReceiptId', '');
       let before = get(/databases/$(database)/documents/planning/$(pid)).data;
       let after = getAfter(/databases/$(database)/documents/planning/$(pid)).data;
+      let prior = before.get('reagentResult', {});
+      let wasZero = prior.get('completed', false) == true
+        && prior.get('inventoryReceiptId', '') == ''
+        && prior.get('items', []).size() == 1
+        && prior.get('items', [])[0].get('notUsed', false) == true
+        && prior.get('items', [])[0].get('used', -1) == 0;
       return pid is string && pid.size() > 0 && pid.size() < 150
         && receipt == 'INV-' + pid
         && before.get('completionCommittedAt', null) == null
-        && (
-          before.get('reagentResult', {}).get('inventoryCommittedAt', null) == null
-          || (
-            before.get('reagentResult', {}).get('completed', false) == true
-            && before.get('reagentResult', {}).get('inventoryReceiptId', '') == ''
-            && before.get('reagentResult', {}).get('items', []) is list
-            // Caso histórico sin recibo: comprobación del consumo cero
-            // completa en el cliente. ESTO NO ES SEGURIDAD DE PRODUCCIÓN.
-          )
-        )
+        && before.get('status', '') != 'REALIZADO'
+        && (prior.get('inventoryCommittedAt', null) == null || wasZero)
+        && after.get('reagentResult', {}).get('completed', false) == true
         && after.get('reagentResult', {}).get('inventoryReceiptId', '') == receipt
         && after.get('reagentResult', {}).get('inventoryCommittedAt', null) is string
-        && after.get('reagentResult', {}).get('completed', false) == true
         && request.resource.data.updatedAt == after.updatedAt;
     }
     match /catalog/{id} {
       allow read: if activeUser();
       allow create, delete: if isBoss();
       allow update: if isBoss() || (activeUser()
-        && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['reagentConfig', 'updatedAt', 'inventoryCommitPlanId', 'inventoryCommitReceiptId'])
-        && testInventoryCommit());
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'reagentConfig', 'updatedAt', 'inventoryCommitPlanId', 'inventoryCommitReceiptId'
+        ]) && inventoryCommitAllowed());
     }
     match /timeRules/{id} { allow read: if activeUser(); allow write: if isBoss(); }
     match /compositeSteps/{id} { allow read: if activeUser(); allow write: if isBoss(); }

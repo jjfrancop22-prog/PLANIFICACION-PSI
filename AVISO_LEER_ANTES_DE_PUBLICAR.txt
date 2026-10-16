@@ -1,0 +1,6 @@
+VERSIÓN EXPERIMENTAL, NO VALIDADA EN FIREBASE REAL.
+Se corrigió confirmación local prematura mediante transacción remota y recuperación de un consumo cero con un solo ítem.
+Las reglas de catálogo NO comprueban cada cambio de reagentConfig y no son seguras para producción.
+No publicar en base real sin pruebas de seguridad y respaldo.
+Si una actividad tiene consumo confirmado positivo, no se autoriza un segundo descuento.
+La recuperación de cero en reglas se limita a un solo ítem para el caso documentado de Lizbeth.
